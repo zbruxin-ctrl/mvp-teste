@@ -3,12 +3,10 @@ export interface TempMailConfig {
   baseUrl: string;
 }
 
+// Resposta real do endpoint GET /generate/v2 da Temp-Mail LOL
 export interface EmailAccount {
   email: string;
-  quota: number;
-  used: number;
-  created_at: string;
-  md5: string;
+  token: string;  // usado para checar inbox (era 'md5' na versão antiga)
 }
 
 export interface MailMessage {
