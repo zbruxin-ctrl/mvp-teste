@@ -3,29 +3,12 @@ export interface TempMailConfig {
   baseUrl: string;
 }
 
-export interface TempMailError {
-  code: number;
-  message: string;
-}
-
-export interface CreateDomainResponse {
-  success: boolean;
-  action_status: string;
-  domain: string;
-}
-
 export interface EmailAccount {
   email: string;
   quota: number;
   used: number;
   created_at: string;
   md5: string;
-}
-
-export interface CreateEmailResponse {
-  success: boolean;
-  action_status: string;
-  emailaccount: EmailAccount;
 }
 
 export interface MailMessage {
@@ -37,17 +20,10 @@ export interface MailMessage {
   mail_html: string;
   mail_text: string;
   created_at: string;
-  attachments?: any[];
+  attachments?: unknown[];
 }
 
-export interface ListMessagesResponse {
-  success: boolean;
-  action_status: string;
-  messages: MailMessage[];
-}
-
-export interface GetMessageResponse {
-  success: boolean;
-  action_status: string;
-  message: MailMessage;
+export interface TempMailError {
+  code: number;
+  message: string;
 }

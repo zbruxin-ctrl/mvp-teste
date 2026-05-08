@@ -6,41 +6,44 @@ export class ArtifactsManager {
   static screenshotsDir = path.join(process.cwd(), 'artifacts/screenshots');
   static htmlDir = path.join(process.cwd(), 'artifacts/html');
 
-  static init() {
-    [this.screenshotsDir, this.htmlDir].forEach(dir => {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+  static init(): void {
+    [this.screenshotsDir, this.htmlDir].forEach((dir) => {
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     });
   }
 
-  static async saveScreenshot(page: any, cycle: number, step: string, error?: string): Promise<string> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `cycle-${cycle}-${step}-${timestamp}.png`;
+  static async saveScreenshot(
+    page: { screenshot: (o: { path: string; fullPage: boolean }) => Promise<void> },
+    cycle: number,
+    step: string
+  ): Promise<string> {
+    const filename = `cycle-${cycle}-${step}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
     const filepath = path.join(this.screenshotsDir, filename);
-    
     try {
       await page.screenshot({ path: filepath, fullPage: true });
-      globalState.addLog('warn', `📸 Screenshot salvo: ${filename}`, cycle);
+      globalState.addLog('warn', `📸 Screenshot: ${filename}`, cycle);
       return filename;
     } catch (e) {
-      globalState.addLog('error', `❌ Falha ao salvar screenshot: ${e}`, cycle);
+      globalState.addLog('error', `❌ Falha screenshot: ${e}`, cycle);
       return '';
     }
   }
 
-  static saveHTML(page: any, cycle: number, step: string): Promise<string> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `cycle-${cycle}-${step}-${timestamp}.html`;
+  static async saveHTML(
+    page: { content: () => Promise<string> },
+    cycle: number,
+    step: string
+  ): Promise<string> {
+    const filename = `cycle-${cycle}-${step}-${new Date().toISOString().replace(/[:.]/g, '-')}.html`;
     const filepath = path.join(this.htmlDir, filename);
-    
-    return page.content().then(html => {
-      fs.writeFileSync(filepath, html);
+    try {
+      const html = await page.content();
+      fs.writeFileSync(filepath, html, 'utf8');
       globalState.addLog('warn', `🌐 HTML salvo: ${filename}`, cycle);
       return filename;
-    }).catch(e => {
-      globalState.addLog('error', `❌ Falha ao salvar HTML: ${e}`, cycle);
+    } catch (e) {
+      globalState.addLog('error', `❌ Falha HTML: ${e}`, cycle);
       return '';
-    });
+    }
   }
 }

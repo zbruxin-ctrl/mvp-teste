@@ -10,82 +10,53 @@ export interface RegistrationPayload {
   codigoIndicacao: string;
 }
 
-/**
- * Nomes masculinos comuns no Brasil
- */
 const NOMES_MASCULINOS = [
-  'João', 'Pedro', 'Lucas', 'Mateus', 'Gabriel', 'Rafael', 'Guilherme', 
-  'Samuel', 'Enzo', 'Ryan', 'Arthur', 'Davi', 'Heitor', 'Henrique', 
-  'Bernardo', 'Theo', 'Murilo', 'Enrico', 'Lorenzo', 'Bento', 'Yuri', 
+  'João', 'Pedro', 'Lucas', 'Mateus', 'Gabriel', 'Rafael', 'Guilherme',
+  'Samuel', 'Enzo', 'Ryan', 'Arthur', 'Davi', 'Heitor', 'Henrique',
+  'Bernardo', 'Theo', 'Murilo', 'Enrico', 'Lorenzo', 'Bento', 'Yuri',
   'Gael', 'Otávio', 'Vicente', 'Benjamim', 'Thomas', 'Noah', 'Eduardo',
-  'Felipe', 'Daniel', 'Ricardo'
+  'Felipe', 'Daniel', 'Ricardo',
 ];
 
-/**
- * Sobrenomes comuns no Brasil
- */
 const SOBRENOMES = [
   'Silva', 'Santos', 'Oliveira', 'Souza', 'Rodrigues', 'Ferreira', 'Alves',
   'Pereira', 'Lima', 'Gomes', 'Costa', 'Ribeiro', 'Martins', 'Carvalho',
   'Almeida', 'Lopes', 'Sousa', 'Fernandes', 'Gonçalves', 'Vieira',
   'Campos', 'Marques', 'Mendes', 'Barbosa', 'Rocha', 'Dias', 'Jorge',
-  'Morais', 'Nunes', 'Cardoso'
+  'Morais', 'Nunes', 'Cardoso',
 ];
 
-/**
- * Gera telefone fixo brasileiro aleatório (DDD + 8 dígitos)
- * Formato: (DD) XXXX-XXXX
- */
+const rand = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
+
 export function gerarTelefoneFixo(): string {
   const ddds = [
-    '12', '11', '13', '14', '15', '16', '17', '18', '19', // SP
-    '21', '22', '24', // RJ
-    '31', '32', '33', '34', '35', '37', '38', // MG
-    '41', '42', '43', '44', '45', '46', // PR
-    '47', '48', '49', // SC
-    '51', '53', '54', '55' // RS
+    '11', '12', '13', '14', '15', '16', '17', '18', '19',
+    '21', '22', '24',
+    '31', '32', '33', '34', '35', '37', '38',
+    '41', '42', '43', '44', '45', '46',
+    '47', '48', '49',
+    '51', '53', '54', '55',
   ];
-  
-  const ddd = ddds[Math.floor(Math.random() * ddds.length)];
-  const numero = Math.floor(10000000 + Math.random() * 90000000);
-  
-  return `(${ddd}) ${numero.toString().substring(0, 4)}-${numero.toString().substring(4)}`;
+  const ddd = rand(ddds);
+  const numero = Math.floor(10000000 + Math.random() * 90000000).toString();
+  return `(${ddd}) ${numero.substring(0, 4)}-${numero.substring(4)}`;
 }
 
-/**
- * Nome masculino aleatório
- */
-export function gerarNome(): string {
-  return NOMES_MASCULINOS[Math.floor(Math.random() * NOMES_MASCULINOS.length)]!;
-}
+export function gerarNome(): string { return rand(NOMES_MASCULINOS); }
+export function gerarSobrenome(): string { return rand(SOBRENOMES); }
 
-/**
- * Sobrenome aleatório
- */
-export function gerarSobrenome(): string {
-  return SOBRENOMES[Math.floor(Math.random() * SOBRENOMES.length)]!;
-}
-
-/**
- * Payload completo de cadastro
- */
 export function gerarPayloadCompleto(emailAccount?: EmailAccount): RegistrationPayload {
-  const email = emailAccount?.email || `test${Math.floor(Math.random() * 10000)}@tempmail.lol`;
-  
   return {
-    email,
+    email: emailAccount?.email ?? `test${Math.floor(Math.random() * 10000)}@tempmail.lol`,
     telefone: gerarTelefoneFixo(),
-    senha: 'connect@10', // Fixa conforme especificado
+    senha: 'connect@10',
     nome: gerarNome(),
     sobrenome: gerarSobrenome(),
     localizacao: 'Itajubá, MG, Brasil',
-    codigoIndicacao: 'gkd2n7c' // Fixo conforme especificado
+    codigoIndicacao: 'gkd2n7c',
   };
 }
 
-/**
- * Debug: gera múltiplos payloads
- */
-export function gerarPayloads(qtd: number = 5): RegistrationPayload[] {
+export function gerarPayloads(qtd = 5): RegistrationPayload[] {
   return Array.from({ length: qtd }, () => gerarPayloadCompleto());
 }

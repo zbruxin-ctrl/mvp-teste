@@ -1,114 +1,112 @@
-// ... imports existentes ...
-
-// Rota teste completa OTP
-app.post('/api/temp-mail/test-otp', async (req, res) => {
-  try {
-    const { apiKey, timeout = 30000 } = req.body;
-    const client = new TempMailClient(apiKey);
-    
-    const result = await client.createEmailAndWaitOTP(timeout);
-    res.json({ 
-      success: true, 
-      email: result.email,
-      md5: result.md5,
-      otp: result.otp 
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Erro desconhecido' 
-    });
-  }
-});
-
-// ... imports existentes ...
-import { gerarPayloadCompleto, gerarPayloads } from '../utils/dataGenerators';
-
-// Rota teste gerador de dados
-app.get('/api/generator/test', (req, res) => {
-  const count = parseInt(req.query.count as string) || 1;
-  if (count > 10) {
-    return res.status(400).json({ error: 'Máximo 10 payloads' });
-  }
-  
-  const payloads = gerarPayloads(count);
-  res.json({ success: true, payloads });
-});
-
-app.post('/api/generator/payload', (req, res) => {
-  const { emailAccount } = req.body as { emailAccount?: any };
-  const payload = gerarPayloadCompleto(emailAccount);
-  res.json({ success: true, payload });
-});
-
-// REMOVER rotas de teste Temp-Mail e Generator (já integradas)
-// Manter apenas APIs principais
-import { MockPlaywrightFlow } from '../playwright/mockFlow';
-import { ArtifactsManager } from '../utils/artifacts';
-
-// Inicializar artifacts
-ArtifactsManager.init();
-
-// Start com Playwright
-app.post('/api/start', async (req, res) => {
-  const config = globalState.getState().config;
-  await MockPlaywrightFlow.init(config.headless);
-  
-  globalState.startLoop().catch(console.error);
-  res.json({ success: true });
-});
-
-// Cleanup no stop
-app.post('/api/stop', async (req, res) => {
-  globalState.stop();
-  await MockPlaywrightFlow.cleanup();
-  res.json({ success: true });
-});
-
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { globalState } from '../state/globalState';
-import { AppState } from '../types';
+import { TempMailClient } from '../tempMail/client';
+import { ArtifactsManager } from '../utils/artifacts';
+import { gerarPayloadCompleto, gerarPayloads } from '../utils/dataGenerators';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
+ArtifactsManager.init();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('dist/frontend'));
+app.use(express.static(path.join(process.cwd(), 'dist/frontend')));
 
-// Estado global
-app.get('/api/status', (req, res) => {
-  res.json(globalState.getState());
+// ── Status & Logs ──────────────────────────────────────────────────────────────
+app.get('/api/status', (_req, res) => res.json(globalState.getState()));
+app.get('/api/logs', (_req, res) => res.json(globalState.getLogs()));
+app.post('/api/logs/clear', (_req, res) => { globalState.clearLogs(); res.json({ success: true }); });
+
+// ── Config ─────────────────────────────────────────────────────────────────────
+app.post('/api/config', (req, res) => {
+  globalState.updateConfig(req.body || {});
+  res.json({ success: true });
 });
 
-app.get('/api/logs', (req, res) => {
-  res.json(globalState.getLogs());
+// ── Controles ──────────────────────────────────────────────────────────────────
+app.post('/api/start', async (req, res) => {
+  try {
+    if (req.body?.config) globalState.updateConfig(req.body.config);
+    globalState.startLoop().catch((e) => globalState.addLog('error', String(e)));
+    res.json({ success: true, message: 'Loop iniciado' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e) });
+  }
 });
 
-// Controle
-app.post('/api/start', (req, res) => {
-  globalState.setRunning(true, true);
-  res.json({ success: true, message: 'Loop iniciado' });
+app.post('/api/start-once', async (req, res) => {
+  try {
+    if (req.body?.config) globalState.updateConfig(req.body.config);
+    globalState.startOnce().catch((e) => globalState.addLog('error', String(e)));
+    res.json({ success: true, message: 'Ciclo único iniciado' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: String(e) });
+  }
 });
 
-app.post('/api/start-once', (req, res) => {
-  globalState.setRunning(true, false);
-  res.json({ success: true, message: 'Ciclo único iniciado' });
-});
-
-app.post('/api/stop', (req, res) => {
-  globalState.setRunning(false);
+app.post('/api/stop', (_req, res) => {
+  globalState.stop();
   res.json({ success: true, message: 'Parado' });
 });
 
-// Frontend
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../../dist/frontend/index.html'));
+// ── Temp-Mail testes ───────────────────────────────────────────────────────────
+app.post('/api/temp-mail/test-create', async (req, res) => {
+  try {
+    const client = new TempMailClient(req.body.apiKey);
+    const email = await client.createRandomEmail();
+    res.json({ success: true, email });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.post('/api/temp-mail/test-list', async (req, res) => {
+  try {
+    const client = new TempMailClient(req.body.apiKey);
+    const messages = await client.listMessages(req.body.emailMd5);
+    res.json({ success: true, messages });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.get('/api/temp-mail/domains', async (req, res) => {
+  try {
+    const client = new TempMailClient(String(req.query.apiKey || ''));
+    const domains = await client.getAvailableDomains();
+    res.json({ success: true, domains });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.post('/api/temp-mail/test-otp', async (req, res) => {
+  try {
+    const client = new TempMailClient(req.body.apiKey);
+    const result = await client.createEmailAndWaitOTP(req.body.timeout || 30000);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ── Gerador ────────────────────────────────────────────────────────────────────
+app.get('/api/generator/test', (req, res) => {
+  const count = Math.min(parseInt(String(req.query.count ?? '1'), 10) || 1, 10);
+  res.json({ success: true, payloads: gerarPayloads(count) });
+});
+
+app.post('/api/generator/payload', (req, res) => {
+  res.json({ success: true, payload: gerarPayloadCompleto(req.body?.emailAccount) });
+});
+
+// ── Frontend fallback ──────────────────────────────────────────────────────────
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(process.cwd(), 'dist/frontend/index.html'));
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
-  console.log(`📱 Frontend: http://localhost:${PORT}`);
 });
