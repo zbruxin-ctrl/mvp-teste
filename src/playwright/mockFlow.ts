@@ -10,9 +10,12 @@ let page: Page | null = null;
 
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
-    // FIX 7: fecha browser anterior antes de criar novo (evita instâncias zumbi)
+    // Só inicia se ainda não houver browser ativo
     if (browser) {
-      await MockPlaywrightFlow.cleanup();
+      globalState.addLog('info', '🌐 Reusando browser existente');
+      // Abre nova página no contexto já existente
+      page = await context!.newPage();
+      return;
     }
     globalState.addLog(
       'info',
@@ -105,11 +108,14 @@ export class MockPlaywrightFlow {
       await ArtifactsManager.saveHTML(page!, cycle, 'error').catch(() => {});
       throw error;
     } finally {
-      // Fecha o browser após cada ciclo para evitar vaz. de memória
-      await MockPlaywrightFlow.cleanup();
+      // Fecha apenas a aba atual, mantendo o browser aberto
+      await page?.close().catch(() => {});
+      page = null;
+      globalState.addLog('info', '📋 Aba fechada. Browser permanece aberto.');
     }
   }
 
+  /** Fechamento manual completo — chamado via POST /api/cleanup no painel */
   static async cleanup(): Promise<void> {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
@@ -117,6 +123,6 @@ export class MockPlaywrightFlow {
     page = null;
     context = null;
     browser = null;
-    globalState.addLog('info', '🧹 Playwright fechado');
+    globalState.addLog('info', '🧹 Browser fechado manualmente');
   }
 }
