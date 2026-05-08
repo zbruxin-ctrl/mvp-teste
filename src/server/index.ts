@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { globalState } from '../state/globalState';
+import { MockPlaywrightFlow } from '../playwright/mockFlow';
 import { TempMailClient } from '../tempMail/client';
 import { ArtifactsManager } from '../utils/artifacts';
 import { gerarPayloadCompleto, gerarPayloads } from '../utils/dataGenerators';
@@ -13,6 +14,20 @@ ArtifactsManager.init();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'dist/frontend')));
+
+// ── Registra o executor real do Playwright no GlobalState ─────────────────────
+globalState.setExecutor(async (config, cycle) => {
+  await MockPlaywrightFlow.init(config.headless);
+  await MockPlaywrightFlow.execute(
+    config.cadastroUrl,
+    {
+      tempMailApiKey: config.tempMailApiKey,
+      otpTimeout: config.otpTimeout,
+      extraDelay: config.extraDelay,
+    },
+    cycle
+  );
+});
 
 // ── Status & Logs ──────────────────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => res.json(globalState.getState()));

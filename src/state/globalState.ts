@@ -2,6 +2,9 @@ import { AppState, AppStatus, Config, LogEntry } from '../types';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Tipo do executor real (injetado pelo server para evitar dependência circular)
+export type CycleExecutor = (config: Config, cycle: number) => Promise<void>;
+
 class GlobalState {
   private state: AppState = {
     isRunning: false,
@@ -22,6 +25,12 @@ class GlobalState {
 
   private logs: LogEntry[] = [];
   private currentCycle = 0;
+  private executor: CycleExecutor | null = null;
+
+  /** Registra o executor real (Playwright). Chamado uma vez no server/index.ts */
+  setExecutor(fn: CycleExecutor): void {
+    this.executor = fn;
+  }
 
   getState(): AppState {
     return { ...this.state };
@@ -69,6 +78,10 @@ class GlobalState {
   }
 
   async startLoop(): Promise<void> {
+    if (this.state.isRunning) {
+      this.addLog('warn', '⚠️ Já está rodando');
+      return;
+    }
     this.state.isLoop = true;
     this.state.shouldStop = false;
     this.state.status = 'STARTING';
@@ -77,6 +90,10 @@ class GlobalState {
   }
 
   async startOnce(): Promise<void> {
+    if (this.state.isRunning) {
+      this.addLog('warn', '⚠️ Já está rodando');
+      return;
+    }
     this.state.isLoop = false;
     this.state.shouldStop = false;
     this.state.status = 'STARTING';
@@ -90,7 +107,7 @@ class GlobalState {
       if (loop && !this.state.shouldStop) {
         this.addLog(
           'info',
-          `⏳ Aguardando ${Math.round(this.state.config.cycleInterval / 1000)}s...`
+          `⏳ Aguardando ${Math.round(this.state.config.cycleInterval / 1000)}s para próximo ciclo...`
         );
         await sleep(this.state.config.cycleInterval);
       }
@@ -105,7 +122,13 @@ class GlobalState {
 
     try {
       this.addLog('info', `🚀 Iniciando ciclo #${this.currentCycle}`, this.currentCycle);
-      await this.mockPipeline();
+
+      if (!this.executor) {
+        throw new Error('Nenhum executor registrado. Chame globalState.setExecutor() no server.');
+      }
+
+      await this.executor(this.state.config, this.currentCycle);
+
       this.state.cyclesCompleted += 1;
       this.addLog('success', `✅ Ciclo #${this.currentCycle} concluído!`, this.currentCycle);
     } catch (error) {
@@ -118,34 +141,9 @@ class GlobalState {
       this.state.isRunning = false;
       if (!this.state.isLoop || this.state.shouldStop) {
         this.state.status = 'STOPPED';
+        this.state.shouldStop = false;
         this.addLog('info', '⏹️ Processo finalizado', this.currentCycle);
       }
-    }
-  }
-
-  private async mockPipeline(): Promise<void> {
-    const steps: Array<{ action: string; status?: AppStatus; delay: number }> = [
-      { action: 'Criando email temporário', delay: 1000 },
-      { action: 'Abrindo página de cadastro', delay: 1500 },
-      { action: 'Preenchendo campo email', delay: 800 },
-      { action: 'Aguardando OTP', status: 'WAITING_OTP', delay: 4000 },
-      { action: 'Preenchendo código OTP', delay: 1200 },
-      { action: 'Preenchendo telefone', delay: 800 },
-      { action: 'Preenchendo senha', delay: 600 },
-      { action: 'Preenchendo nome completo', delay: 800 },
-      { action: 'Selecionando localização', delay: 1000 },
-      { action: 'Preenchendo código de indicação', delay: 600 },
-      { action: 'Finalizando - Foto de perfil', delay: 1500 },
-    ];
-
-    for (const step of steps) {
-      if (this.state.shouldStop) {
-        this.state.status = 'STOPPING';
-        throw new Error('Parando após ciclo atual');
-      }
-      if (step.status) this.state.status = step.status;
-      this.addLog('info', `📝 ${step.action}`, this.currentCycle);
-      await sleep(step.delay + this.state.config.extraDelay);
     }
   }
 }
