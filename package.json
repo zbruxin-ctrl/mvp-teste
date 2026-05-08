@@ -5,12 +5,12 @@
   "main": "dist/server/index.js",
   "scripts": {
     "dev": "concurrently \"npm run build:watch\" \"nodemon dist/server/index.js\"",
-    "build": "tsc && cp -r src/frontend/. dist/frontend/",
+    "build": "tsc && shx cp -r src/frontend/. dist/frontend/",
     "build:watch": "tsc -w",
     "serve": "node dist/server/index.js",
     "start": "npm run build && npm run serve",
     "playwright:install": "npx playwright install chromium",
-    "clean": "rm -rf dist"
+    "clean": "shx rm -rf dist"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -19,6 +19,7 @@
     "@types/node-fetch": "^2.6.11",
     "concurrently": "^8.2.2",
     "nodemon": "^3.0.3",
+    "shx": "^0.3.4",
     "typescript": "^5.3.3"
   },
   "dependencies": {
