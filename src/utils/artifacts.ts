@@ -2,6 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { globalState } from '../state/globalState';
 
+// Tipo compatível com page.screenshot() do Playwright, que retorna Promise<Buffer>
+type PageLike = {
+  screenshot: (o: { path: string; fullPage: boolean }) => Promise<Buffer | void>;
+  content: () => Promise<string>;
+};
+
 export class ArtifactsManager {
   static screenshotsDir = path.join(process.cwd(), 'artifacts/screenshots');
   static htmlDir = path.join(process.cwd(), 'artifacts/html');
@@ -13,7 +19,7 @@ export class ArtifactsManager {
   }
 
   static async saveScreenshot(
-    page: { screenshot: (o: { path: string; fullPage: boolean }) => Promise<void> },
+    page: PageLike,
     cycle: number,
     step: string
   ): Promise<string> {
@@ -30,7 +36,7 @@ export class ArtifactsManager {
   }
 
   static async saveHTML(
-    page: { content: () => Promise<string> },
+    page: PageLike,
     cycle: number,
     step: string
   ): Promise<string> {
