@@ -10,10 +10,9 @@ let page: Page | null = null;
 
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
-    // Só inicia se ainda não houver browser ativo
     if (browser) {
       globalState.addLog('info', '🌐 Reusando browser existente');
-      // Abre nova página no contexto já existente
+      // Em loop: abre nova aba no mesmo browser/contexto
       page = await context!.newPage();
       return;
     }
@@ -102,20 +101,17 @@ export class MockPlaywrightFlow {
       await page.waitForTimeout(500);
       await page.click('[data-testid="foto-perfil"]').catch(() => {});
 
-      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO!`, cycle);
+      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Browser permanece aberto.`, cycle);
     } catch (error) {
       await ArtifactsManager.saveScreenshot(page!, cycle, 'error').catch(() => {});
       await ArtifactsManager.saveHTML(page!, cycle, 'error').catch(() => {});
       throw error;
-    } finally {
-      // Fecha apenas a aba atual, mantendo o browser aberto
-      await page?.close().catch(() => {});
-      page = null;
-      globalState.addLog('info', '📋 Aba fechada. Browser permanece aberto.');
+      // Não fecha nada em caso de erro também - usuário decide
     }
+    // Nenhum finally de fechamento - browser e aba ficam abertos
   }
 
-  /** Fechamento manual completo — chamado via POST /api/cleanup no painel */
+  /** Fechamento manual completo — chamado via POST /api/cleanup */
   static async cleanup(): Promise<void> {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
