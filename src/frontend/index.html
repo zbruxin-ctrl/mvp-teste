@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MVP Automação</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5; 
+      padding: 20px; 
+      max-width: 1200px; 
+      margin: 0 auto;
+    }
+    .container { display: grid; grid-template-columns: 1fr 350px; gap: 20px; }
+    .config-panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .controls-panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .status-panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); grid-column: 1 / -1; }
+    h1 { color: #333; margin-bottom: 10px; font-size: 24px; }
+    h2 { color: #555; margin-bottom: 15px; font-size: 18px; }
+    input, select { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; margin-bottom: 15px; transition: border-color 0.2s; }
+    input:focus, select:focus { outline: none; border-color: #4f46e5; }
+    button { 
+      width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; 
+      cursor: pointer; transition: all 0.2s; margin-bottom: 10px;
+    }
+    .btn-primary { background: #4f46e5; color: white; }
+    .btn-primary:hover { background: #3730a3; }
+    .btn-secondary { background: #6b7280; color: white; }
+    .btn-secondary:hover { background: #4b5563; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .status { 
+      padding: 12px; border-radius: 8px; text-align: center; font-weight: 600; 
+      margin-bottom: 15px; font-size: 16px;
+    }
+    .status.idle { background: #d1fae5; color: #065f46; }
+    .status.running { background: #fef3c7; color: #92400e; }
+    .status.stopped { background: #fee2e2; color: #991b1b; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .logs { 
+      max-height: 400px; overflow-y: auto; background: #f8fafc; 
+      border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; font-family: monospace; 
+      font-size: 13px; line-height: 1.4;
+    }
+    .log-entry { margin-bottom: 4px; }
+    .log-info { color: #0369a1; }
+    .log-warn { color: #d97706; }
+    .log-error { color: #dc2626; }
+    .stats { display: flex; justify-content: space-between; margin-bottom: 15px; }
+    .stat { text-align: center; }
+    .stat-value { font-size: 24px; font-weight: bold; color: #4f46e5; }
+    .stat-label { font-size: 12px; color: #6b7280; }
+    @media (max-width: 768px) { .container { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="config-panel">
+      <h1>⚙️ Configurações</h1>
+      <div>
+        <label>URL de Cadastro</label>
+        <input id="cadastroUrl" placeholder="https://example.com/cadastro" />
+      </div>
+      <div>
+        <label>Temp-Mail API Key</label>
+        <input id="tempMailApiKey" placeholder="sua-api-key-aqui" />
+      </div>
+      <div>
+        <label>Timeout OTP (ms)</label>
+        <input id="otpTimeout" type="number" value="30000" />
+      </div>
+      <div>
+        <label>Intervalo Ciclos (ms)</label>
+        <input id="cycleInterval" type="number" value="60000" />
+      </div>
+      <div>
+        <label>Delay Extra (ms)</label>
+        <input id="extraDelay" type="number" value="2000" />
+      </div>
+      <div>
+        <label>Headless</label>
+        <select id="headless">
+          <option value="true">Sim</option>
+          <option value="false">Não</option>
+        </select>
+      </div>
+      <button class="btn-secondary" onclick="saveConfig()">💾 Salvar Config</button>
+    </div>
+
+    <div class="controls-panel">
+      <h2>🎮 Controles</h2>
+      <button class="btn-primary" id="startBtn" onclick="startLoop()">▶️ Iniciar Loop</button>
+      <button class="btn-primary" id="startOnceBtn" onclick="startOnce()">🔄 Executar 1 Ciclo</button>
+      <button class="btn-danger" id="stopBtn" onclick="stop()" disabled>⏹️ Parar</button>
+    </div>
+
+    <div class="status-panel">
+      <h2>📊 Status</h2>
+      <div id="status" class="status idle">
+        🟢 Inativo
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <div id="cyclesCompleted" class="stat-value">0</div>
+          <div class="stat-label">Ciclos OK</div>
+        </div>
+        <div class="stat">
+          <div id="statusText" class="stat-value">-</div>
+          <div class="stat-label">Status</div>
+        </div>
+      </div>
+      <div class="logs" id="logs"></div>
+      <button class="btn-secondary" onclick="clearLogs()" style="width: auto; margin-top: 10px;">🗑️ Limpar Logs</button>
+    </div>
+  </div>
+
+  <!-- HTML igual, apenas SCRIPT atualizado -->
+<script>
+  let pollingInterval;
+
+  const statusMap = {
+    STOPPED: { emoji: '🟢', text: 'Parado', color: 'idle' },
+    STARTING: { emoji: '🔄', text: 'Iniciando', color: 'running' },
+    RUNNING: { emoji: '⚡', text: 'Executando', color: 'running' },
+    WAITING_OTP: { emoji: '⏳', text: 'Aguardando OTP', color: 'running' },
+    STOPPING: { emoji: '🛑', text: 'Parando...', color: 'warn' },
+    ERROR: { emoji: '❌', text: 'Erro', color: 'error' }
+  };
+
+  async function api(path, method = 'GET', body = null) {
+    const options: RequestInit = { method };
+    if (body) {
+      options.headers = { 'Content-Type': 'application/json' };
+      options.body = JSON.stringify(body);
+    }
+    const res = await fetch(`/api${path}`, options);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function updateUI() {
+    try {
+      const state = await api('/status');
+      const logs = await api('/logs');
+
+      // Status
+      const statusEl = document.getElementById('status');
+      const statusTextEl = document.getElementById('statusText');
+      const statusInfo = statusMap[state.status] || statusMap.STOPPED;
+      
+      statusEl.className = `status ${statusInfo.color}`;
+      statusEl.innerHTML = `${statusInfo.emoji} ${statusInfo.text}`;
+      statusTextEl.textContent = state.status;
+
+      // Ciclos
+      document.getElementById('cyclesCompleted').textContent = state.cyclesCompleted;
+      
+      // Config inputs
+      Object.entries(state.config).forEach(([key, value]) => {
+        const el = document.getElementById(key);
+        if (el) {
+          if (el.type === 'checkbox') {
+            el.checked = value as boolean;
+          } else {
+            el.value = String(value);
+          }
+        }
+      });
+
+      // Botões
+      const running = ['RUNNING', 'STARTING', 'WAITING_OTP'].includes(state.status);
+      document.getElementById('startBtn').disabled = running;
+      document.getElementById('startOnceBtn').disabled = running;
+      document.getElementById('stopBtn').disabled = !running && state.status !== 'STOPPING';
+
+      // Logs
+      const logsEl = document.getElementById('logs');
+      logsEl.innerHTML = logs.map(log => {
+        const cycle = log.cycle ? `#${log.cycle} ` : '';
+        return `<div class="log-entry log-${log.level}">[${new Date(log.timestamp).toLocaleTimeString()}] ${cycle}${log.message}</div>`;
+      }).join('');
+
+      logsEl.scrollTop = 0;
+    } catch (error) {
+      console.error('UI Update Error:', error);
+    }
+  }
+
+  async function saveConfig() {
+    const config = {
+      cadastroUrl: (document.getElementById('cadastroUrl') as HTMLInputElement).value,
+      tempMailApiKey: (document.getElementById('tempMailApiKey') as HTMLInputElement).value,
+      otpTimeout: parseInt((document.getElementById('otpTimeout') as HTMLInputElement).value),
+      cycleInterval: parseInt((document.getElementById('cycleInterval') as HTMLInputElement).value),
+      extraDelay: parseInt((document.getElementById('extraDelay') as HTMLInputElement).value),
+      headless: (document.getElementById('headless') as HTMLSelectElement).value === 'true'
+    };
+    
+    await api('/config', 'POST', config);
+    addTempLog('success', '💾 Configuração salva!');
+  }
+
+  async function startLoop() {
+    const config = await getCurrentConfig();
+    await api('/start', 'POST', { config });
+  }
+
+  async function startOnce() {
+    const config = await getCurrentConfig();
+    await api('/start-once', 'POST', { config });
+  }
+
+  async function stop() {
+    await api('/stop', 'POST');
+  }
+
+  async function clearLogs() {
+    await api('/logs/clear', 'POST');
+  }
+
+  function getCurrentConfig() {
+    return {
+      cadastroUrl: (document.getElementById('cadastroUrl') as HTMLInputElement).value,
+      tempMailApiKey: (document.getElementById('tempMailApiKey') as HTMLInputElement).value,
+      otpTimeout: parseInt((document.getElementById('otpTimeout') as HTMLInputElement).value),
+      cycleInterval: parseInt((document.getElementById('cycleInterval') as HTMLInputElement).value),
+      extraDelay: parseInt((document.getElementById('extraDelay') as HTMLInputElement).value),
+      headless: (document.getElementById('headless') as HTMLSelectElement).value === 'true'
+    };
+  }
+
+  function addTempLog(level: string, message: string) {
+    const logsEl = document.getElementById('logs');
+    const div = document.createElement('div');
+    div.className = `log-entry log-${level}`;
+    div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+    logsEl?.insertBefore(div, logsEl.firstChild);
+    logsEl?.scrollTop = 0;
+  }
+
+  // Auto-save config a cada 3s
+  setInterval(saveConfig, 3000);
+
+  // Inicia polling
+  pollingInterval = setInterval(updateUI, 1000);
+  updateUI();
+</script>
+</body>
+
+<!-- Adicionar após config principal, antes dos controles -->
+<div class="config-panel">
+  <h2>🧪 Teste Temp-Mail</h2>
+  <div>
+    <label>API Key (para teste)</label>
+    <input id="testApiKey" placeholder="temp-mail-api-key" />
+  </div>
+  <button class="btn-primary" onclick="testCreateEmail()">📧 Criar Email</button>
+  <button class="btn-primary" onclick="testListMessages()" style="margin-top: 10px;">📨 Listar Mensagens</button>
+  <button class="btn-secondary" onclick="testDomains()" style="margin-top: 10px;">🌐 Domínios</button>
+  <div id="tempMailResult" style="margin-top: 15px; padding: 10px; background: #f0f9ff; border-radius: 6px; font-size: 13px; max-height: 150px; overflow-y: auto; display: none;"></div>
+</div>
+
+<script>
+// ... script existente ...
+
+async function testCreateEmail() {
+  const apiKey = (document.getElementById('testApiKey') as HTMLInputElement).value;
+  if (!apiKey) return addTempLog('warn', 'Informe API Key');
+  
+  try {
+    addTempLog('info', '📧 Criando email...');
+    const result = await api('/temp-mail/test-create', 'POST', { apiKey });
+    const email = result.email;
+    showTempResult(`✅ Email criado: <strong>${email.email}</strong><br/>MD5: <code>${email.md5}</code>`);
+    addTempLog('success', `Email: ${email.email}`);
+  } catch (error) {
+    addTempLog('error', error instanceof Error ? error.message : 'Erro');
+  }
+}
+
+async function testListMessages() {
+  const apiKey = (document.getElementById('testApiKey') as HTMLInputElement).value;
+  const emailMd5 = prompt('Digite o MD5 do email:');
+  if (!apiKey || !emailMd5) return;
+  
+  try {
+    addTempLog('info', '📨 Listando mensagens...');
+    const result = await api('/temp-mail/test-list', 'POST', { apiKey, emailMd5 });
+    if (result.messages.length === 0) {
+      showTempResult('📭 Nenhuma mensagem encontrada');
+    } else {
+      const html = result.messages.map(m => 
+        `<div><strong>${m.mail_subject}</strong><br/>${m.mail_from} → ${m.mail_to}</div>`
+      ).join('');
+      showTempResult(`📨 ${result.messages.length} mensagem(s):<br/>${html}`);
+    }
+  } catch (error) {
+    addTempLog('error', error instanceof Error ? error.message : 'Erro');
+  }
+}
+
+async function testDomains() {
+  const apiKey = (document.getElementById('testApiKey') as HTMLInputElement).value;
+  if (!apiKey) return addTempLog('warn', 'Informe API Key');
+  
+  try {
+    addTempLog('info', '🌐 Buscando domínios...');
+    const url = `/api/temp-mail/domains?apiKey=${encodeURIComponent(apiKey)}`;
+    const result = await fetch(url).then(r => r.json());
+    showTempResult(`✅ Domínios: <strong>${result.domains.join(', ')}</strong>`);
+  } catch (error) {
+    addTempLog('error', error instanceof Error ? error.message : 'Erro');
+  }
+}
+
+function showTempResult(html: string) {
+  const el = document.getElementById('tempMailResult');
+  el!.innerHTML = html;
+  el!.style.display = 'block';
+  el!.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ... resto do script igual ...
+</script>
+</html>
+
+<!-- Adicionar no painel Temp-Mail, após "Listar Mensagens" -->
+<button class="btn-primary" onclick="testOTPFlow()" style="margin-top: 10px; background: #059669;">🎉 Teste Completo OTP</button>
+
+<script>
+// ... script existente ...
+
+async function testOTPFlow() {
+  const apiKey = (document.getElementById('testApiKey') as HTMLInputElement).value;
+  const timeout = parseInt(prompt('Timeout OTP (ms, default 30000):') || '30000');
+  
+  if (!apiKey) return addTempLog('warn', 'Informe API Key');
+  
+  try {
+    addTempLog('info', '🚀 Iniciando fluxo completo: email + OTP...');
+    showTempResult('⏳ Aguardando OTP... <br/>Envie email para o endereço gerado!');
+    
+    const result = await api('/temp-mail/test-otp', 'POST', { 
+      apiKey, 
+      timeout 
+    });
+    
+    showTempResult(`
+      ✅ <strong>SUCESSO COMPLETO!</strong><br/>
+      📧 Email: <code>${result.email}</code><br/>
+      🔢 <strong>OTP: ${result.otp}</strong><br/>
+      📋 MD5: <code>${result.md5}</code>
+    `);
+    addTempLog('success', `🎉 OTP extraído: ${result.otp}`);
+    
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : 'Erro desconhecido';
+    showTempResult(`❌ Falha: ${msg}`);
+    addTempLog('error', msg);
+  }
+}
+
+// ... resto do script igual ...
+</script>
+
+<!-- Adicionar NOVA seção após Temp-Mail -->
+<div class="config-panel">
+  <h2>🔢 Gerador de Dados</h2>
+  <button class="btn-primary" onclick="gerarPayloadTest()">📄 Gerar Payload Completo</button>
+  <button class="btn-secondary" onclick="gerarMultiplos()">📋 5 Payloads</button>
+  <button class="btn-secondary" onclick="gerarApenasTelefone()">📞 Só Telefone</button>
+  <div id="generatorResult" style="margin-top: 15px; padding: 15px; background: #f0fdf4; border-radius: 8px; font-family: monospace; font-size: 13px; max-height: 200px; overflow-y: auto; display: none;"></div>
+</div>
+
+<script>
+// ... script existente ...
+
+async function gerarPayloadTest() {
+  try {
+    const result = await api('/generator/payload', 'POST', {});
+    showGeneratorResult(JSON.stringify(result.payload, null, 2));
+  } catch (error) {
+    addTempLog('error', 'Erro ao gerar payload');
+  }
+}
+
+async function gerarMultiplos() {
+  try {
+    const result = await fetch('/api/generator/test?count=5').then(r => r.json());
+    const html = result.payloads.map((p: any, i: number) => 
+      `<div style="margin-bottom: 15px; padding: 10px; background: white; border-radius: 6px;">
+        <strong>#${i+1}</strong><br/>
+        👤 ${p.nome} ${p.sobrenome}<br/>
+        📧 ${p.email}<br/>
+        📞 ${p.telefone}<br/>
+        🏷️ ${p.localizacao}
+      </div>`
+    ).join('');
+    showGeneratorResult(html);
+  } catch (error) {
+    addTempLog('error', 'Erro ao gerar múltiplos');
+  }
+}
+
+async function gerarApenasTelefone() {
+  // Simula via API
+  const result = await fetch('/api/generator/test?count=1').then(r => r.json());
+  const telefone = result.payloads[0].telefone;
+  showGeneratorResult(`📞 Telefone gerado: <strong>${telefone}</strong>`);
+}
+
+function showGeneratorResult(html: string) {
+  const el = document.getElementById('generatorResult');
+  el!.innerHTML = html;
+  el!.style.display = 'block';
+  el!.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ... resto do script igual ...
+</script>
+
+<!-- Remover painéis de teste, manter apenas config principal -->
+<!-- Adicionar indicador ciclo atual -->
+<div class="stats">
+  <div class="stat">
+    <div id="cyclesCompleted" class="stat-value">0</div>
+    <div class="stat-label">Ciclos OK</div>
+  </div>
+  <div class="stat">
+    <div id="currentCycle" class="stat-value">-</div>
+    <div class="stat-label">Ciclo Atual</div>
+  </div>
+  <div class="stat">
+    <div id="statusText" class="stat-value">-</div>
+    <div class="stat-label">Status</div>
+  </div>
+</div>
+
+<script>
+async function updateUI() {
+  const state = await api('/status');
+  const logs = await api('/logs');
+
+  // Ciclo atual
+  document.getElementById('currentCycle')!.textContent = state.cyclesTotal || '-';
+
+  // Status melhorado
+  const statusInfo = statusMap[state.status] || statusMap.STOPPED;
+  const statusEl = document.getElementById('status');
+  statusEl!.className = `status ${statusInfo.color}`;
+  statusEl!.innerHTML = `${statusInfo.emoji} ${statusInfo.text} ${state.cyclesCompleted > 0 ? `(${state.cyclesCompleted})` : ''}`;
+
+  // ... resto igual ...
+}
+
+// Status map atualizado
+const statusMap = {
+  STOPPED: { emoji: '🟢', text: 'Pronto', color: 'idle' },
+  STARTING: { emoji: '🔄', text: 'Iniciando', color: 'running' },
+  RUNNING: { emoji: '⚡', text: 'Executando', color: 'running' },
+  WAITING_OTP: { emoji: '⏳', text: 'OTP', color: 'running' },
+  STOPPING: { emoji: '🛑', text: 'Finalizando', color: 'warn' },
+  ERROR: { emoji: '❌', text: 'Erro', color: 'error' }
+};
+</script>
