@@ -7,10 +7,10 @@ import {
 } from '../types/tempMail';
 import { OTPParser } from '../utils/otpParser';
 
-// Endpoints reais da API tempmail.lol:
+// Endpoints reais da API tempmail.lol (plano Pro/Plus/Ultra):
 // GET  https://api.tempmail.lol/generate        -> cria inbox, retorna { address, token }
 // GET  https://api.tempmail.lol/auth/<token>     -> lista mensagens do inbox
-// Com API Key Plus/Ultra: adicionar ?token=<apiKey> na query
+// Autenticacao: Authorization: Bearer <apiKey> no header (plano pago)
 
 export class TempMailClient {
   private config: TempMailConfig;
@@ -22,17 +22,17 @@ export class TempMailClient {
     };
   }
 
-  private buildUrl(endpoint: string, withKey = true): string {
-    const base = `${this.config.baseUrl}${endpoint}`;
-    // A API key é passada como query param ?token= (não como header)
-    if (withKey && this.config.apiKey) {
-      return `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(this.config.apiKey)}`;
-    }
-    return base;
-  }
-
   private async request<T>(endpoint: string): Promise<T> {
-    const url = this.buildUrl(endpoint);
+    const url = `${this.config.baseUrl}${endpoint}`;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // Plano Pro/Plus/Ultra: autenticacao via Bearer token no header
+    if (this.config.apiKey) {
+      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -42,7 +42,7 @@ export class TempMailClient {
 
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         signal: controller.signal as AbortSignal,
       });
 
@@ -74,7 +74,7 @@ export class TempMailClient {
   }
 
   async listMessages(emailToken: string): Promise<MailMessage[]> {
-    // GET /auth/<token> -> { token: string, email: string, messages: MailMessage[] }
+    // GET /auth/<token> -> { token: string, email: string, messages: MailMessage[] | null }
     const data = await this.request<{ token: string; email: string; messages: MailMessage[] | null }>(
       `/auth/${emailToken}`
     );
