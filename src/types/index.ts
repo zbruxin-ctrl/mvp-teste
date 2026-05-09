@@ -28,7 +28,7 @@ export interface AppState {
 
 export interface LogEntry {
   timestamp: string;
-  level: 'info' | 'warn' | 'error' | 'success';
+  level: 'info' | 'warn' | 'error' | 'success' | 'kyc';
   message: string;
   cycle?: number;
 }

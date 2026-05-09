@@ -74,8 +74,13 @@ class GlobalState {
     p.signals.unshift(signal);
     if (p.signals.length > 20) p.signals = p.signals.slice(0, 20);
 
-    // Também aparece nos logs normais
-    this.addLog('warn', `🔍 KYC [${provider}] score=${p.score} (${p.level}) via ${source}`, cycle);
+    // Log dedicado com level 'kyc' para aparecer destacado no painel
+    const urlShort = url ? ` | ${url.substring(0, 60)}` : '';
+    this.addLog(
+      'kyc',
+      `[${provider}] ${p.level} — score=${p.score} via ${source} (+${weight})${urlShort}`,
+      cycle
+    );
   }
 
   getKycState(): Record<string, KycProviderState> {
@@ -162,11 +167,9 @@ class GlobalState {
     } while (loop && !this.state.shouldStop);
   }
 
-  // ─── Retry automático (até 3 tentativas, backoff 5s / 15s) ─────────────────
-
   private async executeCycleWithRetry(): Promise<void> {
     const MAX_RETRIES = 3;
-    const BACKOFF = [0, 5000, 15000]; // delay antes de cada tentativa
+    const BACKOFF = [0, 5000, 15000];
 
     this.currentCycle += 1;
     this.state.cyclesTotal += 1;
@@ -197,7 +200,6 @@ class GlobalState {
 
         await this.executor(this.state.config, this.currentCycle);
 
-        // Sucesso!
         this.state.cyclesCompleted += 1;
         this.addLog('success', `✅ Ciclo #${this.currentCycle} concluído!`, this.currentCycle);
         this.state.isRunning = false;
@@ -218,7 +220,6 @@ class GlobalState {
       }
     }
 
-    // Todas as tentativas falharam
     this.state.status = 'ERROR';
     this.state.lastError = lastError;
     this.addLog('error', `💀 Ciclo #${this.currentCycle} falhou após ${MAX_RETRIES} tentativas: ${lastError}`, this.currentCycle);
