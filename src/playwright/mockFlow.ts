@@ -86,6 +86,71 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
+/**
+ * Aceita os termos da Uber.
+ * O checkbox e um elemento customizado — o input fica hidden.
+ * Estrategia em cascata:
+ *   1. Tenta clicar no input nativo com force:true (ignora visibilidade)
+ *   2. Tenta clicar no label do "Concordo" via texto
+ *   3. Tenta clicar no wrapper visual [role="checkbox"]
+ *   4. Fallback: clica pelo texto "Concordo" em qualquer elemento clicavel
+ */
+async function aceitarTermos(p: Page): Promise<void> {
+  await humanPause(randInt(800, 1600));
+
+  // Candidatos em ordem de prioridade
+  const candidatos = [
+    // input nativo (pode estar hidden — force ignora isso)
+    async () => {
+      const el = p.locator('input[type="checkbox"]').first();
+      await el.waitFor({ state: 'attached', timeout: 8000 });
+      const box = await el.boundingBox().catch(() => null);
+      if (box) {
+        await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+        await humanPause(randInt(100, 250));
+      }
+      await el.check({ force: true, timeout: 5000 });
+    },
+    // label com texto "Concordo"
+    async () => {
+      const el = p.locator('label:has-text("Concordo"), [class*="label"]:has-text("Concordo")').first();
+      await el.waitFor({ state: 'attached', timeout: 5000 });
+      const box = await el.boundingBox().catch(() => null);
+      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+      await humanPause(randInt(80, 200));
+      await el.click({ force: true, timeout: 5000 });
+    },
+    // role="checkbox" customizado
+    async () => {
+      const el = p.locator('[role="checkbox"]').first();
+      await el.waitFor({ state: 'attached', timeout: 5000 });
+      const box = await el.boundingBox().catch(() => null);
+      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+      await humanPause(randInt(80, 200));
+      await el.click({ force: true, timeout: 5000 });
+    },
+    // qualquer elemento clicavel com texto Concordo
+    async () => {
+      await p.click('text=Concordo', { force: true, timeout: 5000 });
+    },
+  ];
+
+  let aceitou = false;
+  for (const tentativa of candidatos) {
+    try {
+      await tentativa();
+      aceitou = true;
+      break;
+    } catch {
+      // tenta o proximo candidato
+    }
+  }
+
+  if (!aceitou) throw new Error('Nao foi possivel aceitar os termos — nenhum seletor funcionou');
+
+  globalState.addLog('info', '\u2611\uFE0F Termos aceitos');
+}
+
 // ─── Fingerprint stealth script ───────────────────────────────────────────────
 
 const stealthScript = `
@@ -225,8 +290,6 @@ export class MockPlaywrightFlow {
     });
 
     await context.addInitScript({ content: stealthScript });
-
-    // Abre a pagina ja em bonjour.uber.com
     page = await context.newPage();
     await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
     globalState.addLog('info', '\uD83C\uDF10 Aberto em bonjour.uber.com');
@@ -247,7 +310,6 @@ export class MockPlaywrightFlow {
     const p = page;
 
     try {
-      // Navega para o cadastro (pode ser diferente de bonjour.uber.com dependendo do fluxo)
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await humanPause(randInt(1200, 2800));
       globalState.addLog('info', '\uD83C\uDF10 P\u00e1gina de cadastro aberta', cycle);
@@ -299,19 +361,10 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `\uD83D\uDC64 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
-      // Etapa 6 — checkbox termos
-      await p.waitForSelector('input[type="checkbox"]', { state: 'visible', timeout: 10000 });
-      await humanPause(randInt(800, 1600));
-      const checkbox = p.locator('input[type="checkbox"]').first();
-      const cbBox = await checkbox.boundingBox();
-      if (cbBox) {
-        await humanMouseMove(p, cbBox.x + cbBox.width / 2, cbBox.y + cbBox.height / 2);
-        await humanPause(randInt(100, 250));
-      }
-      if (!(await checkbox.isChecked())) await checkbox.check();
+      // Etapa 6 — termos (checkbox customizado)
+      await aceitarTermos(p);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '\u2611\uFE0F Termos aceitos', cycle);
 
       // FASE 2: bonjour.uber.com
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
