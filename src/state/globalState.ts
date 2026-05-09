@@ -74,13 +74,23 @@ class GlobalState {
     p.signals.unshift(signal);
     if (p.signals.length > 20) p.signals = p.signals.slice(0, 20);
 
-    // Log dedicado com level 'kyc' para aparecer destacado no painel
     const urlShort = url ? ` | ${url.substring(0, 60)}` : '';
     this.addLog(
       'kyc',
       `[${provider}] ${p.level} — score=${p.score} via ${source} (+${weight})${urlShort}`,
       cycle
     );
+  }
+
+  /** Retorna todos os sinais KYC registrados para um ciclo específico. */
+  getKycSignals(cycle: number): KycSignal[] {
+    const result: KycSignal[] = [];
+    for (const state of Object.values(this.kycProviders)) {
+      for (const signal of state.signals) {
+        if (signal.cycle === cycle) result.push(signal);
+      }
+    }
+    return result;
   }
 
   getKycState(): Record<string, KycProviderState> {
