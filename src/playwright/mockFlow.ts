@@ -87,20 +87,67 @@ async function humanClick(p: Page, selector: string): Promise<void> {
 }
 
 /**
+ * Tenta dispensar o banner de cookies/consentimento da Uber (bonjour.uber.com).
+ * Nao lanca erro se nao encontrar — o banner e opcional.
+ */
+async function dispensarCookies(p: Page): Promise<void> {
+  // Seletores conhecidos do banner de cookies da Uber (em ordem de prioridade)
+  const candidatos = [
+    // botao "Aceitar todos" / "Accept all"
+    'button:has-text("Aceitar todos")',
+    'button:has-text("Accept all")',
+    // botao "Aceitar" generico
+    'button:has-text("Aceitar")',
+    'button:has-text("Accept")',
+    // botao "Concordo" no banner (diferente do termos de uso)
+    '[id*="cookie"] button:has-text("Concordo")',
+    '[class*="cookie"] button',
+    '[class*="consent"] button',
+    // data-testid comuns da Uber
+    '[data-testid="cookie-banner-accept"]',
+    '[data-testid="accept-cookies"]',
+    // OneTrust (plataforma de cookies que a Uber usa)
+    '#onetrust-accept-btn-handler',
+    '.onetrust-accept-btn-handler',
+    'button#accept-recommended-btn-handler',
+  ];
+
+  for (const seletor of candidatos) {
+    try {
+      const el = p.locator(seletor).first();
+      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      if (visivel) {
+        const box = await el.boundingBox().catch(() => null);
+        if (box) {
+          await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+          await humanPause(randInt(150, 350));
+        }
+        await el.click({ timeout: 3000 });
+        globalState.addLog('info', `🍪 Banner de cookies dispensado (${seletor})`);
+        await humanPause(randInt(400, 800));
+        return;
+      }
+    } catch {
+      // ignora e tenta o proximo
+    }
+  }
+
+  // Sem banner — tudo certo, segue o fluxo normalmente
+}
+
+/**
  * Aceita os termos da Uber.
  * O checkbox e um elemento customizado — o input fica hidden.
  * Estrategia em cascata:
- *   1. Tenta clicar no input nativo com force:true (ignora visibilidade)
- *   2. Tenta clicar no label do "Concordo" via texto
- *   3. Tenta clicar no wrapper visual [role="checkbox"]
- *   4. Fallback: clica pelo texto "Concordo" em qualquer elemento clicavel
+ *   1. input nativo com force:true
+ *   2. label com texto "Concordo"
+ *   3. [role="checkbox"]
+ *   4. text=Concordo generico
  */
 async function aceitarTermos(p: Page): Promise<void> {
   await humanPause(randInt(800, 1600));
 
-  // Candidatos em ordem de prioridade
   const candidatos = [
-    // input nativo (pode estar hidden — force ignora isso)
     async () => {
       const el = p.locator('input[type="checkbox"]').first();
       await el.waitFor({ state: 'attached', timeout: 8000 });
@@ -111,7 +158,6 @@ async function aceitarTermos(p: Page): Promise<void> {
       }
       await el.check({ force: true, timeout: 5000 });
     },
-    // label com texto "Concordo"
     async () => {
       const el = p.locator('label:has-text("Concordo"), [class*="label"]:has-text("Concordo")').first();
       await el.waitFor({ state: 'attached', timeout: 5000 });
@@ -120,7 +166,6 @@ async function aceitarTermos(p: Page): Promise<void> {
       await humanPause(randInt(80, 200));
       await el.click({ force: true, timeout: 5000 });
     },
-    // role="checkbox" customizado
     async () => {
       const el = p.locator('[role="checkbox"]').first();
       await el.waitFor({ state: 'attached', timeout: 5000 });
@@ -129,7 +174,6 @@ async function aceitarTermos(p: Page): Promise<void> {
       await humanPause(randInt(80, 200));
       await el.click({ force: true, timeout: 5000 });
     },
-    // qualquer elemento clicavel com texto Concordo
     async () => {
       await p.click('text=Concordo', { force: true, timeout: 5000 });
     },
@@ -147,8 +191,7 @@ async function aceitarTermos(p: Page): Promise<void> {
   }
 
   if (!aceitou) throw new Error('Nao foi possivel aceitar os termos — nenhum seletor funcionou');
-
-  globalState.addLog('info', '\u2611\uFE0F Termos aceitos');
+  globalState.addLog('info', '☑️ Termos aceitos');
 }
 
 // ─── Fingerprint stealth script ───────────────────────────────────────────────
@@ -254,12 +297,12 @@ const stealthScript = `
 export class MockPlaywrightFlow {
   static async init(headless = false): Promise<void> {
     if (browser) {
-      globalState.addLog('info', '\uD83E\uDDA1 Reusando browser existente');
+      globalState.addLog('info', '🦁 Reusando browser existente');
       page = await context!.newPage();
       await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       return;
     }
-    globalState.addLog('info', '\uD83E\uDDA1 Brave iniciando em bonjour.uber.com');
+    globalState.addLog('info', '🦁 Brave iniciando em bonjour.uber.com');
 
     browser = await chromiumExtra.launch({
       headless,
@@ -292,7 +335,7 @@ export class MockPlaywrightFlow {
     await context.addInitScript({ content: stealthScript });
     page = await context.newPage();
     await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    globalState.addLog('info', '\uD83C\uDF10 Aberto em bonjour.uber.com');
+    globalState.addLog('info', '🌐 Aberto em bonjour.uber.com');
   }
 
   static async execute(
@@ -304,7 +347,7 @@ export class MockPlaywrightFlow {
     },
     cycle: number
   ): Promise<void> {
-    if (!page) throw new Error('Playwright n\u00e3o inicializado');
+    if (!page) throw new Error('Playwright não inicializado');
 
     const client = new TempMailClient(config.tempMailApiKey);
     const p = page;
@@ -312,22 +355,22 @@ export class MockPlaywrightFlow {
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await humanPause(randInt(1200, 2800));
-      globalState.addLog('info', '\uD83C\uDF10 P\u00e1gina de cadastro aberta', cycle);
+      globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount);
-      globalState.addLog('info', `\uD83D\uDC64 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
+      globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
       // Etapa 1 — email
       await humanType(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '\uD83D\uDCE7 Email preenchido \u2192 Continuar', cycle);
+      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
       // Etapa 2 — OTP
-      globalState.addLog('info', '\u23F3 Aguardando OTP...', cycle);
+      globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
-      globalState.addLog('info', `\uD83D\uDD11 OTP recebido: ${otp}`, cycle);
+      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
       await humanPause(randInt(800, 1800));
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
@@ -336,21 +379,21 @@ export class MockPlaywrightFlow {
       }
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '\u2705 OTP preenchido \u2192 Avan\u00e7ar', cycle);
+      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
       // Etapa 3 — telefone
       await humanPause(randInt(600, 1400));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', `\uD83D\uDCF1 Telefone: ${payload.telefone}`, cycle);
+      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
       // Etapa 4 — senha
       await humanPause(randInt(500, 1200));
       await humanType(p, '#PASSWORD', payload.senha);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '\uD83D\uDD12 Senha preenchida', cycle);
+      globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
       // Etapa 5 — nome e sobrenome
       await humanPause(randInt(600, 1500));
@@ -359,7 +402,7 @@ export class MockPlaywrightFlow {
       await humanType(p, '#LAST_NAME', payload.sobrenome);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', `\uD83D\uDC64 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
+      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
       // Etapa 6 — termos (checkbox customizado)
       await aceitarTermos(p);
@@ -369,7 +412,10 @@ export class MockPlaywrightFlow {
       // FASE 2: bonjour.uber.com
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
       await humanPause(randInt(1000, 2200));
-      globalState.addLog('info', '\uD83D\uDD04 Redirecionado para bonjour.uber.com', cycle);
+      globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
+
+      // Dispensa banner de cookies ANTES de interagir com a pagina
+      await dispensarCookies(p);
 
       await humanType(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao);
       await humanPause(randInt(900, 1500));
@@ -377,26 +423,34 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(200, 400));
       await p.keyboard.press('Enter');
       await humanPause(randInt(500, 900));
+
+      // Dispensa cookies de novo caso banner tenha aparecido depois da interacao com cidade
+      await dispensarCookies(p);
+
       await humanType(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
+
+      // Dispensa cookies mais uma vez antes de clicar em submit
+      await dispensarCookies(p);
+
       await humanClick(p, '[data-testid="submit-button"]');
-      globalState.addLog('info', `\uD83D\uDCCD Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
+      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
       await humanPause(randInt(1500, 3000));
-      const naoAtivar = p.locator('button:has-text("N\u00c3O ATIVAR")');
+      const naoAtivar = p.locator('button:has-text("NÃO ATIVAR")');
       const continuar = p.locator('button:has-text("CONTINUAR")');
       if (await naoAtivar.isVisible().catch(() => false)) {
-        await humanClick(p, 'button:has-text("N\u00c3O ATIVAR")');
-        globalState.addLog('info', '\uD83D\uDD15 Notifica\u00e7\u00f5es: N\u00c3O ATIVAR', cycle);
+        await humanClick(p, 'button:has-text("NÃO ATIVAR")');
+        globalState.addLog('info', '🔕 Notificações: NÃO ATIVAR', cycle);
       } else if (await continuar.isVisible().catch(() => false)) {
         await humanClick(p, 'button:has-text("CONTINUAR")');
-        globalState.addLog('info', '\u25B6\uFE0F Notifica\u00e7\u00f5es: CONTINUAR', cycle);
+        globalState.addLog('info', '▶️ Notificações: CONTINUAR', cycle);
       } else {
-        globalState.addLog('warn', '\u26A0\uFE0F Bot\u00e3o de notifica\u00e7\u00e3o n\u00e3o encontrado, continuando...', cycle);
+        globalState.addLog('warn', '⚠️ Botão de notificação não encontrado, continuando...', cycle);
       }
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 800));
-      globalState.addLog('success', `\uD83C\uDF89 Ciclo #${cycle} COMPLETO!`, cycle);
+      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO!`, cycle);
 
     } catch (error) {
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
@@ -412,6 +466,6 @@ export class MockPlaywrightFlow {
     page = null;
     context = null;
     browser = null;
-    globalState.addLog('info', '\uD83E\uDDF9 Browser fechado manualmente');
+    globalState.addLog('info', '🧹 Browser fechado manualmente');
   }
 }
