@@ -1,14 +1,18 @@
-import { chromium, Browser, Page, BrowserContext } from 'playwright';
+import { chromium as chromiumExtra } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { Browser, Page, BrowserContext } from 'playwright';
 import { globalState } from '../state/globalState';
 import { TempMailClient } from '../tempMail/client';
 import { gerarPayloadCompleto } from '../utils/dataGenerators';
 import { ArtifactsManager } from '../utils/artifacts';
 
+// Ativa o stealth plugin — mascara sinais de automação (webdriver, plugins, etc)
+chromiumExtra.use(StealthPlugin());
+
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 
-// Helper: aguarda selector e preenche com delay humano
 async function fillField(p: Page, selector: string, value: string, delay = 80): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   await p.click(selector);
@@ -16,7 +20,6 @@ async function fillField(p: Page, selector: string, value: string, delay = 80): 
   await p.type(selector, value, { delay });
 }
 
-// Helper: aguarda e clica
 async function clickBtn(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   await p.click(selector);
@@ -29,13 +32,42 @@ export class MockPlaywrightFlow {
       page = await context!.newPage();
       return;
     }
-    globalState.addLog('info', `🌐 Playwright iniciando (${headless ? 'headless' : 'headed'})`);
-    browser = await chromium.launch({ headless, slowMo: 80 });
+    globalState.addLog('info', `🌐 Playwright iniciando (${headless ? 'headless' : 'headed'}) com stealth`);
+
+    // Usa playwright-extra com stealth em vez do chromium padrão
+    browser = await chromiumExtra.launch({
+      headless,
+      slowMo: 80,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars',
+        '--window-size=1366,768',
+      ],
+    }) as unknown as Browser;
+
     context = await browser.newContext({
       viewport: { width: 1366, height: 768 },
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      locale: 'pt-BR',
+      timezoneId: 'America/Sao_Paulo',
+      geolocation: { latitude: -22.4306, longitude: -45.4528 }, // Itajubá, MG
+      permissions: ['geolocation'],
+      extraHTTPHeaders: {
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
     });
+
+    // Remove sinais extras de webdriver via script injetado em toda página
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US'] });
+      (window as any).chrome = { runtime: {} };
+    });
+
     page = await context.newPage();
   }
 
@@ -54,97 +86,80 @@ export class MockPlaywrightFlow {
     const p = page;
 
     try {
-      // ── FASE 1: auth.uber.com ─────────────────────────────────────────────
+      // ── FASE 1: auth.uber.com ───────────────────────────────────────────────
 
-      // 1. Abrir página de login
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       globalState.addLog('info', '🌐 Página aberta', cycle);
 
-      // 2. Criar email temporário e gerar payload
       const emailAccount = await client.createRandomEmail();
       const emailToken = (emailAccount as unknown as { token: string }).token;
       const payload = gerarPayloadCompleto(emailAccount);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
-      // 3. Etapa 1 — preencher email e clicar Continuar
-      // Seletor: input[type="email"]#PHONE_NUMBER_or_EMAIL_ADDRESS
-      await fillField(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email, config.extraDelay > 1000 ? 80 : 50);
+      // Etapa 1 — email
+      await fillField(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email, 80);
       await p.waitForTimeout(config.extraDelay);
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // 4. Etapa 2 — OTP por email (4 inputs separados: EMAIL_OTP_CODE-0 a -3)
+      // Etapa 2 — OTP (4 inputs separados)
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailToken, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
-
-      // OTP vem como string "1234" — preenche cada dígito num input separado
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
         await fillField(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!, 50);
       }
       await p.waitForTimeout(config.extraDelay);
-      await clickBtn(p, '#forward-button[data-testid="forward-button"]');
+      await clickBtn(p, '#forward-button');
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
-      // 5. Etapa 3 — telefone
-      // Seletor: input#PHONE_NUMBER (placeholder: "(11) 96123-4567")
+      // Etapa 3 — telefone
       await fillField(p, '#PHONE_NUMBER', payload.telefone, 80);
       await p.waitForTimeout(config.extraDelay);
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
-      // 6. Etapa 4 — senha (email hidden já está preenchido pelo Uber)
-      // Seletor: input#PASSWORD[type="password"]
+      // Etapa 4 — senha
       await fillField(p, '#PASSWORD', payload.senha, 80);
       await p.waitForTimeout(config.extraDelay);
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
-      // 7. Etapa 5 — nome e sobrenome
+      // Etapa 5 — nome e sobrenome
       await fillField(p, '#FIRST_NAME', payload.nome, 80);
       await fillField(p, '#LAST_NAME', payload.sobrenome, 80);
       await p.waitForTimeout(config.extraDelay);
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
-      // 8. Etapa 6 — checkbox de termos
-      // Seletor: input[type="checkbox"] (único checkbox visível)
+      // Etapa 6 — checkbox termos
       await p.waitForSelector('input[type="checkbox"]', { state: 'visible', timeout: 10000 });
       const checkbox = p.locator('input[type="checkbox"]').first();
-      const isChecked = await checkbox.isChecked();
-      if (!isChecked) await checkbox.check();
+      if (!(await checkbox.isChecked())) await checkbox.check();
       await p.waitForTimeout(config.extraDelay);
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', '☑️ Termos aceitos', cycle);
 
-      // ── FASE 2: bonjour.uber.com (após reload/redirect) ───────────────────
-      // O browser vai redirecionar automaticamente para bonjour.uber.com
-      // Aguarda a nova URL carregar
+      // ── FASE 2: bonjour.uber.com (após redirect automático) ──────────────────
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
       globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
 
-      // 9. Etapa bonjour/1 — cidade + código de convite
-      // Seletor: input[data-testid="flow-type-city-selector-v2-input"]
+      // Etapa bonjour/1 — cidade + código convite
       await fillField(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao, 80);
-      // Aguarda dropdown e seleciona primeira opção
       await p.waitForTimeout(1200);
       await p.keyboard.press('ArrowDown');
       await p.keyboard.press('Enter');
       await p.waitForTimeout(500);
-
-      // Código de convite
       await fillField(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao, 80);
       await p.waitForTimeout(config.extraDelay);
       await clickBtn(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // 10. Etapa bonjour/2 — permissão de notificação (NÃO ATIVAR ou CONTINUAR)
-      // Aguarda aparecer um dos dois botões
+      // Etapa bonjour/2 — notificação
       await p.waitForTimeout(2000);
       const naoAtivar = p.locator('button:has-text("NÃO ATIVAR")');
       const continuar = p.locator('button:has-text("CONTINUAR")');
-
       if (await naoAtivar.isVisible().catch(() => false)) {
         await naoAtivar.click();
         globalState.addLog('info', '🔕 Notificações: NÃO ATIVAR', cycle);
@@ -156,8 +171,8 @@ export class MockPlaywrightFlow {
       }
 
       await p.waitForTimeout(config.extraDelay);
-
       globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO!`, cycle);
+
     } catch (error) {
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
       await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
@@ -165,7 +180,6 @@ export class MockPlaywrightFlow {
     }
   }
 
-  /** Fechamento manual completo — chamado via POST /api/cleanup */
   static async cleanup(): Promise<void> {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
