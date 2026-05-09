@@ -233,7 +233,6 @@ const JS_FALLBACK_SUBMIT = `
 `;
 
 // KYC_INIT_SCRIPT — roda no contexto MAIN da página em cada navegação
-// Não depende de window.__kycSignal — usa CustomEvent como ponte
 const KYC_INIT_SCRIPT = `
   (function() {
     if (window.__kycInjected) return;
@@ -254,9 +253,7 @@ const KYC_INIT_SCRIPT = `
         var patterns = PROVIDERS[provider];
         for (var i = 0; i < patterns.length; i++) {
           if (u.indexOf(patterns[i]) !== -1) {
-            // Envia para o Node via window.__kycSignal (exposeFunction por page)
             try { window.__kycSignal(provider, source, url, 5); } catch(e) {}
-            // Fallback: CustomEvent capturado pelo listener abaixo
             window.dispatchEvent(new CustomEvent('__kyc_hit', { detail: { provider: provider, source: source, url: url } }));
             return;
           }
@@ -264,21 +261,18 @@ const KYC_INIT_SCRIPT = `
       }
     }
 
-    // FETCH
     var _fetch = window.fetch;
     window.fetch = function() {
       try { analyze(arguments[0] && (arguments[0].url || arguments[0]), 'fetch'); } catch(e) {}
       return _fetch.apply(this, arguments);
     };
 
-    // XHR
     var _open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
       try { analyze(url, 'xhr'); } catch(e) {}
       return _open.apply(this, arguments);
     };
 
-    // WebSocket
     var _WS = window.WebSocket;
     if (_WS) {
       window.WebSocket = function(url, proto) {
@@ -288,7 +282,6 @@ const KYC_INIT_SCRIPT = `
       window.WebSocket.prototype = _WS.prototype;
     }
 
-    // Script/iframe tags dinâmicas
     var _create = document.createElement.bind(document);
     document.createElement = function(tag) {
       var el = _create(tag);
@@ -307,7 +300,6 @@ const KYC_INIT_SCRIPT = `
       return el;
     };
 
-    // MutationObserver — scripts/iframes via innerHTML
     new MutationObserver(function(ms) {
       ms.forEach(function(m) {
         m.addedNodes.forEach(function(n) {
@@ -402,6 +394,48 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   } catch { /* ignora */ }
 
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
+}
+
+// ─── Clica no item "Foto do perfil" para acionar o KYC ──────────────────────────
+// O elemento é um <a> com data-testid="stepItem profilePhoto" que se comporta
+// como botão. Usa force:true pois pode ter overlay em cima.
+async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
+  globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
+
+  // Seletores em ordem de preferência
+  const SELETORES = [
+    '[data-testid="stepItem profilePhoto"]',
+    '[data-dgui="requirement-list-item"]:has-text("Foto do perfil")',
+    'a:has-text("Foto do perfil")',
+    '[data-tracking-name="requirement-list-item"]:has-text("Foto")',
+  ];
+
+  const TIMEOUT_MS = 20_000;
+  const inicio = Date.now();
+
+  while (Date.now() - inicio < TIMEOUT_MS) {
+    for (const sel of SELETORES) {
+      try {
+        const el = p.locator(sel).first();
+        const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
+        if (visivel) {
+          const box = await el.boundingBox().catch(() => null);
+          if (box) {
+            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+            await humanPause(randInt(200, 400));
+          }
+          // force:true ignora overlay/pointer-events:none
+          await el.click({ force: true, timeout: 5000 });
+          globalState.addLog('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
+          await humanPause(randInt(1500, 2500));
+          return;
+        }
+      } catch { /* tenta próximo seletor */ }
+    }
+    await humanPause(1500);
+  }
+
+  globalState.addLog('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle);
 }
 
 // ─── Fingerprint stealth ───────────────────────────────────────────────────────
@@ -542,15 +576,9 @@ async function criarContextoIsolado(
     },
   });
 
-  // Stealth injeta antes do JS da página
   await context.addInitScript({ content: stealthScript });
-
-  // KYC_INIT_SCRIPT no context — roda em TODA página/frame do contexto,
-  // incluindo redirecionamentos (ex: bonjour.uber.com → KYC provider)
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
-  // Network-route no CONTEXT — cobre todas as páginas e redirecionamentos,
-  // não apenas a page inicial. FIX: era page.route antes.
   await context.route('**/*', (route) => {
     const url = route.request().url();
     const provider = detectKycProvider(url);
@@ -562,8 +590,6 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  // exposeFunction por page — funciona para a page atual e é re-exposto
-  // automaticamente pelo Playwright em cada navegação da mesma page
   await page.exposeFunction(
     '__kycSignal',
     (provider: string, source: string, url: string, weight: number) => {
@@ -571,7 +597,6 @@ async function criarContextoIsolado(
     }
   );
 
-  // iframes com URL KYC
   page.on('framenavigated', (frame) => {
     const url = frame.url();
     const provider = detectKycProvider(url);
@@ -580,7 +605,6 @@ async function criarContextoIsolado(
     }
   });
 
-  // WebSocket nativo do Playwright
   page.on('websocket', (ws) => {
     const url = ws.url();
     const provider = detectKycProvider(url);
@@ -721,8 +745,11 @@ export class MockPlaywrightFlow {
       await humanClick(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // Tela do WhatsApp / KYC
+      // Tela do WhatsApp
       await dispensarWhatsApp(p, cycle);
+
+      // Clica em "Foto do perfil" para acionar o KYC
+      await clicarFotoPerfil(p, cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
       globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
