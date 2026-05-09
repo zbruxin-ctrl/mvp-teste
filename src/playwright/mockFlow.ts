@@ -8,9 +8,8 @@ import { ArtifactsManager } from '../utils/artifacts';
 
 chromiumExtra.use(StealthPlugin());
 
+// Browser fica vivo entre ciclos — só contexto/página são recriados por ciclo
 let browser: Browser | null = null;
-let context: BrowserContext | null = null;
-let page: Page | null = null;
 
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
 const BRAVE_UA =
@@ -86,27 +85,17 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
-/**
- * Tenta dispensar o banner de cookies/consentimento da Uber (bonjour.uber.com).
- * Nao lanca erro se nao encontrar — o banner e opcional.
- */
 async function dispensarCookies(p: Page): Promise<void> {
-  // Seletores conhecidos do banner de cookies da Uber (em ordem de prioridade)
   const candidatos = [
-    // botao "Aceitar todos" / "Accept all"
     'button:has-text("Aceitar todos")',
     'button:has-text("Accept all")',
-    // botao "Aceitar" generico
     'button:has-text("Aceitar")',
     'button:has-text("Accept")',
-    // botao "Concordo" no banner (diferente do termos de uso)
     '[id*="cookie"] button:has-text("Concordo")',
     '[class*="cookie"] button',
     '[class*="consent"] button',
-    // data-testid comuns da Uber
     '[data-testid="cookie-banner-accept"]',
     '[data-testid="accept-cookies"]',
-    // OneTrust (plataforma de cookies que a Uber usa)
     '#onetrust-accept-btn-handler',
     '.onetrust-accept-btn-handler',
     'button#accept-recommended-btn-handler',
@@ -131,19 +120,8 @@ async function dispensarCookies(p: Page): Promise<void> {
       // ignora e tenta o proximo
     }
   }
-
-  // Sem banner — tudo certo, segue o fluxo normalmente
 }
 
-/**
- * Aceita os termos da Uber.
- * O checkbox e um elemento customizado — o input fica hidden.
- * Estrategia em cascata:
- *   1. input nativo com force:true
- *   2. label com texto "Concordo"
- *   3. [role="checkbox"]
- *   4. text=Concordo generico
- */
 async function aceitarTermos(p: Page): Promise<void> {
   await humanPause(randInt(800, 1600));
 
@@ -292,17 +270,40 @@ const stealthScript = `
   };
 `;
 
+// ─── Cria um contexto isolado para um ciclo ───────────────────────────────────
+
+async function criarContextoIsolado(): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser!.newContext({
+    viewport: { width: 1366, height: 768 },
+    userAgent: BRAVE_UA,
+    locale: 'pt-BR',
+    timezoneId: 'America/Sao_Paulo',
+    geolocation: { latitude: -23.5505, longitude: -46.6333 },
+    permissions: ['geolocation'],
+    extraHTTPHeaders: {
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    },
+  });
+
+  await context.addInitScript({ content: stealthScript });
+  const page = await context.newPage();
+  return { context, page };
+}
+
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
+  /**
+   * Inicia o browser uma única vez. Não cria contexto/página aqui —
+   * cada execute() cuida do próprio contexto isolado.
+   */
   static async init(headless = false): Promise<void> {
     if (browser) {
-      globalState.addLog('info', '🦁 Reusando browser existente');
-      page = await context!.newPage();
-      await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo usará contexto novo');
       return;
     }
-    globalState.addLog('info', '🦁 Brave iniciando em bonjour.uber.com');
+
+    globalState.addLog('info', '🦁 Iniciando Brave...');
 
     browser = await chromiumExtra.launch({
       headless,
@@ -320,24 +321,13 @@ export class MockPlaywrightFlow {
       ],
     }) as unknown as Browser;
 
-    context = await browser.newContext({
-      viewport: { width: 1366, height: 768 },
-      userAgent: BRAVE_UA,
-      locale: 'pt-BR',
-      timezoneId: 'America/Sao_Paulo',
-      geolocation: { latitude: -23.5505, longitude: -46.6333 },
-      permissions: ['geolocation'],
-      extraHTTPHeaders: {
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-      },
-    });
-
-    await context.addInitScript({ content: stealthScript });
-    page = await context.newPage();
-    await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    globalState.addLog('info', '🌐 Aberto em bonjour.uber.com');
+    globalState.addLog('info', '✅ Browser pronto — ciclos criarão abas isoladas');
   }
 
+  /**
+   * Cada chamada cria um BrowserContext limpo (sem cookies, sem sessão anterior),
+   * executa o fluxo completo e destrói o contexto ao final.
+   */
   static async execute(
     cadastroUrl: string,
     config: {
@@ -347,10 +337,12 @@ export class MockPlaywrightFlow {
     },
     cycle: number
   ): Promise<void> {
-    if (!page) throw new Error('Playwright não inicializado');
+    if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
+
+    globalState.addLog('info', `🆕 Ciclo #${cycle}: criando contexto isolado (aba limpa)`, cycle);
+    const { context, page: p } = await criarContextoIsolado();
 
     const client = new TempMailClient(config.tempMailApiKey);
-    const p = page;
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -414,7 +406,6 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(1000, 2200));
       globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
 
-      // Dispensa banner de cookies ANTES de interagir com a pagina
       await dispensarCookies(p);
 
       await humanType(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao);
@@ -424,13 +415,11 @@ export class MockPlaywrightFlow {
       await p.keyboard.press('Enter');
       await humanPause(randInt(500, 900));
 
-      // Dispensa cookies de novo caso banner tenha aparecido depois da interacao com cidade
       await dispensarCookies(p);
 
       await humanType(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
 
-      // Dispensa cookies mais uma vez antes de clicar em submit
       await dispensarCookies(p);
 
       await humanClick(p, '[data-testid="submit-button"]');
@@ -456,16 +445,20 @@ export class MockPlaywrightFlow {
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
       await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
       throw error;
+    } finally {
+      // Destroi o contexto (fecha a aba + limpa cookies/sessão) independente de sucesso ou erro
+      await context.close().catch(() => {});
+      globalState.addLog('info', `🗑️ Contexto do ciclo #${cycle} destruído`, cycle);
     }
   }
 
+  /**
+   * Fecha o browser completamente.
+   * Chamar apenas quando quiser encerrar tudo (botão "Parar" definitivo).
+   */
   static async cleanup(): Promise<void> {
-    await page?.close().catch(() => {});
-    await context?.close().catch(() => {});
     await browser?.close().catch(() => {});
-    page = null;
-    context = null;
     browser = null;
-    globalState.addLog('info', '🧹 Browser fechado manualmente');
+    globalState.addLog('info', '🧹 Browser fechado');
   }
 }
