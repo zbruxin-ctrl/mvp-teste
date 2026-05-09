@@ -173,7 +173,6 @@ async function aceitarTermos(p: Page): Promise<void> {
 }
 
 // Scripts JS passados como STRING para p.evaluate — o TS não analisa o interior
-// e por isso não reclama de document/HTMLElement.
 const JS_NAO_ATIVAR = `
   (function() {
     var normalize = function(s) {
@@ -181,8 +180,8 @@ const JS_NAO_ATIVAR = `
     };
     var botoes = Array.from(document.querySelectorAll('button'));
     var alvo = botoes.find(function(b) {
-      return normalize(b.innerText).indexOf('NAO ATIVAR') !== -1 ||
-             normalize(b.innerText).indexOf('N AO ATIVAR') !== -1;
+      var t = normalize(b.innerText);
+      return t.indexOf('NAO ATIVAR') !== -1 || t.indexOf('N AO ATIVAR') !== -1;
     });
     if (alvo) { alvo.click(); return true; }
     return false;
@@ -196,9 +195,8 @@ const JS_FALLBACK_SUBMIT = `
     };
     var botoes = Array.from(document.querySelectorAll('button[type="submit"]'));
     var alvo = botoes.find(function(b) {
-      return !normalize(b.innerText).includes('CONTINUAR') &&
-             !normalize(b.innerText).includes('AJUDA') &&
-             b.offsetParent !== null;
+      var t = normalize(b.innerText);
+      return !t.includes('CONTINUAR') && !t.includes('AJUDA') && b.offsetParent !== null;
     });
     if (alvo) { alvo.click(); return alvo.innerText; }
     return null;
@@ -206,65 +204,105 @@ const JS_FALLBACK_SUBMIT = `
 `;
 
 /**
- * Tela do WhatsApp da Uber — clica em NÃO ATIVAR.
- * 3 camadas: seletor CSS → JS string (sem erros TS) → fallback primeiro submit visível.
+ * Detecta e clica em NÃO ATIVAR na tela do WhatsApp da Uber.
+ *
+ * Estratégia:
+ *   1. Pausa generosa logo após o submit-button (tela pode demorar a renderizar).
+ *   2. Poll de até 30 s aguardando qualquer sinal da tela WhatsApp.
+ *   3. Camada 1 — seletor CSS com texto Unicode exato.
+ *   4. Camada 2 — JS string com normalize NFD.
+ *   5. Camada 3 — fallback no primeiro submit visível que não seja CONTINUAR/AJUDA.
  */
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
-  const telaCarregou = await p
-    .waitForSelector('button[type="submit"]', { state: 'visible', timeout: 10000 })
-    .catch(() => null);
+  // Pausa inicial: dá tempo da transição de página completar
+  await humanPause(randInt(2500, 4000));
 
-  if (!telaCarregou) {
-    globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada, pulando...', cycle);
+  // Seletores que indicam que a tela WhatsApp está presente
+  const SELETORES_WHATSAPP = [
+    'button:has-text("N\u00c3O ATIVAR")',
+    'button:has-text("Nao ativar")',
+    'button:has-text("Not now")',
+    'button:has-text("Agora n\u00e3o")',
+    '[data-testid*="whatsapp"]',
+    'button[type="submit"]',
+  ];
+
+  // Poll: verifica a cada 3 s por até 30 s
+  const TIMEOUT_MS = 30_000;
+  const POLL_MS   = 3_000;
+  const inicio    = Date.now();
+  let   detectado = false;
+
+  globalState.addLog('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
+
+  while (Date.now() - inicio < TIMEOUT_MS) {
+    for (const sel of SELETORES_WHATSAPP) {
+      try {
+        const visivel = await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false);
+        if (visivel) {
+          detectado = true;
+          break;
+        }
+      } catch { /* ignora */ }
+    }
+    if (detectado) break;
+    await humanPause(POLL_MS);
+  }
+
+  if (!detectado) {
+    globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada após 30s, pulando...', cycle);
     return;
   }
 
+  globalState.addLog('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
   await humanPause(randInt(600, 1200));
 
   // Camada 1: seletor CSS com texto Unicode exato
-  try {
-    const el = p.locator('button:has-text("N\u00c3O ATIVAR")').first();
-    const visivel = await el.isVisible({ timeout: 3000 }).catch(() => false);
-    if (visivel) {
-      const box = await el.boundingBox().catch(() => null);
-      if (box) {
-        await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-        await humanPause(randInt(200, 400));
+  const candidatosCss = [
+    'button:has-text("N\u00c3O ATIVAR")',
+    'button:has-text("Nao ativar")',
+    'button:has-text("Not now")',
+    'button:has-text("Agora n\u00e3o")',
+  ];
+  for (const sel of candidatosCss) {
+    try {
+      const el = p.locator(sel).first();
+      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      if (visivel) {
+        const box = await el.boundingBox().catch(() => null);
+        if (box) {
+          await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+          await humanPause(randInt(200, 400));
+        }
+        await el.click({ timeout: 5000 });
+        globalState.addLog('info', `🔕 WhatsApp: NÃO ATIVAR clicado (CSS: ${sel})`, cycle);
+        await humanPause(randInt(500, 1000));
+        return;
       }
-      await el.click({ timeout: 5000 });
-      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado', cycle);
-      await humanPause(randInt(500, 1000));
-      return;
-    }
-  } catch {
-    // tenta próxima camada
+    } catch { /* tenta próxima */ }
   }
 
-  // Camada 2: JS como string — TS não verifica o interior, sem erros de tipos DOM
+  // Camada 2: JS string com normalize NFD
   try {
     const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
     if (clicou) {
-      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (via JS)', cycle);
+      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle);
       await humanPause(randInt(500, 1000));
       return;
     }
-  } catch {
-    // ignora
-  }
+  } catch { /* ignora */ }
 
   // Camada 3: fallback — primeiro submit visível que não seja CONTINUAR/AJUDA
   try {
     const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
     if (clicou) {
-      globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback)`, cycle);
+      globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback submit)`, cycle);
       await humanPause(randInt(500, 1000));
       return;
     }
-  } catch {
-    // ignora
-  }
+  } catch { /* ignora */ }
 
-  globalState.addLog('warn', '⚠️ Não foi possível clicar em NÃO ATIVAR — continuando mesmo assim', cycle);
+  globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
 // ─── Fingerprint stealth script ───────────────────────────────────────────────
@@ -514,7 +552,7 @@ export class MockPlaywrightFlow {
       await humanClick(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // Tela do WhatsApp — clicar em NÃO ATIVAR
+      // Tela do WhatsApp — aguarda até 30s e clica em NÃO ATIVAR
       await dispensarWhatsApp(p, cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 800));
