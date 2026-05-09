@@ -6,7 +6,6 @@ import { TempMailClient } from '../tempMail/client';
 import { gerarPayloadCompleto } from '../utils/dataGenerators';
 import { ArtifactsManager } from '../utils/artifacts';
 
-// Ativa o stealth plugin — mascara sinais de automação (webdriver, plugins, etc)
 chromiumExtra.use(StealthPlugin());
 
 let browser: Browser | null = null;
@@ -84,8 +83,6 @@ export class MockPlaywrightFlow {
     const p = page;
 
     try {
-      // ── FASE 1: auth.uber.com ───────────────────────────────────────────────
-
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       globalState.addLog('info', '🌐 Página aberta', cycle);
 
@@ -99,9 +96,9 @@ export class MockPlaywrightFlow {
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // Etapa 2 — OTP (4 inputs separados)
+      // Etapa 2 — OTP
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
-      const otp = await client.waitForOTP(emailAccount.md5, config.otpTimeout);
+      const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
@@ -138,11 +135,10 @@ export class MockPlaywrightFlow {
       await clickBtn(p, '#forward-button');
       globalState.addLog('info', '☑️ Termos aceitos', cycle);
 
-      // ── FASE 2: bonjour.uber.com (após redirect automático) ──────────────────
+      // FASE 2: bonjour.uber.com
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
       globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
 
-      // Etapa bonjour/1 — cidade + código convite
       await fillField(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao, 80);
       await p.waitForTimeout(1200);
       await p.keyboard.press('ArrowDown');
@@ -153,7 +149,6 @@ export class MockPlaywrightFlow {
       await clickBtn(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // Etapa bonjour/2 — notificação
       await p.waitForTimeout(2000);
       const naoAtivar = p.locator('button:has-text("NÃO ATIVAR")');
       const continuar = p.locator('button:has-text("CONTINUAR")');
