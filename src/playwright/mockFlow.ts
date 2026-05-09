@@ -172,16 +172,47 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
+// Scripts JS passados como STRING para p.evaluate — o TS não analisa o interior
+// e por isso não reclama de document/HTMLElement.
+const JS_NAO_ATIVAR = `
+  (function() {
+    var normalize = function(s) {
+      return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toUpperCase().trim();
+    };
+    var botoes = Array.from(document.querySelectorAll('button'));
+    var alvo = botoes.find(function(b) {
+      return normalize(b.innerText).indexOf('NAO ATIVAR') !== -1 ||
+             normalize(b.innerText).indexOf('N AO ATIVAR') !== -1;
+    });
+    if (alvo) { alvo.click(); return true; }
+    return false;
+  })()
+`;
+
+const JS_FALLBACK_SUBMIT = `
+  (function() {
+    var normalize = function(s) {
+      return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toUpperCase().trim();
+    };
+    var botoes = Array.from(document.querySelectorAll('button[type="submit"]'));
+    var alvo = botoes.find(function(b) {
+      return !normalize(b.innerText).includes('CONTINUAR') &&
+             !normalize(b.innerText).includes('AJUDA') &&
+             b.offsetParent !== null;
+    });
+    if (alvo) { alvo.click(); return alvo.innerText; }
+    return null;
+  })()
+`;
+
 /**
  * Tela do WhatsApp da Uber — clica em NÃO ATIVAR.
- * Usa seletores em cascata + p.evaluate com any cast para evitar erros de tipos DOM.
+ * 3 camadas: seletor CSS → JS string (sem erros TS) → fallback primeiro submit visível.
  */
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
-  // Aguarda a tela carregar (detecta pelo primeiro button[type="submit"] visível)
-  const telaCarregou = await p.waitForSelector(
-    'button[type="submit"]',
-    { state: 'visible', timeout: 10000 }
-  ).catch(() => null);
+  const telaCarregou = await p
+    .waitForSelector('button[type="submit"]', { state: 'visible', timeout: 10000 })
+    .catch(() => null);
 
   if (!telaCarregou) {
     globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada, pulando...', cycle);
@@ -209,29 +240,11 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     // tenta próxima camada
   }
 
-  // Camada 2: p.evaluate com normalize NFD — remove acentos antes de comparar
-  // Usa "any" para evitar erros de tipos DOM no contexto Node/TypeScript
+  // Camada 2: JS como string — TS não verifica o interior, sem erros de tipos DOM
   try {
-    const clicou = await p.evaluate((): boolean => {
-      /* eslint-disable @typescript-eslint/no-explicit-any */
-      const doc = document as any;
-      const normalize = (s: string): string =>
-        s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
-      const botoes: any[] = Array.from(doc.querySelectorAll('button'));
-      const alvo = botoes.find(
-        (b: any) =>
-          normalize(b.innerText).includes('NAO ATIVAR') ||
-          normalize(b.innerText).includes('N AO ATIVAR')
-      );
-      if (alvo) {
-        alvo.click();
-        return true;
-      }
-      return false;
-    });
-
+    const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
     if (clicou) {
-      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (via JS evaluate)', cycle);
+      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (via JS)', cycle);
       await humanPause(randInt(500, 1000));
       return;
     }
@@ -239,27 +252,9 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     // ignora
   }
 
-  // Camada 3: fallback — primeiro button[type="submit"] visível que não seja CONTINUAR/AJUDA
+  // Camada 3: fallback — primeiro submit visível que não seja CONTINUAR/AJUDA
   try {
-    const clicou = await p.evaluate((): string | null => {
-      /* eslint-disable @typescript-eslint/no-explicit-any */
-      const doc = document as any;
-      const normalize = (s: string): string =>
-        s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
-      const botoes: any[] = Array.from(doc.querySelectorAll('button[type="submit"]'));
-      const alvo = botoes.find(
-        (b: any) =>
-          !normalize(b.innerText).includes('CONTINUAR') &&
-          !normalize(b.innerText).includes('AJUDA') &&
-          b.offsetParent !== null
-      );
-      if (alvo) {
-        alvo.click();
-        return alvo.innerText as string;
-      }
-      return null;
-    });
-
+    const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
     if (clicou) {
       globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback)`, cycle);
       await humanPause(randInt(500, 1000));
