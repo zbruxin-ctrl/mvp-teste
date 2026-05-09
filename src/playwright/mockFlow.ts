@@ -18,26 +18,19 @@ const BRAVE_UA =
 
 // ─── Helpers humanos ──────────────────────────────────────────────────────────
 
-/** Numero aleatorio entre min e max (com distribuicao normal suave) */
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-/** Pausa organica: nao e constante, tem micro-variacoes como humano */
 async function humanPause(baseMs: number): Promise<void> {
   const jitter = randInt(-Math.floor(baseMs * 0.25), Math.floor(baseMs * 0.35));
   await new Promise<void>((r) => setTimeout(r, Math.max(100, baseMs + jitter)));
 }
 
-/**
- * Move o mouse em curva bezier ate o destino antes de clicar.
- * Humanos nunca vao direto ao ponto — tem aceleracao e pequenos desvios.
- */
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   const steps = randInt(8, 18);
   const startX = randInt(200, 800);
   const startY = randInt(200, 500);
-  // Ponto de controle da curva (desvio organico)
   const cpX = startX + (x - startX) * 0.4 + randInt(-60, 60);
   const cpY = startY + (y - startY) * 0.4 + randInt(-40, 40);
   for (let i = 0; i <= steps; i++) {
@@ -49,14 +42,8 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   }
 }
 
-/**
- * Digita como humano: delay variavel por tecla, erros ocasionais com correcao,
- * pausa maior depois de espacos e pontuacao.
- */
 async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-
-  // Busca posicao do elemento para mover o mouse ate la antes de clicar
   const box = await p.locator(selector).boundingBox();
   if (box) {
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
@@ -64,15 +51,11 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(80, 180));
   }
-
   await p.click(selector);
   await p.fill(selector, '');
   await humanPause(randInt(120, 300));
-
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
-
-    // Erro de digitacao ocasional (5% de chance) — digita letra errada e apaga
     if (Math.random() < 0.05 && /[a-zA-Z]/.test(ch)) {
       const typo = String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
       await p.keyboard.type(typo, { delay: randInt(60, 130) });
@@ -80,20 +63,15 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
       await p.keyboard.press('Backspace');
       await humanPause(randInt(60, 150));
     }
-
     await p.keyboard.type(ch, { delay: randInt(55, 145) });
-
-    // Pausa maior apos espaco, @ ou ponto (comportamento natural)
     if (ch === ' ' || ch === '@' || ch === '.') {
       await humanPause(randInt(150, 400));
     } else if (Math.random() < 0.08) {
-      // Micro-pausa aleatoria (hesitacao)
       await humanPause(randInt(200, 600));
     }
   }
 }
 
-/** Clique humano: move o mouse ate o elemento com variacao, depois clica */
 async function humanClick(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   const box = await p.locator(selector).boundingBox();
@@ -112,8 +90,6 @@ async function humanClick(p: Page, selector: string): Promise<void> {
 
 const stealthScript = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-  // Plugins reais do Chrome/Brave
   const makePlugin = (name, filename, desc, mimeTypes) => {
     const plugin = Object.create(Plugin.prototype);
     Object.defineProperties(plugin, {
@@ -163,59 +139,39 @@ const stealthScript = `
       return arr;
     }
   });
-
   Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
   Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
   Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
   Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
   Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-
-  // Screen — resolucao realista com profundidade de cor
   Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
   Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-  // Connection — simula conexao residencial
   if (navigator.connection) {
     Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
     Object.defineProperty(navigator.connection, 'rtt', { get: () => 50 });
     Object.defineProperty(navigator.connection, 'downlink', { get: () => 10 });
     Object.defineProperty(navigator.connection, 'saveData', { get: () => false });
   }
-
-  // chrome.runtime real
   if (!window.chrome) window.chrome = {};
   if (!window.chrome.runtime) {
-    window.chrome.runtime = {
-      connect: () => ({}),
-      sendMessage: () => {},
-      id: undefined,
-      OnInstalledReason: {},
-    };
+    window.chrome.runtime = { connect: () => ({}), sendMessage: () => {}, id: undefined, OnInstalledReason: {} };
   }
-
-  // Permissions
   const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
   window.navigator.permissions.query = (p) =>
     p.name === 'notifications'
       ? Promise.resolve({ state: Notification.permission, onchange: null })
       : _origQuery(p);
-
-  // toString nativo em funcoes patcheadas
   const _origToString = Function.prototype.toString;
   Function.prototype.toString = function () {
     if (this === window.navigator.permissions.query) return 'function query() { [native code] }';
     return _origToString.call(this);
   };
-
-  // WebGL fingerprint — renderer e vendor realistas
   const getParameter = WebGLRenderingContext.prototype.getParameter;
   WebGLRenderingContext.prototype.getParameter = function (param) {
     if (param === 37445) return 'Intel Inc.';
     if (param === 37446) return 'Intel Iris OpenGL Engine';
     return getParameter.call(this, param);
   };
-
-  // Canvas fingerprint — adiciona micro-ruido invisivel para tornar hash unico
   const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
   HTMLCanvasElement.prototype.toDataURL = function (type) {
     const ctx = this.getContext('2d');
@@ -235,14 +191,15 @@ export class MockPlaywrightFlow {
     if (browser) {
       globalState.addLog('info', '\uD83E\uDDA1 Reusando browser existente');
       page = await context!.newPage();
+      await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       return;
     }
-    globalState.addLog('info', '\uD83E\uDDA1 Brave iniciando (headed) com anti-detec\u00e7\u00e3o total');
+    globalState.addLog('info', '\uD83E\uDDA1 Brave iniciando em bonjour.uber.com');
 
     browser = await chromiumExtra.launch({
       headless,
       executablePath: BRAVE_PATH,
-      slowMo: 0, // slowMo desativado — usamos delays humanos manuais agora
+      slowMo: 0,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -268,7 +225,11 @@ export class MockPlaywrightFlow {
     });
 
     await context.addInitScript({ content: stealthScript });
+
+    // Abre a pagina ja em bonjour.uber.com
     page = await context.newPage();
+    await page.goto('https://bonjour.uber.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    globalState.addLog('info', '\uD83C\uDF10 Aberto em bonjour.uber.com');
   }
 
   static async execute(
@@ -286,10 +247,10 @@ export class MockPlaywrightFlow {
     const p = page;
 
     try {
+      // Navega para o cadastro (pode ser diferente de bonjour.uber.com dependendo do fluxo)
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      // Pausa inicial — simula usuario lendo a pagina antes de agir
       await humanPause(randInt(1200, 2800));
-      globalState.addLog('info', '\uD83C\uDF10 P\u00e1gina aberta', cycle);
+      globalState.addLog('info', '\uD83C\uDF10 P\u00e1gina de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount);
@@ -305,7 +266,7 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '\u23F3 Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
       globalState.addLog('info', `\uD83D\uDD11 OTP recebido: ${otp}`, cycle);
-      await humanPause(randInt(800, 1800)); // simula usuario vendo o email
+      await humanPause(randInt(800, 1800));
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
         await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
