@@ -71,10 +71,6 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
   }
 }
 
-/**
- * Igual ao humanType mas usa { force: true } no click inicial.
- * Usar quando há overlay/dropdown bloqueando pointer events.
- */
 async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   const box = await p.locator(selector).boundingBox();
@@ -84,7 +80,6 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(50, 100));
   }
-  // force: true ignora elementos que interceptam pointer events (dropdowns, overlays)
   await p.click(selector, { force: true });
   await p.fill(selector, '');
   await humanPause(randInt(60, 150));
@@ -237,50 +232,92 @@ const JS_FALLBACK_SUBMIT = `
   })()
 `;
 
-// KYC_INIT_SCRIPT — roda no contexto do browser
-// IMPORTANTE: window.__kycSignal é registrado via exposeFunction ANTES deste script ser aplicado
+// KYC_INIT_SCRIPT — roda no contexto MAIN da página em cada navegação
+// Não depende de window.__kycSignal — usa CustomEvent como ponte
 const KYC_INIT_SCRIPT = `
   (function() {
     if (window.__kycInjected) return;
     window.__kycInjected = true;
 
+    var PROVIDERS = {
+      'Socure':  ['socure', 'devicer.io', 'sigma.socure', 'verify.socure'],
+      'Veriff':  ['veriff', 'magic.veriff', 'api.veriff.me', 'cdn.veriff'],
+      'Jumio':   ['jumio'],
+      'Onfido':  ['onfido'],
+      'Persona': ['withpersona', 'persona.id'],
+    };
+
     function analyze(url, source) {
-      if (!url) return;
-      var u = String(url).toLowerCase();
-      if (u.includes('socure'))   { window.__kycSignal && window.__kycSignal('Socure', source, String(url), 5); }
-      if (u.includes('veriff') || u.includes('magic.veriff')) { window.__kycSignal && window.__kycSignal('Veriff', source, String(url), 5); }
+      if (!url || typeof url !== 'string') return;
+      var u = url.toLowerCase();
+      for (var provider in PROVIDERS) {
+        var patterns = PROVIDERS[provider];
+        for (var i = 0; i < patterns.length; i++) {
+          if (u.indexOf(patterns[i]) !== -1) {
+            // Envia para o Node via window.__kycSignal (exposeFunction por page)
+            try { window.__kycSignal(provider, source, url, 5); } catch(e) {}
+            // Fallback: CustomEvent capturado pelo listener abaixo
+            window.dispatchEvent(new CustomEvent('__kyc_hit', { detail: { provider: provider, source: source, url: url } }));
+            return;
+          }
+        }
+      }
     }
 
+    // FETCH
     var _fetch = window.fetch;
     window.fetch = function() {
-      try { analyze(arguments[0] && arguments[0].url || arguments[0], 'fetch'); } catch(e) {}
+      try { analyze(arguments[0] && (arguments[0].url || arguments[0]), 'fetch'); } catch(e) {}
       return _fetch.apply(this, arguments);
     };
 
+    // XHR
     var _open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
       try { analyze(url, 'xhr'); } catch(e) {}
       return _open.apply(this, arguments);
     };
 
-    var _ws = window.WebSocket;
-    if (_ws) {
-      window.WebSocket = function(url, protocols) {
+    // WebSocket
+    var _WS = window.WebSocket;
+    if (_WS) {
+      window.WebSocket = function(url, proto) {
         try { analyze(url, 'websocket'); } catch(e) {}
-        return protocols ? new _ws(url, protocols) : new _ws(url);
+        return proto ? new _WS(url, proto) : new _WS(url);
       };
-      window.WebSocket.prototype = _ws.prototype;
+      window.WebSocket.prototype = _WS.prototype;
     }
 
-    var _post = window.postMessage;
-    window.postMessage = function(msg, target) {
-      try {
-        var str = typeof msg === 'string' ? msg : JSON.stringify(msg);
-        if (str.toLowerCase().includes('socure')) window.__kycSignal && window.__kycSignal('Socure', 'postMessage', '', 4);
-        if (str.toLowerCase().includes('veriff')) window.__kycSignal && window.__kycSignal('Veriff', 'postMessage', '', 4);
-      } catch(e) {}
-      return _post.apply(this, arguments);
+    // Script/iframe tags dinâmicas
+    var _create = document.createElement.bind(document);
+    document.createElement = function(tag) {
+      var el = _create(tag);
+      var t = tag.toLowerCase();
+      if (t === 'script' || t === 'iframe') {
+        var proto = t === 'script' ? HTMLScriptElement.prototype : HTMLIFrameElement.prototype;
+        var d = Object.getOwnPropertyDescriptor(proto, 'src');
+        if (d) {
+          Object.defineProperty(el, 'src', {
+            set: function(v) { analyze(v, t + '-tag'); return d.set.call(this, v); },
+            get: function()  { return d.get.call(this); },
+            configurable: true
+          });
+        }
+      }
+      return el;
     };
+
+    // MutationObserver — scripts/iframes via innerHTML
+    new MutationObserver(function(ms) {
+      ms.forEach(function(m) {
+        m.addedNodes.forEach(function(n) {
+          if (n.tagName && (n.tagName === 'SCRIPT' || n.tagName === 'IFRAME')) {
+            analyze(n.src || n.getAttribute('src'), n.tagName.toLowerCase() + '-dom');
+          }
+        });
+      });
+    }).observe(document.documentElement, { childList: true, subtree: true });
+
   })();
 `;
 
@@ -465,17 +502,20 @@ const stealthScript = `
   };
 `;
 
-// ─── KYC patterns (network-route) ─────────────────────────────────────────────
-// Ampliado para cobrir subdomínios e variações de URL
+// ─── KYC patterns ─────────────────────────────────────────────────────────────
+
 const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
-  { pattern: /socure/i,                         provider: 'Socure' },
-  { pattern: /veriff/i,                         provider: 'Veriff' },
-  { pattern: /magic\.veriff/i,                  provider: 'Veriff' },
-  { pattern: /devicer\.io/i,                    provider: 'Socure' },   // SDK Socure
-  { pattern: /sigma\.socure/i,                  provider: 'Socure' },
-  { pattern: /verify\.socure/i,                 provider: 'Socure' },
-  { pattern: /api\.veriff\.me/i,                provider: 'Veriff' },
-  { pattern: /cdn\.veriff/i,                    provider: 'Veriff' },
+  { pattern: /socure/i,            provider: 'Socure' },
+  { pattern: /devicer\.io/i,       provider: 'Socure' },
+  { pattern: /sigma\.socure/i,     provider: 'Socure' },
+  { pattern: /verify\.socure/i,    provider: 'Socure' },
+  { pattern: /veriff/i,            provider: 'Veriff' },
+  { pattern: /magic\.veriff/i,     provider: 'Veriff' },
+  { pattern: /api\.veriff\.me/i,   provider: 'Veriff' },
+  { pattern: /cdn\.veriff/i,       provider: 'Veriff' },
+  { pattern: /jumio/i,             provider: 'Jumio'  },
+  { pattern: /onfido/i,            provider: 'Onfido' },
+  { pattern: /withpersona/i,       provider: 'Persona'},
 ];
 
 function detectKycProvider(url: string): string | null {
@@ -505,22 +545,13 @@ async function criarContextoIsolado(
   // Stealth injeta antes do JS da página
   await context.addInitScript({ content: stealthScript });
 
-  const page = await context.newPage();
-
-  // FIX: exposeFunction ANTES de addInitScript — garante que window.__kycSignal
-  // já existe quando o KYC_INIT_SCRIPT tentar chamá-lo
-  await page.exposeFunction(
-    '__kycSignal',
-    (provider: string, source: string, url: string, weight: number) => {
-      globalState.addKycSignal(provider, source, weight, cycle, url);
-    }
-  );
-
-  // KYC script injeta depois do exposeFunction estar registrado
+  // KYC_INIT_SCRIPT no context — roda em TODA página/frame do contexto,
+  // incluindo redirecionamentos (ex: bonjour.uber.com → KYC provider)
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
-  // Network-route: captura mesmo se o JS in-page falhar
-  await page.route('**/*', (route) => {
+  // Network-route no CONTEXT — cobre todas as páginas e redirecionamentos,
+  // não apenas a page inicial. FIX: era page.route antes.
+  await context.route('**/*', (route) => {
     const url = route.request().url();
     const provider = detectKycProvider(url);
     if (provider) {
@@ -528,6 +559,17 @@ async function criarContextoIsolado(
     }
     route.continue();
   });
+
+  const page = await context.newPage();
+
+  // exposeFunction por page — funciona para a page atual e é re-exposto
+  // automaticamente pelo Playwright em cada navegação da mesma page
+  await page.exposeFunction(
+    '__kycSignal',
+    (provider: string, source: string, url: string, weight: number) => {
+      globalState.addKycSignal(provider, source, weight, cycle, url);
+    }
+  );
 
   // iframes com URL KYC
   page.on('framenavigated', (frame) => {
@@ -543,7 +585,7 @@ async function criarContextoIsolado(
     const url = ws.url();
     const provider = detectKycProvider(url);
     if (provider) {
-      globalState.addKycSignal(provider, 'websocket', 5, cycle, url);
+      globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
     }
   });
 
@@ -667,12 +709,10 @@ export class MockPlaywrightFlow {
       await p.keyboard.press('ArrowDown');
       await humanPause(randInt(150, 300));
       await p.keyboard.press('Enter');
-      // FIX: aguarda dropdown fechar antes de tentar o próximo campo
       await humanPause(randInt(500, 900));
 
       await dispensarCookies(p);
 
-      // FIX: humanTypeForce — usa force:true para ignorar o overlay do autocomplete da cidade
       await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
 
