@@ -12,6 +12,8 @@ let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 
+const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
+
 async function fillField(p: Page, selector: string, value: string, delay = 80): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   await p.click(selector);
@@ -35,14 +37,15 @@ const stealthScript = `
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
     if (browser) {
-      globalState.addLog('info', '🌐 Reusando browser existente');
+      globalState.addLog('info', '🦡 Reusando browser existente');
       page = await context!.newPage();
       return;
     }
-    globalState.addLog('info', `🌐 Playwright iniciando (${headless ? 'headless' : 'headed'}) com stealth`);
+    globalState.addLog('info', `🦡 Brave iniciando (${headless ? 'headless' : 'headed'}) com stealth`);
 
     browser = await chromiumExtra.launch({
       headless,
+      executablePath: BRAVE_PATH,
       slowMo: 80,
       args: [
         '--no-sandbox',
@@ -66,7 +69,6 @@ export class MockPlaywrightFlow {
       },
     });
 
-    // Passa como string — evita que o TS tente compilar navigator/window como globais do Node
     await context.addInitScript({ content: stealthScript });
 
     page = await context.newPage();
