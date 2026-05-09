@@ -8,20 +8,28 @@ let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 
+// Helper: aguarda selector e preenche com delay humano
+async function fillField(p: Page, selector: string, value: string, delay = 80): Promise<void> {
+  await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+  await p.click(selector);
+  await p.fill(selector, '');
+  await p.type(selector, value, { delay });
+}
+
+// Helper: aguarda e clica
+async function clickBtn(p: Page, selector: string): Promise<void> {
+  await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+  await p.click(selector);
+}
+
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
     if (browser) {
       globalState.addLog('info', '🌐 Reusando browser existente');
-      // Em loop: abre nova aba no mesmo browser/contexto
       page = await context!.newPage();
       return;
     }
-    globalState.addLog(
-      'info',
-      `🌐 Playwright iniciando (${
-        headless ? 'headless' : 'headed'
-      })`
-    );
+    globalState.addLog('info', `🌐 Playwright iniciando (${headless ? 'headless' : 'headed'})`);
     browser = await chromium.launch({ headless, slowMo: 80 });
     context = await browser.newContext({
       viewport: { width: 1366, height: 768 },
@@ -43,72 +51,118 @@ export class MockPlaywrightFlow {
     if (!page) throw new Error('Playwright não inicializado');
 
     const client = new TempMailClient(config.tempMailApiKey);
+    const p = page;
 
     try {
-      // 1. Abrir página
-      await page.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // ── FASE 1: auth.uber.com ─────────────────────────────────────────────
+
+      // 1. Abrir página de login
+      await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       globalState.addLog('info', '🌐 Página aberta', cycle);
 
-      // 2. Criar email e gerar payload
+      // 2. Criar email temporário e gerar payload
       const emailAccount = await client.createRandomEmail();
       const emailToken = (emailAccount as unknown as { token: string }).token;
       const payload = gerarPayloadCompleto(emailAccount);
-      globalState.addLog(
-        'info',
-        `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`,
-        cycle
-      );
+      globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
-      // 3. Preencher email
-      await page.waitForSelector('[data-testid="email"]', { timeout: 10000 });
-      await page.fill('[data-testid="email"]', payload.email);
-      await page.waitForTimeout(config.extraDelay);
+      // 3. Etapa 1 — preencher email e clicar Continuar
+      // Seletor: input[type="email"]#PHONE_NUMBER_or_EMAIL_ADDRESS
+      await fillField(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email, config.extraDelay > 1000 ? 80 : 50);
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '#forward-button');
+      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // 4. Aguardar OTP
+      // 4. Etapa 2 — OTP por email (4 inputs separados: EMAIL_OTP_CODE-0 a -3)
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailToken, config.otpTimeout);
+      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
 
-      // 5. Preencher OTP
-      await page.waitForSelector('[data-testid="otp"]', { timeout: 10000 });
-      await page.fill('[data-testid="otp"]', otp);
-      await page.waitForTimeout(config.extraDelay);
+      // OTP vem como string "1234" — preenche cada dígito num input separado
+      const digits = otp.replace(/\D/g, '').split('');
+      for (let i = 0; i < digits.length; i++) {
+        await fillField(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!, 50);
+      }
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '#forward-button[data-testid="forward-button"]');
+      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
-      // 6. Demais campos
-      const fields: Array<[string, string]> = [
-        ['[data-testid="phone"]', payload.telefone],
-        ['[data-testid="password"]', payload.senha],
-        ['[data-testid="name"]', `${payload.nome} ${payload.sobrenome}`],
-        ['[data-testid="refcode"]', payload.codigoIndicacao],
-      ];
-      for (const [selector, value] of fields) {
-        await page.waitForSelector(selector, { timeout: 10000 });
-        await page.fill(selector, value);
-        await page.waitForTimeout(config.extraDelay);
-        globalState.addLog('info', `✅ Preenchido ${selector}`, cycle);
+      // 5. Etapa 3 — telefone
+      // Seletor: input#PHONE_NUMBER (placeholder: "(11) 96123-4567")
+      await fillField(p, '#PHONE_NUMBER', payload.telefone, 80);
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '#forward-button');
+      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
+
+      // 6. Etapa 4 — senha (email hidden já está preenchido pelo Uber)
+      // Seletor: input#PASSWORD[type="password"]
+      await fillField(p, '#PASSWORD', payload.senha, 80);
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '#forward-button');
+      globalState.addLog('info', '🔒 Senha preenchida', cycle);
+
+      // 7. Etapa 5 — nome e sobrenome
+      await fillField(p, '#FIRST_NAME', payload.nome, 80);
+      await fillField(p, '#LAST_NAME', payload.sobrenome, 80);
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '#forward-button');
+      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
+
+      // 8. Etapa 6 — checkbox de termos
+      // Seletor: input[type="checkbox"] (único checkbox visível)
+      await p.waitForSelector('input[type="checkbox"]', { state: 'visible', timeout: 10000 });
+      const checkbox = p.locator('input[type="checkbox"]').first();
+      const isChecked = await checkbox.isChecked();
+      if (!isChecked) await checkbox.check();
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '#forward-button');
+      globalState.addLog('info', '☑️ Termos aceitos', cycle);
+
+      // ── FASE 2: bonjour.uber.com (após reload/redirect) ───────────────────
+      // O browser vai redirecionar automaticamente para bonjour.uber.com
+      // Aguarda a nova URL carregar
+      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
+      globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
+
+      // 9. Etapa bonjour/1 — cidade + código de convite
+      // Seletor: input[data-testid="flow-type-city-selector-v2-input"]
+      await fillField(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao, 80);
+      // Aguarda dropdown e seleciona primeira opção
+      await p.waitForTimeout(1200);
+      await p.keyboard.press('ArrowDown');
+      await p.keyboard.press('Enter');
+      await p.waitForTimeout(500);
+
+      // Código de convite
+      await fillField(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao, 80);
+      await p.waitForTimeout(config.extraDelay);
+      await clickBtn(p, '[data-testid="submit-button"]');
+      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
+
+      // 10. Etapa bonjour/2 — permissão de notificação (NÃO ATIVAR ou CONTINUAR)
+      // Aguarda aparecer um dos dois botões
+      await p.waitForTimeout(2000);
+      const naoAtivar = p.locator('button:has-text("NÃO ATIVAR")');
+      const continuar = p.locator('button:has-text("CONTINUAR")');
+
+      if (await naoAtivar.isVisible().catch(() => false)) {
+        await naoAtivar.click();
+        globalState.addLog('info', '🔕 Notificações: NÃO ATIVAR', cycle);
+      } else if (await continuar.isVisible().catch(() => false)) {
+        await continuar.click();
+        globalState.addLog('info', '▶️ Notificações: CONTINUAR', cycle);
+      } else {
+        globalState.addLog('warn', '⚠️ Botão de notificação não encontrado, continuando...', cycle);
       }
 
-      // 7. Localização
-      await page.waitForSelector('[data-testid="location"]', { timeout: 10000 });
-      await page.fill('[data-testid="location"]', payload.localizacao);
-      await page.waitForTimeout(1000);
-      await page.keyboard.press('ArrowDown');
-      await page.keyboard.press('Enter');
+      await p.waitForTimeout(config.extraDelay);
 
-      // 8. Checkboxes e finalização
-      await page.click('[data-testid="concordo"]').catch(() => {});
-      await page.waitForTimeout(500);
-      await page.click('[data-testid="nao-ativar"]').catch(() => {});
-      await page.waitForTimeout(500);
-      await page.click('[data-testid="foto-perfil"]').catch(() => {});
-
-      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Browser permanece aberto.`, cycle);
+      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO!`, cycle);
     } catch (error) {
-      await ArtifactsManager.saveScreenshot(page!, cycle, 'error').catch(() => {});
-      await ArtifactsManager.saveHTML(page!, cycle, 'error').catch(() => {});
+      await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
+      await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
       throw error;
-      // Não fecha nada em caso de erro também - usuário decide
     }
-    // Nenhum finally de fechamento - browser e aba ficam abertos
   }
 
   /** Fechamento manual completo — chamado via POST /api/cleanup */
