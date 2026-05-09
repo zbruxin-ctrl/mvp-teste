@@ -15,20 +15,19 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 const BRAVE_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.202 Safari/537.36';
 
-// ─── Helpers humanos (pausas reduzidas para ~80s por ciclo) ──────────────────
+// ─── Helpers humanos ──────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 async function humanPause(baseMs: number): Promise<void> {
-  // Jitter de ±20% (era ±25-35%) para manter naturalidade mas ser mais rápido
   const jitter = randInt(-Math.floor(baseMs * 0.15), Math.floor(baseMs * 0.2));
   await new Promise<void>((r) => setTimeout(r, Math.max(80, baseMs + jitter)));
 }
 
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
-  const steps = randInt(5, 10); // era 8-18
+  const steps = randInt(5, 10);
   const startX = randInt(200, 800);
   const startY = randInt(200, 500);
   const cpX = startX + (x - startX) * 0.4 + randInt(-40, 40);
@@ -38,7 +37,7 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
     const bx = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * cpX + t * t * x);
     const by = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * cpY + t * t * y);
     await p.mouse.move(bx, by);
-    await humanPause(randInt(5, 12)); // era 8-22
+    await humanPause(randInt(5, 12));
   }
 }
 
@@ -49,25 +48,60 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
     const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(50, 100)); // era 80-180
+    await humanPause(randInt(50, 100));
   }
   await p.click(selector);
   await p.fill(selector, '');
-  await humanPause(randInt(60, 150)); // era 120-300
+  await humanPause(randInt(60, 150));
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
-    if (Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) { // era 0.05
+    if (Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) {
       const typo = String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
       await p.keyboard.type(typo, { delay: randInt(40, 80) });
       await humanPause(randInt(50, 120));
       await p.keyboard.press('Backspace');
       await humanPause(randInt(40, 90));
     }
-    await p.keyboard.type(ch, { delay: randInt(35, 90) }); // era 55-145
+    await p.keyboard.type(ch, { delay: randInt(35, 90) });
     if (ch === ' ' || ch === '@' || ch === '.') {
-      await humanPause(randInt(80, 200)); // era 150-400
-    } else if (Math.random() < 0.05) { // era 0.08
-      await humanPause(randInt(100, 300)); // era 200-600
+      await humanPause(randInt(80, 200));
+    } else if (Math.random() < 0.05) {
+      await humanPause(randInt(100, 300));
+    }
+  }
+}
+
+/**
+ * Igual ao humanType mas usa { force: true } no click inicial.
+ * Usar quando há overlay/dropdown bloqueando pointer events.
+ */
+async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
+  await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+  const box = await p.locator(selector).boundingBox();
+  if (box) {
+    const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
+    const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
+    await humanMouseMove(p, tx, ty);
+    await humanPause(randInt(50, 100));
+  }
+  // force: true ignora elementos que interceptam pointer events (dropdowns, overlays)
+  await p.click(selector, { force: true });
+  await p.fill(selector, '');
+  await humanPause(randInt(60, 150));
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) {
+      const typo = String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
+      await p.keyboard.type(typo, { delay: randInt(40, 80) });
+      await humanPause(randInt(50, 120));
+      await p.keyboard.press('Backspace');
+      await humanPause(randInt(40, 90));
+    }
+    await p.keyboard.type(ch, { delay: randInt(35, 90) });
+    if (ch === ' ' || ch === '@' || ch === '.') {
+      await humanPause(randInt(80, 200));
+    } else if (Math.random() < 0.05) {
+      await humanPause(randInt(100, 300));
     }
   }
 }
@@ -79,7 +113,7 @@ async function humanClick(p: Page, selector: string): Promise<void> {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(40, 100)); // era 60-180
+    await humanPause(randInt(40, 100));
     await p.mouse.click(tx, ty);
   } else {
     await p.click(selector);
@@ -124,7 +158,7 @@ async function dispensarCookies(p: Page): Promise<void> {
 }
 
 async function aceitarTermos(p: Page): Promise<void> {
-  await humanPause(randInt(500, 900)); // era 800-1600
+  await humanPause(randInt(500, 900));
 
   const candidatos = [
     async () => {
@@ -173,7 +207,6 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
-// Scripts JS como string (TS não analisa o interior — sem erros de tipos DOM)
 const JS_NAO_ATIVAR = `
   (function() {
     var normalize = function(s) {
@@ -204,8 +237,8 @@ const JS_FALLBACK_SUBMIT = `
   })()
 `;
 
-// Script KYC injetado no contexto do browser — intercepta fetch/XHR/WS/iframe
-// Passa sinais via window.__kycSignal para o Playwright capturar com exposeFunction
+// KYC_INIT_SCRIPT — roda no contexto do browser
+// IMPORTANTE: window.__kycSignal é registrado via exposeFunction ANTES deste script ser aplicado
 const KYC_INIT_SCRIPT = `
   (function() {
     if (window.__kycInjected) return;
@@ -213,45 +246,38 @@ const KYC_INIT_SCRIPT = `
 
     function analyze(url, source) {
       if (!url) return;
-      var u = url.toString().toLowerCase();
-      if (u.includes('socure')) {
-        window.__kycSignal && window.__kycSignal('Socure', source, url, 5);
-      }
-      if (u.includes('veriff') || u.includes('magic.veriff.me')) {
-        window.__kycSignal && window.__kycSignal('Veriff', source, url, 5);
-      }
+      var u = String(url).toLowerCase();
+      if (u.includes('socure'))   { window.__kycSignal && window.__kycSignal('Socure', source, String(url), 5); }
+      if (u.includes('veriff') || u.includes('magic.veriff')) { window.__kycSignal && window.__kycSignal('Veriff', source, String(url), 5); }
     }
 
-    // Fetch
     var _fetch = window.fetch;
     window.fetch = function() {
-      analyze(arguments[0] && arguments[0].toString(), 'fetch');
+      try { analyze(arguments[0] && arguments[0].url || arguments[0], 'fetch'); } catch(e) {}
       return _fetch.apply(this, arguments);
     };
 
-    // XHR
     var _open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
-      analyze(url, 'xhr');
+      try { analyze(url, 'xhr'); } catch(e) {}
       return _open.apply(this, arguments);
     };
 
-    // WebSocket
     var _ws = window.WebSocket;
-    window.WebSocket = function(url, protocols) {
-      analyze(url, 'websocket');
-      return protocols ? new _ws(url, protocols) : new _ws(url);
-    };
+    if (_ws) {
+      window.WebSocket = function(url, protocols) {
+        try { analyze(url, 'websocket'); } catch(e) {}
+        return protocols ? new _ws(url, protocols) : new _ws(url);
+      };
+      window.WebSocket.prototype = _ws.prototype;
+    }
 
-    // postMessage sniff
     var _post = window.postMessage;
     window.postMessage = function(msg, target) {
       try {
-        var str = JSON.stringify(msg);
-        if (str.toLowerCase().includes('socure'))
-          window.__kycSignal && window.__kycSignal('Socure', 'postMessage', '', 4);
-        if (str.toLowerCase().includes('veriff'))
-          window.__kycSignal && window.__kycSignal('Veriff', 'postMessage', '', 4);
+        var str = typeof msg === 'string' ? msg : JSON.stringify(msg);
+        if (str.toLowerCase().includes('socure')) window.__kycSignal && window.__kycSignal('Socure', 'postMessage', '', 4);
+        if (str.toLowerCase().includes('veriff')) window.__kycSignal && window.__kycSignal('Veriff', 'postMessage', '', 4);
       } catch(e) {}
       return _post.apply(this, arguments);
     };
@@ -341,7 +367,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
-// ─── Fingerprint stealth script ───────────────────────────────────────────────
+// ─── Fingerprint stealth ───────────────────────────────────────────────────────
 
 const stealthScript = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -439,6 +465,26 @@ const stealthScript = `
   };
 `;
 
+// ─── KYC patterns (network-route) ─────────────────────────────────────────────
+// Ampliado para cobrir subdomínios e variações de URL
+const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
+  { pattern: /socure/i,                         provider: 'Socure' },
+  { pattern: /veriff/i,                         provider: 'Veriff' },
+  { pattern: /magic\.veriff/i,                  provider: 'Veriff' },
+  { pattern: /devicer\.io/i,                    provider: 'Socure' },   // SDK Socure
+  { pattern: /sigma\.socure/i,                  provider: 'Socure' },
+  { pattern: /verify\.socure/i,                 provider: 'Socure' },
+  { pattern: /api\.veriff\.me/i,                provider: 'Veriff' },
+  { pattern: /cdn\.veriff/i,                    provider: 'Veriff' },
+];
+
+function detectKycProvider(url: string): string | null {
+  for (const { pattern, provider } of KYC_PATTERNS) {
+    if (pattern.test(url)) return provider;
+  }
+  return null;
+}
+
 // ─── Cria contexto isolado + injeta KYC detector ──────────────────────────────
 
 async function criarContextoIsolado(
@@ -456,13 +502,13 @@ async function criarContextoIsolado(
     },
   });
 
-  // Injeta stealth + KYC detector em toda página antes do JS da página carregar
+  // Stealth injeta antes do JS da página
   await context.addInitScript({ content: stealthScript });
-  await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
   const page = await context.newPage();
 
-  // Expõe função Node.js acessível pelo browser via window.__kycSignal()
+  // FIX: exposeFunction ANTES de addInitScript — garante que window.__kycSignal
+  // já existe quando o KYC_INIT_SCRIPT tentar chamá-lo
   await page.exposeFunction(
     '__kycSignal',
     (provider: string, source: string, url: string, weight: number) => {
@@ -470,34 +516,34 @@ async function criarContextoIsolado(
     }
   );
 
-  // Também intercepta via network route (captura mesmo se JS falhar)
+  // KYC script injeta depois do exposeFunction estar registrado
+  await context.addInitScript({ content: KYC_INIT_SCRIPT });
+
+  // Network-route: captura mesmo se o JS in-page falhar
   await page.route('**/*', (route) => {
-    const url = route.request().url().toLowerCase();
-    if (url.includes('socure')) {
-      globalState.addKycSignal('Socure', 'network-route', 3, cycle, route.request().url());
-    } else if (url.includes('veriff')) {
-      globalState.addKycSignal('Veriff', 'network-route', 3, cycle, route.request().url());
+    const url = route.request().url();
+    const provider = detectKycProvider(url);
+    if (provider) {
+      globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
     }
     route.continue();
   });
 
-  // Detecta iframes com URL KYC
+  // iframes com URL KYC
   page.on('framenavigated', (frame) => {
-    const url = frame.url().toLowerCase();
-    if (url.includes('socure')) {
-      globalState.addKycSignal('Socure', 'iframe', 5, cycle, frame.url());
-    } else if (url.includes('veriff')) {
-      globalState.addKycSignal('Veriff', 'iframe', 5, cycle, frame.url());
+    const url = frame.url();
+    const provider = detectKycProvider(url);
+    if (provider) {
+      globalState.addKycSignal(provider, 'iframe', 5, cycle, url);
     }
   });
 
-  // Detecta WebSocket nativo do Playwright
+  // WebSocket nativo do Playwright
   page.on('websocket', (ws) => {
-    const url = ws.url().toLowerCase();
-    if (url.includes('socure')) {
-      globalState.addKycSignal('Socure', 'websocket', 5, cycle, ws.url());
-    } else if (url.includes('veriff')) {
-      globalState.addKycSignal('Veriff', 'websocket', 5, cycle, ws.url());
+    const url = ws.url();
+    const provider = detectKycProvider(url);
+    if (provider) {
+      globalState.addKycSignal(provider, 'websocket', 5, cycle, url);
     }
   });
 
@@ -553,7 +599,7 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await humanPause(randInt(800, 1600)); // era 1200-2800
+      await humanPause(randInt(800, 1600));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
@@ -562,7 +608,7 @@ export class MockPlaywrightFlow {
 
       // Etapa 1 — email
       await humanType(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400)); // era +600
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
@@ -570,34 +616,34 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
-      await humanPause(randInt(600, 1200)); // era 800-1800
+      await humanPause(randInt(600, 1200));
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
         await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-        await humanPause(randInt(50, 120)); // era 80-200
+        await humanPause(randInt(50, 120));
       }
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300)); // era +500
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
       // Etapa 3 — telefone
-      await humanPause(randInt(400, 900)); // era 600-1400
+      await humanPause(randInt(400, 900));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
       // Etapa 4 — senha
-      await humanPause(randInt(400, 900)); // era 500-1200
+      await humanPause(randInt(400, 900));
       await humanType(p, '#PASSWORD', payload.senha);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
       // Etapa 5 — nome e sobrenome
-      await humanPause(randInt(400, 900)); // era 600-1500
+      await humanPause(randInt(400, 900));
       await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(200, 400)); // era 300-700
+      await humanPause(randInt(200, 400));
       await humanType(p, '#LAST_NAME', payload.sobrenome);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
@@ -610,21 +656,24 @@ export class MockPlaywrightFlow {
 
       // FASE 2: bonjour.uber.com
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
-      await humanPause(randInt(700, 1400)); // era 1000-2200
+      await humanPause(randInt(700, 1400));
       globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
 
       await dispensarCookies(p);
 
+      // Cidade
       await humanType(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao);
-      await humanPause(randInt(600, 1000)); // era 900-1500
+      await humanPause(randInt(600, 1000));
       await p.keyboard.press('ArrowDown');
       await humanPause(randInt(150, 300));
       await p.keyboard.press('Enter');
-      await humanPause(randInt(300, 600));
+      // FIX: aguarda dropdown fechar antes de tentar o próximo campo
+      await humanPause(randInt(500, 900));
 
       await dispensarCookies(p);
 
-      await humanType(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
+      // FIX: humanTypeForce — usa force:true para ignorar o overlay do autocomplete da cidade
+      await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
 
       await dispensarCookies(p);
@@ -632,7 +681,7 @@ export class MockPlaywrightFlow {
       await humanClick(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // Tela do WhatsApp
+      // Tela do WhatsApp / KYC
       await dispensarWhatsApp(p, cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
