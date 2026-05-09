@@ -24,6 +24,14 @@ async function clickBtn(p: Page, selector: string): Promise<void> {
   await p.click(selector);
 }
 
+// Script injetado no browser — precisa ser string para evitar erros de tipo do TS no contexto Node
+const stealthScript = `
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+  Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US'] });
+  window.chrome = { runtime: {} };
+`;
+
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
     if (browser) {
@@ -58,12 +66,8 @@ export class MockPlaywrightFlow {
       },
     });
 
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US'] });
-      (window as any).chrome = { runtime: {} };
-    });
+    // Passa como string — evita que o TS tente compilar navigator/window como globais do Node
+    await context.addInitScript({ content: stealthScript });
 
     page = await context.newPage();
   }
