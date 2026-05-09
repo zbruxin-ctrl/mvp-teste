@@ -34,7 +34,6 @@ export class MockPlaywrightFlow {
     }
     globalState.addLog('info', `🌐 Playwright iniciando (${headless ? 'headless' : 'headed'}) com stealth`);
 
-    // Usa playwright-extra com stealth em vez do chromium padrão
     browser = await chromiumExtra.launch({
       headless,
       slowMo: 80,
@@ -53,14 +52,13 @@ export class MockPlaywrightFlow {
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       locale: 'pt-BR',
       timezoneId: 'America/Sao_Paulo',
-      geolocation: { latitude: -22.4306, longitude: -45.4528 }, // Itajubá, MG
+      geolocation: { latitude: -22.4306, longitude: -45.4528 },
       permissions: ['geolocation'],
       extraHTTPHeaders: {
         'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
       },
     });
 
-    // Remove sinais extras de webdriver via script injetado em toda página
     await context.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -92,7 +90,6 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '🌐 Página aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
-      const emailToken = (emailAccount as unknown as { token: string }).token;
       const payload = gerarPayloadCompleto(emailAccount);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
@@ -104,7 +101,7 @@ export class MockPlaywrightFlow {
 
       // Etapa 2 — OTP (4 inputs separados)
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
-      const otp = await client.waitForOTP(emailToken, config.otpTimeout);
+      const otp = await client.waitForOTP(emailAccount.md5, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
