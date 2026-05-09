@@ -15,29 +15,30 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 const BRAVE_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.202 Safari/537.36';
 
-// ─── Helpers humanos ──────────────────────────────────────────────────────────
+// ─── Helpers humanos (pausas reduzidas para ~80s por ciclo) ──────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 async function humanPause(baseMs: number): Promise<void> {
-  const jitter = randInt(-Math.floor(baseMs * 0.25), Math.floor(baseMs * 0.35));
-  await new Promise<void>((r) => setTimeout(r, Math.max(100, baseMs + jitter)));
+  // Jitter de ±20% (era ±25-35%) para manter naturalidade mas ser mais rápido
+  const jitter = randInt(-Math.floor(baseMs * 0.15), Math.floor(baseMs * 0.2));
+  await new Promise<void>((r) => setTimeout(r, Math.max(80, baseMs + jitter)));
 }
 
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
-  const steps = randInt(8, 18);
+  const steps = randInt(5, 10); // era 8-18
   const startX = randInt(200, 800);
   const startY = randInt(200, 500);
-  const cpX = startX + (x - startX) * 0.4 + randInt(-60, 60);
-  const cpY = startY + (y - startY) * 0.4 + randInt(-40, 40);
+  const cpX = startX + (x - startX) * 0.4 + randInt(-40, 40);
+  const cpY = startY + (y - startY) * 0.4 + randInt(-30, 30);
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const bx = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * cpX + t * t * x);
     const by = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * cpY + t * t * y);
     await p.mouse.move(bx, by);
-    await humanPause(randInt(8, 22));
+    await humanPause(randInt(5, 12)); // era 8-22
   }
 }
 
@@ -48,25 +49,25 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
     const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(80, 180));
+    await humanPause(randInt(50, 100)); // era 80-180
   }
   await p.click(selector);
   await p.fill(selector, '');
-  await humanPause(randInt(120, 300));
+  await humanPause(randInt(60, 150)); // era 120-300
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
-    if (Math.random() < 0.05 && /[a-zA-Z]/.test(ch)) {
+    if (Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) { // era 0.05
       const typo = String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
-      await p.keyboard.type(typo, { delay: randInt(60, 130) });
-      await humanPause(randInt(80, 200));
+      await p.keyboard.type(typo, { delay: randInt(40, 80) });
+      await humanPause(randInt(50, 120));
       await p.keyboard.press('Backspace');
-      await humanPause(randInt(60, 150));
+      await humanPause(randInt(40, 90));
     }
-    await p.keyboard.type(ch, { delay: randInt(55, 145) });
+    await p.keyboard.type(ch, { delay: randInt(35, 90) }); // era 55-145
     if (ch === ' ' || ch === '@' || ch === '.') {
-      await humanPause(randInt(150, 400));
-    } else if (Math.random() < 0.08) {
-      await humanPause(randInt(200, 600));
+      await humanPause(randInt(80, 200)); // era 150-400
+    } else if (Math.random() < 0.05) { // era 0.08
+      await humanPause(randInt(100, 300)); // era 200-600
     }
   }
 }
@@ -78,7 +79,7 @@ async function humanClick(p: Page, selector: string): Promise<void> {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(60, 180));
+    await humanPause(randInt(40, 100)); // era 60-180
     await p.mouse.click(tx, ty);
   } else {
     await p.click(selector);
@@ -104,16 +105,16 @@ async function dispensarCookies(p: Page): Promise<void> {
   for (const seletor of candidatos) {
     try {
       const el = p.locator(seletor).first();
-      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
       if (visivel) {
         const box = await el.boundingBox().catch(() => null);
         if (box) {
           await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-          await humanPause(randInt(150, 350));
+          await humanPause(randInt(100, 200));
         }
         await el.click({ timeout: 3000 });
         globalState.addLog('info', `🍪 Banner de cookies dispensado (${seletor})`);
-        await humanPause(randInt(400, 800));
+        await humanPause(randInt(300, 600));
         return;
       }
     } catch {
@@ -123,7 +124,7 @@ async function dispensarCookies(p: Page): Promise<void> {
 }
 
 async function aceitarTermos(p: Page): Promise<void> {
-  await humanPause(randInt(800, 1600));
+  await humanPause(randInt(500, 900)); // era 800-1600
 
   const candidatos = [
     async () => {
@@ -132,7 +133,7 @@ async function aceitarTermos(p: Page): Promise<void> {
       const box = await el.boundingBox().catch(() => null);
       if (box) {
         await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-        await humanPause(randInt(100, 250));
+        await humanPause(randInt(80, 160));
       }
       await el.check({ force: true, timeout: 5000 });
     },
@@ -141,7 +142,7 @@ async function aceitarTermos(p: Page): Promise<void> {
       await el.waitFor({ state: 'attached', timeout: 5000 });
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(80, 200));
+      await humanPause(randInt(60, 140));
       await el.click({ force: true, timeout: 5000 });
     },
     async () => {
@@ -149,7 +150,7 @@ async function aceitarTermos(p: Page): Promise<void> {
       await el.waitFor({ state: 'attached', timeout: 5000 });
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(80, 200));
+      await humanPause(randInt(60, 140));
       await el.click({ force: true, timeout: 5000 });
     },
     async () => {
@@ -172,7 +173,7 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
-// Scripts JS passados como STRING para p.evaluate — o TS não analisa o interior
+// Scripts JS como string (TS não analisa o interior — sem erros de tipos DOM)
 const JS_NAO_ATIVAR = `
   (function() {
     var normalize = function(s) {
@@ -203,21 +204,63 @@ const JS_FALLBACK_SUBMIT = `
   })()
 `;
 
-/**
- * Detecta e clica em NÃO ATIVAR na tela do WhatsApp da Uber.
- *
- * Estratégia:
- *   1. Pausa generosa logo após o submit-button (tela pode demorar a renderizar).
- *   2. Poll de até 30 s aguardando qualquer sinal da tela WhatsApp.
- *   3. Camada 1 — seletor CSS com texto Unicode exato.
- *   4. Camada 2 — JS string com normalize NFD.
- *   5. Camada 3 — fallback no primeiro submit visível que não seja CONTINUAR/AJUDA.
- */
-async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
-  // Pausa inicial: dá tempo da transição de página completar
-  await humanPause(randInt(2500, 4000));
+// Script KYC injetado no contexto do browser — intercepta fetch/XHR/WS/iframe
+// Passa sinais via window.__kycSignal para o Playwright capturar com exposeFunction
+const KYC_INIT_SCRIPT = `
+  (function() {
+    if (window.__kycInjected) return;
+    window.__kycInjected = true;
 
-  // Seletores que indicam que a tela WhatsApp está presente
+    function analyze(url, source) {
+      if (!url) return;
+      var u = url.toString().toLowerCase();
+      if (u.includes('socure')) {
+        window.__kycSignal && window.__kycSignal('Socure', source, url, 5);
+      }
+      if (u.includes('veriff') || u.includes('magic.veriff.me')) {
+        window.__kycSignal && window.__kycSignal('Veriff', source, url, 5);
+      }
+    }
+
+    // Fetch
+    var _fetch = window.fetch;
+    window.fetch = function() {
+      analyze(arguments[0] && arguments[0].toString(), 'fetch');
+      return _fetch.apply(this, arguments);
+    };
+
+    // XHR
+    var _open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      analyze(url, 'xhr');
+      return _open.apply(this, arguments);
+    };
+
+    // WebSocket
+    var _ws = window.WebSocket;
+    window.WebSocket = function(url, protocols) {
+      analyze(url, 'websocket');
+      return protocols ? new _ws(url, protocols) : new _ws(url);
+    };
+
+    // postMessage sniff
+    var _post = window.postMessage;
+    window.postMessage = function(msg, target) {
+      try {
+        var str = JSON.stringify(msg);
+        if (str.toLowerCase().includes('socure'))
+          window.__kycSignal && window.__kycSignal('Socure', 'postMessage', '', 4);
+        if (str.toLowerCase().includes('veriff'))
+          window.__kycSignal && window.__kycSignal('Veriff', 'postMessage', '', 4);
+      } catch(e) {}
+      return _post.apply(this, arguments);
+    };
+  })();
+`;
+
+async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
+  await humanPause(randInt(2000, 3500));
+
   const SELETORES_WHATSAPP = [
     'button:has-text("N\u00c3O ATIVAR")',
     'button:has-text("Nao ativar")',
@@ -227,7 +270,6 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     'button[type="submit"]',
   ];
 
-  // Poll: verifica a cada 3 s por até 30 s
   const TIMEOUT_MS = 30_000;
   const POLL_MS   = 3_000;
   const inicio    = Date.now();
@@ -239,10 +281,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     for (const sel of SELETORES_WHATSAPP) {
       try {
         const visivel = await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false);
-        if (visivel) {
-          detectado = true;
-          break;
-        }
+        if (visivel) { detectado = true; break; }
       } catch { /* ignora */ }
     }
     if (detectado) break;
@@ -255,9 +294,8 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   }
 
   globalState.addLog('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
-  await humanPause(randInt(600, 1200));
+  await humanPause(randInt(400, 800));
 
-  // Camada 1: seletor CSS com texto Unicode exato
   const candidatosCss = [
     'button:has-text("N\u00c3O ATIVAR")',
     'button:has-text("Nao ativar")',
@@ -272,32 +310,30 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
         const box = await el.boundingBox().catch(() => null);
         if (box) {
           await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-          await humanPause(randInt(200, 400));
+          await humanPause(randInt(150, 300));
         }
         await el.click({ timeout: 5000 });
         globalState.addLog('info', `🔕 WhatsApp: NÃO ATIVAR clicado (CSS: ${sel})`, cycle);
-        await humanPause(randInt(500, 1000));
+        await humanPause(randInt(400, 800));
         return;
       }
     } catch { /* tenta próxima */ }
   }
 
-  // Camada 2: JS string com normalize NFD
   try {
     const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
     if (clicou) {
       globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle);
-      await humanPause(randInt(500, 1000));
+      await humanPause(randInt(400, 800));
       return;
     }
   } catch { /* ignora */ }
 
-  // Camada 3: fallback — primeiro submit visível que não seja CONTINUAR/AJUDA
   try {
     const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
     if (clicou) {
       globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback submit)`, cycle);
-      await humanPause(randInt(500, 1000));
+      await humanPause(randInt(400, 800));
       return;
     }
   } catch { /* ignora */ }
@@ -403,9 +439,11 @@ const stealthScript = `
   };
 `;
 
-// ─── Cria contexto isolado para o ciclo ──────────────────────────────────────
+// ─── Cria contexto isolado + injeta KYC detector ──────────────────────────────
 
-async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserContext; page: Page }> {
+async function criarContextoIsolado(
+  cycle: number
+): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser!.newContext({
     viewport: { width: 1366, height: 768 },
     userAgent: BRAVE_UA,
@@ -418,10 +456,52 @@ async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserCo
     },
   });
 
+  // Injeta stealth + KYC detector em toda página antes do JS da página carregar
   await context.addInitScript({ content: stealthScript });
-  const page = await context.newPage();
-  contextosPorCiclo.set(cycle, context);
+  await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
+  const page = await context.newPage();
+
+  // Expõe função Node.js acessível pelo browser via window.__kycSignal()
+  await page.exposeFunction(
+    '__kycSignal',
+    (provider: string, source: string, url: string, weight: number) => {
+      globalState.addKycSignal(provider, source, weight, cycle, url);
+    }
+  );
+
+  // Também intercepta via network route (captura mesmo se JS falhar)
+  await page.route('**/*', (route) => {
+    const url = route.request().url().toLowerCase();
+    if (url.includes('socure')) {
+      globalState.addKycSignal('Socure', 'network-route', 3, cycle, route.request().url());
+    } else if (url.includes('veriff')) {
+      globalState.addKycSignal('Veriff', 'network-route', 3, cycle, route.request().url());
+    }
+    route.continue();
+  });
+
+  // Detecta iframes com URL KYC
+  page.on('framenavigated', (frame) => {
+    const url = frame.url().toLowerCase();
+    if (url.includes('socure')) {
+      globalState.addKycSignal('Socure', 'iframe', 5, cycle, frame.url());
+    } else if (url.includes('veriff')) {
+      globalState.addKycSignal('Veriff', 'iframe', 5, cycle, frame.url());
+    }
+  });
+
+  // Detecta WebSocket nativo do Playwright
+  page.on('websocket', (ws) => {
+    const url = ws.url().toLowerCase();
+    if (url.includes('socure')) {
+      globalState.addKycSignal('Socure', 'websocket', 5, cycle, ws.url());
+    } else if (url.includes('veriff')) {
+      globalState.addKycSignal('Veriff', 'websocket', 5, cycle, ws.url());
+    }
+  });
+
+  contextosPorCiclo.set(cycle, context);
   return { context, page };
 }
 
@@ -473,7 +553,7 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await humanPause(randInt(1200, 2800));
+      await humanPause(randInt(800, 1600)); // era 1200-2800
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
@@ -482,7 +562,7 @@ export class MockPlaywrightFlow {
 
       // Etapa 1 — email
       await humanType(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400)); // era +600
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
@@ -490,72 +570,72 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
-      await humanPause(randInt(800, 1800));
+      await humanPause(randInt(600, 1200)); // era 800-1800
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
         await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-        await humanPause(randInt(80, 200));
+        await humanPause(randInt(50, 120)); // era 80-200
       }
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300)); // era +500
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
       // Etapa 3 — telefone
-      await humanPause(randInt(600, 1400));
+      await humanPause(randInt(400, 900)); // era 600-1400
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
       // Etapa 4 — senha
-      await humanPause(randInt(500, 1200));
+      await humanPause(randInt(400, 900)); // era 500-1200
       await humanType(p, '#PASSWORD', payload.senha);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
       // Etapa 5 — nome e sobrenome
-      await humanPause(randInt(600, 1500));
+      await humanPause(randInt(400, 900)); // era 600-1500
       await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(300, 700));
+      await humanPause(randInt(200, 400)); // era 300-700
       await humanType(p, '#LAST_NAME', payload.sobrenome);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
-      // Etapa 6 — termos (checkbox customizado)
+      // Etapa 6 — termos
       await aceitarTermos(p);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
 
       // FASE 2: bonjour.uber.com
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
-      await humanPause(randInt(1000, 2200));
+      await humanPause(randInt(700, 1400)); // era 1000-2200
       globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
 
       await dispensarCookies(p);
 
       await humanType(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao);
-      await humanPause(randInt(900, 1500));
+      await humanPause(randInt(600, 1000)); // era 900-1500
       await p.keyboard.press('ArrowDown');
-      await humanPause(randInt(200, 400));
+      await humanPause(randInt(150, 300));
       await p.keyboard.press('Enter');
-      await humanPause(randInt(500, 900));
+      await humanPause(randInt(300, 600));
 
       await dispensarCookies(p);
 
       await humanType(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 600));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
 
       await dispensarCookies(p);
 
       await humanClick(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // Tela do WhatsApp — aguarda até 30s e clica em NÃO ATIVAR
+      // Tela do WhatsApp
       await dispensarWhatsApp(p, cycle);
 
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 800));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
       globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
 
     } catch (error) {

@@ -6,7 +6,7 @@
   <title>MVP Automação</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; max-width: 1200px; margin: 0 auto; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; max-width: 1400px; margin: 0 auto; }
     .grid { display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
     .panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
     .full { grid-column: 1 / -1; }
@@ -22,6 +22,8 @@
     .btn-secondary:hover:not(:disabled) { background: #4b5563; }
     .btn-danger { background: #ef4444; color: #fff; }
     .btn-danger:hover:not(:disabled) { background: #dc2626; }
+    .btn-warning { background: #f59e0b; color: #fff; }
+    .btn-warning:hover:not(:disabled) { background: #d97706; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .status { padding: 12px; border-radius: 8px; text-align: center; font-weight: 700; margin-bottom: 14px; font-size: 15px; }
     .status.idle { background: #d1fae5; color: #065f46; }
@@ -32,13 +34,32 @@
     .stat { flex: 1; text-align: center; background: #f9fafb; padding: 12px; border-radius: 10px; }
     .stat-value { font-size: 26px; font-weight: 700; color: #4f46e5; }
     .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
-    .logs { max-height: 380px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.5; }
+    .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.5; }
     .log-entry { margin-bottom: 3px; }
     .log-info { color: #0369a1; }
     .log-warn { color: #d97706; }
     .log-error { color: #dc2626; }
     .log-success { color: #15803d; }
-    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+
+    /* ── KYC Panel ── */
+    .kyc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+    .kyc-card { border-radius: 10px; padding: 16px; border: 2px solid #e5e7eb; transition: border-color .3s; }
+    .kyc-card.weak     { border-color: #e5e7eb; background: #f9fafb; }
+    .kyc-card.likely   { border-color: #f59e0b; background: #fffbeb; }
+    .kyc-card.confirmed{ border-color: #10b981; background: #ecfdf5; }
+    .kyc-card.inactive { border-color: #e5e7eb; background: #f9fafb; opacity: .55; }
+    .kyc-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+    .kyc-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
+    .badge-weak      { background: #e5e7eb; color: #6b7280; }
+    .badge-likely    { background: #fef3c7; color: #92400e; }
+    .badge-confirmed { background: #d1fae5; color: #065f46; }
+    .kyc-score { font-size: 28px; font-weight: 800; color: #4f46e5; margin: 6px 0; }
+    .kyc-score small { font-size: 13px; font-weight: 400; color: #6b7280; }
+    .kyc-signals { font-size: 11.5px; font-family: monospace; color: #555; max-height: 100px; overflow-y: auto; }
+    .kyc-signal-row { border-top: 1px solid #e5e7eb; padding-top: 4px; margin-top: 4px; }
+    .kyc-none { color: #9ca3af; font-size: 13px; text-align: center; padding: 20px 0; }
+
+    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .kyc-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -72,6 +93,7 @@
       <button class="btn-primary" id="startOnceBtn" onclick="startOnce()">🔄 Executar 1 Ciclo</button>
       <button class="btn-danger" id="stopBtn" onclick="stopBot()" disabled>⏹️ Parar</button>
       <button class="btn-secondary" onclick="clearLogs()">🗑️ Limpar Logs</button>
+      <button class="btn-warning" onclick="clearKyc()">🔍 Limpar KYC</button>
     </div>
 
     <!-- Status -->
@@ -86,6 +108,14 @@
       <div class="logs" id="logs"></div>
     </div>
 
+    <!-- KYC Detector -->
+    <div class="panel full">
+      <h2>🔍 KYC Detector — Socure / Veriff</h2>
+      <div id="kyc-panel">
+        <div class="kyc-none">Nenhum sinal KYC detectado ainda. Inicie um ciclo para monitorar.</div>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -97,6 +127,10 @@
       STOPPING:    { emoji: '🛑', text: 'Parando',    color: 'warn' },
       ERROR:       { emoji: '❌', text: 'Erro',       color: 'error' },
     };
+
+    const KYC_ICONS = { Socure: '🛡️', Veriff: '🪪' };
+    const KYC_COLORS = { WEAK: 'weak', LIKELY: 'likely', CONFIRMED: 'confirmed' };
+    const BADGE_COLORS = { WEAK: 'badge-weak', LIKELY: 'badge-likely', CONFIRMED: 'badge-confirmed' };
 
     async function api(path, method, body) {
       const opts = { method: method || 'GET' };
@@ -127,32 +161,71 @@
       document.getElementById('headless').value       = String(!!cfg.headless);
     }
 
-    async function saveConfig() { await api('/config', 'POST', getConfig()); addLog('success', '💾 Config salva'); }
-    async function startLoop()  { await api('/start',  'POST', { config: getConfig() }); }
-    async function startOnce()  { await api('/start-once', 'POST', { config: getConfig() }); }
-    async function stopBot()    { await api('/stop',   'POST'); }
-    async function clearLogs()  { await api('/logs/clear', 'POST'); }
+    async function saveConfig()  { await api('/config', 'POST', getConfig()); }
+    async function startLoop()   { await api('/start',  'POST', { config: getConfig() }); }
+    async function startOnce()   { await api('/start-once', 'POST', { config: getConfig() }); }
+    async function stopBot()     { await api('/stop',   'POST'); }
+    async function clearLogs()   { await api('/logs/clear', 'POST'); }
+    async function clearKyc()    { await api('/kyc/clear', 'POST'); renderKyc({}); }
 
-    function addLog(level, message) {
-      const el = document.getElementById('logs');
-      const div = document.createElement('div');
-      div.className = 'log-entry log-' + level;
-      div.textContent = '[' + new Date().toLocaleTimeString() + '] ' + message;
-      el.insertBefore(div, el.firstChild);
+    // ── KYC render ────────────────────────────────────────────────────────────
+    function renderKyc(kycState) {
+      const panel = document.getElementById('kyc-panel');
+      const providers = ['Socure', 'Veriff'];
+      const hasAny = providers.some(p => kycState[p]);
+
+      if (!hasAny) {
+        panel.innerHTML = '<div class="kyc-none">Nenhum sinal KYC detectado ainda. Inicie um ciclo para monitorar.</div>';
+        return;
+      }
+
+      let html = '<div class="kyc-grid">';
+      for (const name of providers) {
+        const data = kycState[name];
+        if (!data) {
+          html += `<div class="kyc-card inactive">
+            <div class="kyc-name">${KYC_ICONS[name] || '🔍'} ${name} <span class="kyc-badge badge-weak">NÃO DETECTADO</span></div>
+            <div style="color:#9ca3af;font-size:13px;margin-top:8px">Nenhum sinal capturado</div>
+          </div>`;
+          continue;
+        }
+        const level = data.level || 'WEAK';
+        const cardCls = KYC_COLORS[level] || 'weak';
+        const badgeCls = BADGE_COLORS[level] || 'badge-weak';
+        const signals = (data.signals || []).slice(0, 5);
+        html += `<div class="kyc-card ${cardCls}">
+          <div class="kyc-name">${KYC_ICONS[name] || '🔍'} ${name}
+            <span class="kyc-badge ${badgeCls}">${level}</span>
+          </div>
+          <div class="kyc-score">${data.score} <small>pts</small></div>
+          <div class="kyc-signals">
+            ${signals.map(s =>
+              `<div class="kyc-signal-row">⚡ ${s.time} — ${s.source} (+${s.weight}) ${s.url ? '<br><span style="color:#6b7280">' + s.url.substring(0,80) + '</span>' : ''}</div>`
+            ).join('')}
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+      panel.innerHTML = html;
     }
 
+    // ── Main update loop ──────────────────────────────────────────────────────
     async function updateUI() {
       try {
-        const [state, logs] = await Promise.all([api('/status'), api('/logs')]);
-        const info = STATUS_MAP[state.status] || STATUS_MAP.STOPPED;
+        const [state, logs, kycState] = await Promise.all([
+          api('/status'),
+          api('/logs'),
+          api('/kyc'),
+        ]);
 
+        const info = STATUS_MAP[state.status] || STATUS_MAP.STOPPED;
         const statusEl = document.getElementById('status');
         statusEl.className = 'status ' + info.color;
         statusEl.textContent = info.emoji + ' ' + info.text;
 
-        document.getElementById('statusText').textContent        = state.status || '-';
-        document.getElementById('cyclesCompleted').textContent   = String(state.cyclesCompleted || 0);
-        document.getElementById('cyclesTotal').textContent       = String(state.cyclesTotal || 0);
+        document.getElementById('statusText').textContent      = state.status || '-';
+        document.getElementById('cyclesCompleted').textContent = String(state.cyclesCompleted || 0);
+        document.getElementById('cyclesTotal').textContent     = String(state.cyclesTotal || 0);
 
         applyConfig(state.config);
 
@@ -166,6 +239,8 @@
           var c = l.cycle ? '#' + l.cycle + ' ' : '';
           return '<div class="log-entry log-' + l.level + '">[' + new Date(l.timestamp).toLocaleTimeString() + '] ' + c + l.message + '</div>';
         }).join('');
+
+        renderKyc(kycState);
       } catch (e) {
         console.error('updateUI:', e);
       }
