@@ -396,13 +396,10 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
-// ─── Clica no item "Foto do perfil" para acionar o KYC ──────────────────────────
-// O elemento é um <a> com data-testid="stepItem profilePhoto" que se comporta
-// como botão. Usa force:true pois pode ter overlay em cima.
+// ─── Clica em "Foto do perfil" e aguarda sinal KYC ativo (até 15s) ──────────────
 async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
-  globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
+  globalState.addLog('info', '📸 Aguardando item "Foto do perfil"...', cycle);
 
-  // Seletores em ordem de preferência
   const SELETORES = [
     '[data-testid="stepItem profilePhoto"]',
     '[data-dgui="requirement-list-item"]:has-text("Foto do perfil")',
@@ -410,10 +407,13 @@ async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
     '[data-tracking-name="requirement-list-item"]:has-text("Foto")',
   ];
 
-  const TIMEOUT_MS = 20_000;
+  const TIMEOUT_ACHAR = 20_000;
+  const TIMEOUT_KYC  = 15_000;
   const inicio = Date.now();
 
-  while (Date.now() - inicio < TIMEOUT_MS) {
+  // 1. Acha e clica
+  let clicou = false;
+  while (Date.now() - inicio < TIMEOUT_ACHAR) {
     for (const sel of SELETORES) {
       try {
         const el = p.locator(sel).first();
@@ -424,18 +424,38 @@ async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
             await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
             await humanPause(randInt(200, 400));
           }
-          // force:true ignora overlay/pointer-events:none
           await el.click({ force: true, timeout: 5000 });
           globalState.addLog('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
-          await humanPause(randInt(1500, 2500));
-          return;
+          clicou = true;
+          break;
         }
       } catch { /* tenta próximo seletor */ }
     }
+    if (clicou) break;
     await humanPause(1500);
   }
 
-  globalState.addLog('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle);
+  if (!clicou) {
+    globalState.addLog('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle);
+    return;
+  }
+
+  // 2. Aguarda sinal KYC por até 15s
+  // O context.route() já captura rede de popups/iframes.
+  // Aqui apenas esperamos o sinal chegar no globalState.
+  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 15s)...', cycle);
+
+  const fimKyc = Date.now() + TIMEOUT_KYC;
+  while (Date.now() < fimKyc) {
+    const sinais = globalState.getKycSignals(cycle);
+    if (sinais && sinais.length > 0) {
+      globalState.addLog('info', `✅ KYC detectado: ${sinais[0].provider} (fonte: ${sinais[0].source})`, cycle);
+      return;
+    }
+    await humanPause(1000);
+  }
+
+  globalState.addLog('warn', '⚠️ KYC não detectado após 15s. Verifique os padrões de URL no KYC_PATTERNS.', cycle);
 }
 
 // ─── Fingerprint stealth ───────────────────────────────────────────────────────
@@ -559,6 +579,26 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
+// ─── Registra listeners numa Page (reutilizado para popup/nova aba) ─────────────
+function registrarListenersPage(page: Page, cycle: number): void {
+  page.on('framenavigated', (frame) => {
+    const url = frame.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
+  });
+
+  page.on('websocket', (ws) => {
+    const url = ws.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
+  });
+
+  // exposeFunction pode falhar se a page já a tem registrada
+  page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
+    globalState.addKycSignal(provider, source, weight, cycle, url);
+  }).catch(() => {});
+}
+
 // ─── Cria contexto isolado + injeta KYC detector ──────────────────────────────
 
 async function criarContextoIsolado(
@@ -579,38 +619,23 @@ async function criarContextoIsolado(
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
+  // context.route cobre TODAS as requisições do contexto:
+  // page principal, iframes cross-origin, popups e novas abas.
   await context.route('**/*', (route) => {
     const url = route.request().url();
     const provider = detectKycProvider(url);
-    if (provider) {
-      globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
-    }
+    if (provider) globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
     route.continue();
   });
 
   const page = await context.newPage();
+  registrarListenersPage(page, cycle);
 
-  await page.exposeFunction(
-    '__kycSignal',
-    (provider: string, source: string, url: string, weight: number) => {
-      globalState.addKycSignal(provider, source, weight, cycle, url);
-    }
-  );
-
-  page.on('framenavigated', (frame) => {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) {
-      globalState.addKycSignal(provider, 'iframe', 5, cycle, url);
-    }
-  });
-
-  page.on('websocket', (ws) => {
-    const url = ws.url();
-    const provider = detectKycProvider(url);
-    if (provider) {
-      globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
-    }
+  // Quando o Socure/Veriff abrir popup ou nova aba no mesmo contexto,
+  // registra os mesmos listeners nessa nova página automaticamente.
+  context.on('page', (novaPage) => {
+    globalState.addLog('info', `📌 Nova aba/popup aberta: ${novaPage.url() || '(carregando...)'}`, cycle);
+    registrarListenersPage(novaPage, cycle);
   });
 
   contextosPorCiclo.set(cycle, context);
@@ -748,7 +773,7 @@ export class MockPlaywrightFlow {
       // Tela do WhatsApp
       await dispensarWhatsApp(p, cycle);
 
-      // Clica em "Foto do perfil" para acionar o KYC
+      // Clica em "Foto do perfil" e aguarda KYC
       await clicarFotoPerfil(p, cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
