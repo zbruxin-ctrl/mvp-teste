@@ -8,8 +8,6 @@ import { ArtifactsManager } from '../utils/artifacts';
 
 chromiumExtra.use(StealthPlugin());
 
-// Browser fica vivo entre ciclos
-// Contextos ficam abertos — cada ciclo tem sua aba permanente
 let browser: Browser | null = null;
 const contextosPorCiclo = new Map<number, BrowserContext>();
 
@@ -175,67 +173,58 @@ async function aceitarTermos(p: Page): Promise<void> {
 }
 
 /**
- * Tela do WhatsApp da Uber — aguarda o botão aparecer e clica em NÃO ATIVAR.
- * Usa seletores em cascata para contornar problemas de encoding do Ã e texto
- * renderizado dinamicamente.
+ * Tela do WhatsApp da Uber — clica em NÃO ATIVAR.
+ * Usa seletores em cascata + p.evaluate com any cast para evitar erros de tipos DOM.
  */
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
-  // Seletores em ordem de prioridade para o botão "NÃO ATIVAR"
-  // O texto pode ter varições de encoding dependendo do locale da página
-  const candidatosNaoAtivar = [
-    // Exato com Unicode
-    'button:has-text("N\u00c3O ATIVAR")',
-    // Via evaluate — mais confiável contra problemas de encoding
-    // (tratado separado abaixo via JS)
-  ];
-
-  // Aguarda a tela do WhatsApp aparecer (até 10s)
-  // Detecta pela presença de qualquer botão com texto que contenha "ATIVAR" ou "ATIVAR"
-  const telaWhatsApp = await p.waitForSelector(
+  // Aguarda a tela carregar (detecta pelo primeiro button[type="submit"] visível)
+  const telaCarregou = await p.waitForSelector(
     'button[type="submit"]',
     { state: 'visible', timeout: 10000 }
   ).catch(() => null);
 
-  if (!telaWhatsApp) {
+  if (!telaCarregou) {
     globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada, pulando...', cycle);
     return;
   }
 
   await humanPause(randInt(600, 1200));
 
-  // Tenta seletores CSS primeiro
-  for (const seletor of candidatosNaoAtivar) {
-    try {
-      const el = p.locator(seletor).first();
-      const visivel = await el.isVisible({ timeout: 3000 }).catch(() => false);
-      if (visivel) {
-        const box = await el.boundingBox().catch(() => null);
-        if (box) {
-          await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-          await humanPause(randInt(200, 400));
-        }
-        await el.click({ timeout: 5000 });
-        globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado', cycle);
-        await humanPause(randInt(500, 1000));
-        return;
+  // Camada 1: seletor CSS com texto Unicode exato
+  try {
+    const el = p.locator('button:has-text("N\u00c3O ATIVAR")').first();
+    const visivel = await el.isVisible({ timeout: 3000 }).catch(() => false);
+    if (visivel) {
+      const box = await el.boundingBox().catch(() => null);
+      if (box) {
+        await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+        await humanPause(randInt(200, 400));
       }
-    } catch {
-      // tenta o proximo
+      await el.click({ timeout: 5000 });
+      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado', cycle);
+      await humanPause(randInt(500, 1000));
+      return;
     }
+  } catch {
+    // tenta próxima camada
   }
 
-  // Fallback via JavaScript: busca botao cujo innerText normalizado contenha "NAO ATIVAR"
-  // (remove acentos para comparacao, mais robusto)
+  // Camada 2: p.evaluate com normalize NFD — remove acentos antes de comparar
+  // Usa "any" para evitar erros de tipos DOM no contexto Node/TypeScript
   try {
-    const clicou = await p.evaluate(() => {
-      const normalize = (s: string) =>
+    const clicou = await p.evaluate((): boolean => {
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const doc = document as any;
+      const normalize = (s: string): string =>
         s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
-      const botoes = Array.from(document.querySelectorAll('button'));
+      const botoes: any[] = Array.from(doc.querySelectorAll('button'));
       const alvo = botoes.find(
-        (b) => normalize(b.innerText).includes('NAO ATIVAR') || normalize(b.innerText).includes('N AO ATIVAR')
+        (b: any) =>
+          normalize(b.innerText).includes('NAO ATIVAR') ||
+          normalize(b.innerText).includes('N AO ATIVAR')
       );
       if (alvo) {
-        (alvo as HTMLElement).click();
+        alvo.click();
         return true;
       }
       return false;
@@ -250,20 +239,23 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     // ignora
   }
 
-  // Ultimo recurso: clica no primeiro botão submit visível que NÃO seja "CONTINUAR"
+  // Camada 3: fallback — primeiro button[type="submit"] visível que não seja CONTINUAR/AJUDA
   try {
-    const clicou = await p.evaluate(() => {
-      const normalize = (s: string) =>
+    const clicou = await p.evaluate((): string | null => {
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const doc = document as any;
+      const normalize = (s: string): string =>
         s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
-      const botoes = Array.from(document.querySelectorAll('button[type="submit"]'));
+      const botoes: any[] = Array.from(doc.querySelectorAll('button[type="submit"]'));
       const alvo = botoes.find(
-        (b) => !normalize((b as HTMLElement).innerText).includes('CONTINUAR') &&
-               !normalize((b as HTMLElement).innerText).includes('AJUDA') &&
-               (b as HTMLElement).offsetParent !== null
+        (b: any) =>
+          !normalize(b.innerText).includes('CONTINUAR') &&
+          !normalize(b.innerText).includes('AJUDA') &&
+          b.offsetParent !== null
       );
       if (alvo) {
-        (alvo as HTMLElement).click();
-        return (alvo as HTMLElement).innerText;
+        alvo.click();
+        return alvo.innerText as string;
       }
       return null;
     });
@@ -378,7 +370,7 @@ const stealthScript = `
   };
 `;
 
-// ─── Cria contexto isolado para o ciclo (aba nova, sessão limpa) ──────────────
+// ─── Cria contexto isolado para o ciclo ──────────────────────────────────────
 
 async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser!.newContext({
@@ -395,8 +387,6 @@ async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserCo
 
   await context.addInitScript({ content: stealthScript });
   const page = await context.newPage();
-
-  // Guarda referência para fechar só quando cleanup() for chamado
   contextosPorCiclo.set(cycle, context);
 
   return { context, page };
