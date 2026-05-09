@@ -8,8 +8,10 @@ import { ArtifactsManager } from '../utils/artifacts';
 
 chromiumExtra.use(StealthPlugin());
 
-// Browser fica vivo entre ciclos — só contexto/página são recriados por ciclo
+// Browser fica vivo entre ciclos
+// Contextos ficam abertos — cada ciclo tem sua aba permanente
 let browser: Browser | null = null;
+const contextosPorCiclo = new Map<number, BrowserContext>();
 
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
 const BRAVE_UA =
@@ -270,9 +272,9 @@ const stealthScript = `
   };
 `;
 
-// ─── Cria um contexto isolado para um ciclo ───────────────────────────────────
+// ─── Cria contexto isolado para o ciclo (aba nova, sessão limpa) ──────────────
 
-async function criarContextoIsolado(): Promise<{ context: BrowserContext; page: Page }> {
+async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser!.newContext({
     viewport: { width: 1366, height: 768 },
     userAgent: BRAVE_UA,
@@ -287,6 +289,10 @@ async function criarContextoIsolado(): Promise<{ context: BrowserContext; page: 
 
   await context.addInitScript({ content: stealthScript });
   const page = await context.newPage();
+
+  // Guarda referência para fechar só quando cleanup() for chamado
+  contextosPorCiclo.set(cycle, context);
+
   return { context, page };
 }
 
@@ -294,12 +300,12 @@ async function criarContextoIsolado(): Promise<{ context: BrowserContext; page: 
 
 export class MockPlaywrightFlow {
   /**
-   * Inicia o browser uma única vez. Não cria contexto/página aqui —
-   * cada execute() cuida do próprio contexto isolado.
+   * Sobe o browser uma única vez.
+   * Não abre nenhuma aba aqui — cada execute() abre a própria.
    */
   static async init(headless = false): Promise<void> {
     if (browser) {
-      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo usará contexto novo');
+      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
       return;
     }
 
@@ -321,12 +327,17 @@ export class MockPlaywrightFlow {
       ],
     }) as unknown as Browser;
 
-    globalState.addLog('info', '✅ Browser pronto — ciclos criarão abas isoladas');
+    globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba nova e a manterá aberta');
   }
 
   /**
-   * Cada chamada cria um BrowserContext limpo (sem cookies, sem sessão anterior),
-   * executa o fluxo completo e destrói o contexto ao final.
+   * Cada chamada:
+   *  1. Cria um BrowserContext novo (sessão/cookies zerados)
+   *  2. Abre uma aba nova nesse contexto
+   *  3. Executa o fluxo completo
+   *  4. DEIXA a aba aberta ao terminar
+   *
+   * Para fechar tudo, chame cleanup().
    */
   static async execute(
     cadastroUrl: string,
@@ -339,8 +350,8 @@ export class MockPlaywrightFlow {
   ): Promise<void> {
     if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
 
-    globalState.addLog('info', `🆕 Ciclo #${cycle}: criando contexto isolado (aba limpa)`, cycle);
-    const { context, page: p } = await criarContextoIsolado();
+    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada)`, cycle);
+    const { page: p } = await criarContextoIsolado(cycle);
 
     const client = new TempMailClient(config.tempMailApiKey);
 
@@ -439,24 +450,27 @@ export class MockPlaywrightFlow {
       }
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 800));
-      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO!`, cycle);
+      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
+
+      // Aba permanece aberta — contexto salvo em contextosPorCiclo
 
     } catch (error) {
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
       await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
       throw error;
-    } finally {
-      // Destroi o contexto (fecha a aba + limpa cookies/sessão) independente de sucesso ou erro
-      await context.close().catch(() => {});
-      globalState.addLog('info', `🗑️ Contexto do ciclo #${cycle} destruído`, cycle);
     }
   }
 
   /**
-   * Fecha o browser completamente.
-   * Chamar apenas quando quiser encerrar tudo (botão "Parar" definitivo).
+   * Fecha todas as abas abertas e o browser.
+   * Chamar apenas no botão "Parar" definitivo.
    */
   static async cleanup(): Promise<void> {
+    for (const [cycle, ctx] of contextosPorCiclo.entries()) {
+      await ctx.close().catch(() => {});
+      globalState.addLog('info', `🗑️ Aba do ciclo #${cycle} fechada`);
+    }
+    contextosPorCiclo.clear();
     await browser?.close().catch(() => {});
     browser = null;
     globalState.addLog('info', '🧹 Browser fechado');
