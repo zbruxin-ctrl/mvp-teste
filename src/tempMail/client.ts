@@ -7,10 +7,10 @@ import {
 } from '../types/tempMail';
 import { OTPParser } from '../utils/otpParser';
 
-// Endpoints reais da API tempmail.lol (plano Pro/Plus/Ultra):
-// GET  https://api.tempmail.lol/generate        -> cria inbox, retorna { address, token }
-// GET  https://api.tempmail.lol/auth/<token>     -> lista mensagens do inbox
-// Autenticacao: Authorization: Bearer <apiKey> no header (plano pago)
+// API temp-mail.io (v1)
+// POST https://api.tempmail.lol/v1/email          -> cria inbox, retorna emailaccount { email, md5 }
+// GET  https://api.tempmail.lol/v1/messages/<md5> -> lista mensagens
+// Auth: header X-API-Key
 
 export class TempMailClient {
   private config: TempMailConfig;
@@ -18,30 +18,28 @@ export class TempMailClient {
   constructor(apiKey: string) {
     this.config = {
       apiKey,
-      baseUrl: 'https://api.tempmail.lol',
+      baseUrl: 'https://api.tempmail.lol/v1',
     };
   }
 
-  private async request<T>(endpoint: string): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    method: 'GET' | 'POST' = 'GET'
+  ): Promise<T> {
     const url = `${this.config.baseUrl}${endpoint}`;
-
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-API-Key': this.config.apiKey,
     };
-
-    // Plano Pro/Plus/Ultra: autenticacao via Bearer token no header
-    if (this.config.apiKey) {
-      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
-    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      globalState.addLog('info', `📧 Temp-Mail: GET ${endpoint}`);
+      globalState.addLog('info', `📧 Temp-Mail: ${method} ${endpoint}`);
 
       const response = await fetch(url, {
-        method: 'GET',
+        method,
         headers,
         signal: controller.signal as AbortSignal,
       });
@@ -65,35 +63,32 @@ export class TempMailClient {
   }
 
   async createRandomEmail(): Promise<EmailAccount> {
-    // GET /generate -> { address: string, token: string }
-    const data = await this.request<{ address: string; token: string }>('/generate');
-    return {
-      email: data.address,
-      token: data.token,
-    } as unknown as EmailAccount;
+    // POST /email -> { success, emailaccount: { email, md5, quota, used, created_at } }
+    const data = await this.request<{ success: boolean; emailaccount: EmailAccount }>(
+      '/email',
+      'POST'
+    );
+    return data.emailaccount;
   }
 
-  async listMessages(emailToken: string): Promise<MailMessage[]> {
-    // GET /auth/<token> -> { token: string, email: string, messages: MailMessage[] | null }
-    const data = await this.request<{ token: string; email: string; messages: MailMessage[] | null }>(
-      `/auth/${emailToken}`
+  async listMessages(emailMd5: string): Promise<MailMessage[]> {
+    // GET /messages/<md5> -> { success, messages: MailMessage[] }
+    const data = await this.request<{ success: boolean; messages: MailMessage[] }>(
+      `/messages/${emailMd5}`
     );
     return data.messages ?? [];
   }
 
   async getAvailableDomains(): Promise<string[]> {
-    const data = await this.request<{ domains: string[] }>('/domains');
-    return data.domains ?? [];
+    const data = await this.request<{ success: boolean; domain: string }>('/domains');
+    return data.domain ? [data.domain] : [];
   }
 
-  async waitForOTP(emailToken: string, timeoutMs = 30000): Promise<string> {
+  async waitForOTP(emailMd5: string, timeoutMs = 30000): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
 
-    globalState.addLog(
-      'info',
-      `⏳ Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`
-    );
+    globalState.addLog('info', `⏳ Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`);
 
     while (Date.now() - startTime < timeoutMs) {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) {
@@ -101,7 +96,7 @@ export class TempMailClient {
       }
 
       try {
-        const messages = await this.listMessages(emailToken);
+        const messages = await this.listMessages(emailMd5);
 
         if (messages.length > lastMessageCount) {
           globalState.addLog('info', `📨 ${messages.length} mensagem(s) recebida(s)`);
@@ -129,11 +124,10 @@ export class TempMailClient {
 
   async createEmailAndWaitOTP(
     timeoutMs = 30000
-  ): Promise<{ email: string; token: string; otp: string }> {
+  ): Promise<{ email: string; md5: string; otp: string }> {
     const emailAccount = await this.createRandomEmail();
-    const token = (emailAccount as unknown as { token: string }).token;
     globalState.addLog('info', `📧 Email criado: ${emailAccount.email}`);
-    const otp = await this.waitForOTP(token, timeoutMs);
-    return { email: emailAccount.email, token, otp };
+    const otp = await this.waitForOTP(emailAccount.md5, timeoutMs);
+    return { email: emailAccount.email, md5: emailAccount.md5, otp };
   }
 }
