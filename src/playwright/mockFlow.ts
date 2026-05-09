@@ -202,6 +202,140 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
+// ─── Seleciona cidade no autocomplete ───────────────────────────────────────────
+
+/**
+ * Digita a cidade no autocomplete da Uber e clica na opção correta do dropdown.
+ *
+ * Estratégia:
+ * 1. Digita apenas o nome da cidade (ex: "Itajubá") caractere por caractere.
+ * 2. Aguarda o dropdown aparecer (até 8s).
+ * 3. Varre as opções visíveis e clica na primeira que contém o nome da cidade
+ *    ignorando acentuação (normalize NFD).
+ * 4. Fallback: se nenhuma opção bater, clica na primeira opção e loga aviso.
+ */
+async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
+  const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
+
+  // Seletores possíveis para os itens do dropdown
+  const DROPDOWN_ITEM_SELS = [
+    '[data-testid="flow-type-city-selector-v2-option"]',
+    '[role="option"]',
+    '[role="listbox"] li',
+    '[class*="suggestion"]',
+    '[class*="option"]',
+    '[class*="item"]',
+  ];
+
+  // Normaliza texto para comparação sem acento
+  const norm = (s: string) =>
+    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+  // Nome base para busca (só a cidade, sem estado/país)
+  const nomeBusca = cidade.split(',')[0]!.trim(); // ex: "Itajubá"
+  const nomeBuscaNorm = norm(nomeBusca);
+
+  globalState.addLog('info', `📍 Digitando cidade: "${nomeBusca}"`, cycle);
+
+  // 1. Foca e digita só o nome da cidade
+  await p.waitForSelector(INPUT_SEL, { state: 'visible', timeout: 15000 });
+  const box = await p.locator(INPUT_SEL).boundingBox().catch(() => null);
+  if (box) {
+    await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+    await humanPause(randInt(80, 160));
+  }
+  await p.click(INPUT_SEL);
+  await p.fill(INPUT_SEL, '');
+  await humanPause(randInt(100, 200));
+
+  for (const ch of nomeBusca) {
+    await p.keyboard.type(ch, { delay: randInt(50, 110) });
+    if (Math.random() < 0.08) await humanPause(randInt(80, 200));
+  }
+
+  // 2. Aguarda dropdown aparecer
+  globalState.addLog('info', '⏳ Aguardando dropdown de cidade...', cycle);
+  let itemSel: string | null = null;
+  const fimDropdown = Date.now() + 8_000;
+
+  while (Date.now() < fimDropdown) {
+    for (const sel of DROPDOWN_ITEM_SELS) {
+      try {
+        const count = await p.locator(sel).count();
+        if (count > 0) {
+          const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
+          if (visivel) { itemSel = sel; break; }
+        }
+      } catch { /* tenta proximo */ }
+    }
+    if (itemSel) break;
+    await humanPause(500);
+  }
+
+  if (!itemSel) {
+    // Fallback de teclado se o dropdown não aparecer
+    globalState.addLog('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter como fallback', cycle);
+    await humanPause(randInt(300, 600));
+    await p.keyboard.press('ArrowDown');
+    await humanPause(randInt(150, 300));
+    await p.keyboard.press('Enter');
+    return;
+  }
+
+  await humanPause(randInt(300, 600));
+
+  // 3. Varre opções e clica na correta
+  const opcoes = p.locator(itemSel);
+  const total = await opcoes.count();
+  globalState.addLog('info', `📍 Dropdown aberto com ${total} opções`, cycle);
+
+  let clicou = false;
+  for (let i = 0; i < total; i++) {
+    try {
+      const opcao = opcoes.nth(i);
+      const texto = await opcao.innerText().catch(() => '');
+      if (norm(texto).includes(nomeBuscaNorm)) {
+        const opcaoBox = await opcao.boundingBox().catch(() => null);
+        if (opcaoBox) {
+          await humanMouseMove(
+            p,
+            opcaoBox.x + opcaoBox.width / 2,
+            opcaoBox.y + opcaoBox.height / 2
+          );
+          await humanPause(randInt(150, 300));
+        }
+        await opcao.click({ timeout: 5000 });
+        globalState.addLog('info', `✅ Cidade selecionada: "${texto.trim()}"`, cycle);
+        clicou = true;
+        break;
+      }
+    } catch { /* ignora e tenta proxima */ }
+  }
+
+  // 4. Fallback: clica na primeira opção
+  if (!clicou) {
+    globalState.addLog('warn', `⚠️ Nenhuma opção com "${nomeBusca}" encontrada, clicando na primeira`, cycle);
+    try {
+      const primeiraBox = await opcoes.first().boundingBox().catch(() => null);
+      if (primeiraBox) {
+        await humanMouseMove(
+          p,
+          primeiraBox.x + primeiraBox.width / 2,
+          primeiraBox.y + primeiraBox.height / 2
+        );
+        await humanPause(randInt(150, 300));
+      }
+      await opcoes.first().click({ timeout: 5000 });
+    } catch {
+      await p.keyboard.press('ArrowDown');
+      await humanPause(randInt(150, 300));
+      await p.keyboard.press('Enter');
+    }
+  }
+
+  await humanPause(randInt(400, 700));
+}
+
 const JS_NAO_ATIVAR = `
   (function() {
     var normalize = function(s) {
@@ -411,7 +545,6 @@ async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
   const TIMEOUT_KYC  = 15_000;
   const inicio = Date.now();
 
-  // 1. Acha e clica
   let clicou = false;
   while (Date.now() - inicio < TIMEOUT_ACHAR) {
     for (const sel of SELETORES) {
@@ -440,22 +573,19 @@ async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
     return;
   }
 
-  // 2. Aguarda sinal KYC por até 15s
-  // O context.route() já captura rede de popups/iframes.
-  // Aqui apenas esperamos o sinal chegar no globalState.
   globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 15s)...', cycle);
 
   const fimKyc = Date.now() + TIMEOUT_KYC;
   while (Date.now() < fimKyc) {
     const sinais = globalState.getKycSignals(cycle);
     if (sinais && sinais.length > 0) {
-      globalState.addLog('info', `✅ KYC detectado: ${sinais[0].provider} (fonte: ${sinais[0].source})`, cycle);
+      globalState.addLog('info', `✅ KYC detectado: ${sinais[0]!.provider} (fonte: ${sinais[0]!.source})`, cycle);
       return;
     }
     await humanPause(1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após 15s. Verifique os padrões de URL no KYC_PATTERNS.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após 15s.', cycle);
 }
 
 // ─── Fingerprint stealth ───────────────────────────────────────────────────────
@@ -593,7 +723,6 @@ function registrarListenersPage(page: Page, cycle: number): void {
     if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
   });
 
-  // exposeFunction pode falhar se a page já a tem registrada
   page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
     globalState.addKycSignal(provider, source, weight, cycle, url);
   }).catch(() => {});
@@ -619,8 +748,6 @@ async function criarContextoIsolado(
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
-  // context.route cobre TODAS as requisições do contexto:
-  // page principal, iframes cross-origin, popups e novas abas.
   await context.route('**/*', (route) => {
     const url = route.request().url();
     const provider = detectKycProvider(url);
@@ -631,8 +758,6 @@ async function criarContextoIsolado(
   const page = await context.newPage();
   registrarListenersPage(page, cycle);
 
-  // Quando o Socure/Veriff abrir popup ou nova aba no mesmo contexto,
-  // registra os mesmos listeners nessa nova página automaticamente.
   context.on('page', (novaPage) => {
     globalState.addLog('info', `📌 Nova aba/popup aberta: ${novaPage.url() || '(carregando...)'}`, cycle);
     registrarListenersPage(novaPage, cycle);
@@ -752,13 +877,8 @@ export class MockPlaywrightFlow {
 
       await dispensarCookies(p);
 
-      // Cidade
-      await humanType(p, '[data-testid="flow-type-city-selector-v2-input"]', payload.localizacao);
-      await humanPause(randInt(600, 1000));
-      await p.keyboard.press('ArrowDown');
-      await humanPause(randInt(150, 300));
-      await p.keyboard.press('Enter');
-      await humanPause(randInt(500, 900));
+      // Cidade — seleção refinada via dropdown
+      await selecionarCidade(p, payload.localizacao, cycle);
 
       await dispensarCookies(p);
 
