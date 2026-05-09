@@ -174,6 +174,112 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
+/**
+ * Tela do WhatsApp da Uber — aguarda o botão aparecer e clica em NÃO ATIVAR.
+ * Usa seletores em cascata para contornar problemas de encoding do Ã e texto
+ * renderizado dinamicamente.
+ */
+async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
+  // Seletores em ordem de prioridade para o botão "NÃO ATIVAR"
+  // O texto pode ter varições de encoding dependendo do locale da página
+  const candidatosNaoAtivar = [
+    // Exato com Unicode
+    'button:has-text("N\u00c3O ATIVAR")',
+    // Via evaluate — mais confiável contra problemas de encoding
+    // (tratado separado abaixo via JS)
+  ];
+
+  // Aguarda a tela do WhatsApp aparecer (até 10s)
+  // Detecta pela presença de qualquer botão com texto que contenha "ATIVAR" ou "ATIVAR"
+  const telaWhatsApp = await p.waitForSelector(
+    'button[type="submit"]',
+    { state: 'visible', timeout: 10000 }
+  ).catch(() => null);
+
+  if (!telaWhatsApp) {
+    globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada, pulando...', cycle);
+    return;
+  }
+
+  await humanPause(randInt(600, 1200));
+
+  // Tenta seletores CSS primeiro
+  for (const seletor of candidatosNaoAtivar) {
+    try {
+      const el = p.locator(seletor).first();
+      const visivel = await el.isVisible({ timeout: 3000 }).catch(() => false);
+      if (visivel) {
+        const box = await el.boundingBox().catch(() => null);
+        if (box) {
+          await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+          await humanPause(randInt(200, 400));
+        }
+        await el.click({ timeout: 5000 });
+        globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado', cycle);
+        await humanPause(randInt(500, 1000));
+        return;
+      }
+    } catch {
+      // tenta o proximo
+    }
+  }
+
+  // Fallback via JavaScript: busca botao cujo innerText normalizado contenha "NAO ATIVAR"
+  // (remove acentos para comparacao, mais robusto)
+  try {
+    const clicou = await p.evaluate(() => {
+      const normalize = (s: string) =>
+        s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+      const botoes = Array.from(document.querySelectorAll('button'));
+      const alvo = botoes.find(
+        (b) => normalize(b.innerText).includes('NAO ATIVAR') || normalize(b.innerText).includes('N AO ATIVAR')
+      );
+      if (alvo) {
+        (alvo as HTMLElement).click();
+        return true;
+      }
+      return false;
+    });
+
+    if (clicou) {
+      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (via JS evaluate)', cycle);
+      await humanPause(randInt(500, 1000));
+      return;
+    }
+  } catch {
+    // ignora
+  }
+
+  // Ultimo recurso: clica no primeiro botão submit visível que NÃO seja "CONTINUAR"
+  try {
+    const clicou = await p.evaluate(() => {
+      const normalize = (s: string) =>
+        s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+      const botoes = Array.from(document.querySelectorAll('button[type="submit"]'));
+      const alvo = botoes.find(
+        (b) => !normalize((b as HTMLElement).innerText).includes('CONTINUAR') &&
+               !normalize((b as HTMLElement).innerText).includes('AJUDA') &&
+               (b as HTMLElement).offsetParent !== null
+      );
+      if (alvo) {
+        (alvo as HTMLElement).click();
+        return (alvo as HTMLElement).innerText;
+      }
+      return null;
+    });
+
+    if (clicou) {
+      globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback)`, cycle);
+      await humanPause(randInt(500, 1000));
+      return;
+    }
+  } catch {
+    // ignora
+  }
+
+  globalState.addLog('warn', '⚠️ Não foi possível clicar em NÃO ATIVAR — continuando mesmo assim', cycle);
+}
+
 // ─── Fingerprint stealth script ───────────────────────────────────────────────
 
 const stealthScript = `
@@ -299,10 +405,6 @@ async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserCo
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
-  /**
-   * Sobe o browser uma única vez.
-   * Não abre nenhuma aba aqui — cada execute() abre a própria.
-   */
   static async init(headless = false): Promise<void> {
     if (browser) {
       globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
@@ -330,15 +432,6 @@ export class MockPlaywrightFlow {
     globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba nova e a manterá aberta');
   }
 
-  /**
-   * Cada chamada:
-   *  1. Cria um BrowserContext novo (sessão/cookies zerados)
-   *  2. Abre uma aba nova nesse contexto
-   *  3. Executa o fluxo completo
-   *  4. DEIXA a aba aberta ao terminar
-   *
-   * Para fechar tudo, chame cleanup().
-   */
   static async execute(
     cadastroUrl: string,
     config: {
@@ -436,23 +529,11 @@ export class MockPlaywrightFlow {
       await humanClick(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      await humanPause(randInt(1500, 3000));
-      const naoAtivar = p.locator('button:has-text("NÃO ATIVAR")');
-      const continuar = p.locator('button:has-text("CONTINUAR")');
-      if (await naoAtivar.isVisible().catch(() => false)) {
-        await humanClick(p, 'button:has-text("NÃO ATIVAR")');
-        globalState.addLog('info', '🔕 Notificações: NÃO ATIVAR', cycle);
-      } else if (await continuar.isVisible().catch(() => false)) {
-        await humanClick(p, 'button:has-text("CONTINUAR")');
-        globalState.addLog('info', '▶️ Notificações: CONTINUAR', cycle);
-      } else {
-        globalState.addLog('warn', '⚠️ Botão de notificação não encontrado, continuando...', cycle);
-      }
+      // Tela do WhatsApp — clicar em NÃO ATIVAR
+      await dispensarWhatsApp(p, cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 800));
       globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
-
-      // Aba permanece aberta — contexto salvo em contextosPorCiclo
 
     } catch (error) {
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
@@ -461,10 +542,6 @@ export class MockPlaywrightFlow {
     }
   }
 
-  /**
-   * Fecha todas as abas abertas e o browser.
-   * Chamar apenas no botão "Parar" definitivo.
-   */
   static async cleanup(): Promise<void> {
     for (const [cycle, ctx] of contextosPorCiclo.entries()) {
       await ctx.close().catch(() => {});
