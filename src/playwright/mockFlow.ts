@@ -179,12 +179,11 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
-// ─── pageStable: polling puro que verifica se a página parou de navegar.
-// Substitui completamente o safeLoadState/waitForLoadState — nunca trava porque
-// não usa nenhuma Promise interna do Playwright que pode ficar pendente para sempre.
-// Estratégia: tenta p.evaluate('1') em loop com timeout individual de 1s.
-// Se conseguir avaliar N vezes seguidas sem erro → página estável.
-// Se o loop externo expirar → retorna mesmo assim (nunca lança).
+// ─── pageStable ────────────────────────────────────────────────────────────────────────
+// Polling puro: tenta p.evaluate('1') em loop com timeout individual de 1s por iteração.
+// Nunca usa waitForLoadState — ele nunca rejeita e pode ficar pendurado para sempre.
+// Retorna quando a página consegue responder N vezes seguidas (estável) ou ao atingir timeout.
+// NUNCA lança — sempre retorna, deixando o fluxo continuar.
 async function pageStable(
   p: Page,
   timeoutMs: number,
@@ -194,14 +193,14 @@ async function pageStable(
   const tag = label ? ` [${label}]` : '';
   const deadline = Date.now() + timeoutMs;
   let okStreak = 0;
-  const STREAK_NEEDED = 2; // 2 polls OK consecutivos = estável
-  const POLL_MS = 400;
+  const STREAK_NEEDED = 2;
+  const POLL_MS = 300;
 
   while (Date.now() < deadline) {
     try {
       await Promise.race([
         p.evaluate('1'),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 1000)),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 900)),
       ]);
       okStreak++;
       if (okStreak >= STREAK_NEEDED) {
@@ -209,7 +208,7 @@ async function pageStable(
         return;
       }
     } catch {
-      okStreak = 0; // navegação em andamento — reseta streak
+      okStreak = 0;
     }
     await new Promise<void>((r) => setTimeout(r, POLL_MS));
   }
@@ -217,6 +216,11 @@ async function pageStable(
 }
 
 // ─── humanClickForwardButton ──────────────────────────────────────────────────────────
+// FIX: removido safeLoadState/waitForLoadState pós-clique.
+// Pós-clique usa apenas:
+//   1. delay fixo curto (1s)
+//   2. polling de desaparecimento/desabilitação do botão como confirmação de navegação
+//   3. pageStable só se o botão ainda estiver visível e habilitado (página pode não ter navegado ainda)
 async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
   globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
 
@@ -245,7 +249,7 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     globalState.addLog('info', '✅ #forward-button habilitado — clicando', cycle);
   }
 
-  // Remove overlays
+  // Remove overlays que possam bloquear o clique
   await Promise.race([
     p.evaluate(`
       (function() {
@@ -266,6 +270,7 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
 
   await humanPause(randInt(200, 400));
 
+  // Executa o clique
   const box = await p.locator('#forward-button').boundingBox().catch(() => null);
   if (box) {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
@@ -305,9 +310,33 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     }
   }
 
-  // FIX: pageStable — polling puro, nunca trava
-  globalState.addLog('info', '⏳ Aguardando estabilização pós-clique (até 4s)...', cycle);
-  await pageStable(p, 4000, cycle, 'pós-forward-click');
+  // FIX pós-clique: delay fixo curto — sem waitForLoadState, sem pageStable longo.
+  // O pageStable só é chamado UMA VEZ com timeout curto e nunca bloqueia o fluxo.
+  await new Promise<void>((r) => setTimeout(r, 1000));
+
+  // Confirma navegação verificando se o botão sumiu ou foi desabilitado (polling rápido, máx 3s)
+  const fimConfirma = Date.now() + 3000;
+  while (Date.now() < fimConfirma) {
+    try {
+      const btnSumiu = await Promise.race([
+        p.evaluate(() => {
+          const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
+          if (!btn) return true; // sumiu — navegou
+          return btn.disabled || btn.getAttribute('aria-disabled') === 'true';
+        }),
+        new Promise<false>((_, rej) => setTimeout(() => rej(new Error('t')), 800)),
+      ]);
+      if (btnSumiu) {
+        globalState.addLog('info', '✅ Navegação confirmada (botão desabilitado/removido)', cycle);
+        return;
+      }
+    } catch { /* ignora */ }
+    await new Promise<void>((r) => setTimeout(r, 300));
+  }
+
+  // Se o botão ainda está visível/habilitado após 3s, faz um pageStable curto de 2s apenas
+  globalState.addLog('info', '⏳ Botão ainda visível — aguardando estabilização (2s)...', cycle);
+  await pageStable(p, 2000, cycle, 'pós-forward-click');
 }
 
 // ─── Aguarda botão #forward-button ficar habilitado ───────────────────────────────────
@@ -819,9 +848,9 @@ function resolverProviderDominante(
 }
 
 // ─── aguardarTelaOTP ─────────────────────────────────────────────────────────────────
-// FIX: sem safeLoadState/waitForLoadState interno.
-// Usa pageStable (polling puro) para esperar a página parar de navegar,
-// depois verifica os seletores. Nunca trava.
+// Polling puro de seletores DOM — sem waitForLoadState, sem pageStable de alto timeout.
+// Se a página não responder num poll, aguarda brevemente e tenta de novo.
+// Nunca trava: o loop externo tem deadline absoluto e sempre retorna.
 async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Promise<boolean> {
   const SELETORES_OTP = [
     '#EMAIL_OTP_CODE-0',
@@ -837,26 +866,24 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
   const inicio = Date.now();
 
   while (Date.now() - inicio < timeoutMs) {
-    // Verifica se a página está responsiva via polling puro (sem waitForLoadState)
+    // Testa se a página está responsiva com timeout individual curto
     let paginaOk = false;
     try {
       await Promise.race([
         p.evaluate('1'),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 1000)),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 800)),
       ]);
       paginaOk = true;
     } catch {
-      // Página navegando — aguarda estabilizar com pageStable (máx 5s por iteração)
-      globalState.addLog('info', '⚠️ Página navegando — aguardando estabilização...', cycle);
-      await pageStable(p, 5000, cycle, 'aguardarTelaOTP');
-      await humanPause(300);
+      // Página navegando — espera curta e tenta de novo (sem chamar pageStable longo)
+      await new Promise<void>((r) => setTimeout(r, 500));
       continue;
     }
 
     if (paginaOk) {
       for (const sel of SELETORES_OTP) {
         try {
-          const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
+          const visivel = await p.locator(sel).first().isVisible({ timeout: 600 }).catch(() => false);
           if (visivel) {
             globalState.addLog('info', `✅ Tela de OTP detectada (${sel})`, cycle);
             return true;
@@ -865,7 +892,7 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
       }
     }
 
-    await humanPause(800);
+    await new Promise<void>((r) => setTimeout(r, 700));
   }
 
   globalState.addLog('warn', `⚠️ Tela de OTP não detectada após ${timeoutMs / 1000}s — prosseguindo mesmo assim`, cycle);
@@ -1356,8 +1383,9 @@ export class MockPlaywrightFlow {
     const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
 
     try {
+      // FIX: removido waitForLoadState('networkidle') solto — ele pode travar.
+      // Usa apenas domcontentloaded + timeout curto no catch.
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await p.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       globalState.addLog('info', '⏳ Aguardando campo de email ficar visível...', cycle);
@@ -1394,8 +1422,11 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+
+      // humanClickForwardButton agora não usa waitForLoadState internamente
       await humanClickForwardButton(p, cycle, 15000);
 
+      // aguardarTelaOTP agora é polling puro — sem waitForLoadState
       await aguardarTelaOTP(p, cycle, 20_000);
 
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
