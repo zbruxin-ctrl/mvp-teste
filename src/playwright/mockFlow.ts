@@ -51,8 +51,7 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
 
 /**
  * Espera até que não haja nenhum elemento cobrindo o seletor alvo.
- * Faz polling de até `timeoutMs` verificando se o elemento no topo das
- * coordenadas centrais do alvo é ele mesmo (ou filho dele).
+ * Tudo roda dentro do browser via p.evaluate (sem referências a tipos DOM no Node).
  */
 async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -62,18 +61,18 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
       if (!box) { await humanPause(300); continue; }
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
-      const topEl = await p.evaluateHandle(
-        ({ x, y }) => document.elementFromPoint(x, y),
-        { x: cx, y: cy }
-      );
+
+      // Roda inteiramente no contexto do browser — sem referências a document/Node no Node.js
       const isTarget = await p.evaluate(
-        ({ el, sel }) => {
+        ([x, y, sel]: [number, number, string]) => {
+          const top = document.elementFromPoint(x, y);
           const target = document.querySelector(sel);
-          return target ? (target === el || target.contains(el as Node)) : false;
+          if (!target || !top) return false;
+          return target === top || target.contains(top);
         },
-        { el: topEl, sel: selector }
+        [cx, cy, selector] as [number, number, string]
       );
-      await topEl.dispose();
+
       if (isTarget) return;
     } catch { /* ignora e repete */ }
     await humanPause(400);
