@@ -39,9 +39,6 @@
     .save-toast.show { display: block; }
     .proxy-hint { font-size: 11px; color: #9ca3af; margin-top: -10px; margin-bottom: 14px; line-height: 1.5; }
     .proxy-count { font-size: 12px; font-weight: 600; color: #4f46e5; margin-bottom: 8px; }
-    /* Senha */
-    .password-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
-    .password-row input { margin-bottom: 0; flex: 1; }
     /* Logs */
     .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.6; }
     .log-entry { margin-bottom: 2px; padding: 1px 4px; border-radius: 4px; }
@@ -109,12 +106,7 @@
       <label for="parallelCycles">Ciclos simultâneos</label>
       <input id="parallelCycles" type="number" value="1" min="1" max="20" />
 
-      <label for="headless">Modo Headless</label>
-      <select id="headless">
-        <option value="true">Sim (oculto)</option>
-        <option value="false">Não (visível)</option>
-      </select>
-
+      <!-- Proxies -->
       <label for="proxiesInput">🌐 Proxies (um por linha)</label>
       <div id="proxyCount" class="proxy-count" style="display:none"></div>
       <textarea id="proxiesInput" placeholder="177.10.20.30:8080&#10;177.10.20.31:8080:usuario:senha&#10;http://user:pass@1.2.3.4:3128&#10;socks5://user:pass@1.2.3.4:1080"></textarea>
@@ -159,7 +151,6 @@
   </div>
 
   <script>
-    // ─── Constantes ──────────────────────────────────────────────────────────
     var STATUS_MAP = {
       STOPPED:     { emoji: '🟢', text: 'Parado',     color: 'idle' },
       STARTING:    { emoji: '🔄', text: 'Iniciando',  color: 'running' },
@@ -178,14 +169,13 @@
     var _dirtyFields   = {};
     var _dirtyTimers   = {};
 
-    // ─── Dirty tracking ──────────────────────────────────────────────────────
     function markDirty(fieldId) {
       _dirtyFields[fieldId] = true;
       clearTimeout(_dirtyTimers[fieldId]);
       _dirtyTimers[fieldId] = setTimeout(function() { _dirtyFields[fieldId] = false; }, 5000);
     }
 
-    var CONFIG_FIELDS = ['cadastroUrl','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','headless','proxiesInput'];
+    var CONFIG_FIELDS = ['cadastroUrl','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput'];
     CONFIG_FIELDS.forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('input', function() { markDirty(id); });
@@ -195,7 +185,7 @@
       updateProxyCount(this.value);
     });
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
+    // ─── Helpers ──────────────────────────────────────────────────────────────
     function getPassword() {
       return (document.getElementById('adminPassword').value || '').trim();
     }
@@ -217,10 +207,11 @@
       if (/^(https?|socks[45]):\/\//i.test(raw)) {
         try {
           var u = new URL(raw);
-          var server = u.protocol + '//' + u.host;
-          var username = u.username ? decodeURIComponent(u.username) : undefined;
-          var password = u.password ? decodeURIComponent(u.password) : undefined;
-          return { server: server, username: username, password: password };
+          return {
+            server: u.protocol + '//' + u.host,
+            username: u.username ? decodeURIComponent(u.username) : undefined,
+            password: u.password ? decodeURIComponent(u.password) : undefined,
+          };
         } catch(e) { return null; }
       }
       var parts = raw.split(':');
@@ -243,7 +234,7 @@
         cycleInterval:  Number(document.getElementById('cycleInterval').value) || 60000,
         extraDelay:     Number(document.getElementById('extraDelay').value) || 2000,
         parallelCycles: Number(document.getElementById('parallelCycles').value) || 1,
-        headless:       document.getElementById('headless').value === 'true',
+        headless:       false,
         proxies:        proxies,
       };
     }
@@ -255,13 +246,12 @@
       };
     }
 
-    // ─── API calls ───────────────────────────────────────────────────────────
+    // ─── API calls ────────────────────────────────────────────────────────────
     function saveConfig() {
-      var config = buildConfig();
       fetch('/api/config', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify(config),
+        body: JSON.stringify(buildConfig()),
       })
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -278,11 +268,10 @@
     }
 
     function startLoop() {
-      var config = buildConfig();
       fetch('/api/start', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ config: config }),
+        body: JSON.stringify({ config: buildConfig() }),
       })
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -292,11 +281,10 @@
     }
 
     function startOnce() {
-      var config = buildConfig();
       fetch('/api/start-once', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ config: config }),
+        body: JSON.stringify({ config: buildConfig() }),
       })
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -349,7 +337,7 @@
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
-    // ─── Polling: Status + Logs ───────────────────────────────────────────────
+    // ─── Polling ──────────────────────────────────────────────────────────────
     var _lastLogTs = null;
 
     function pollStatus() {
@@ -418,17 +406,15 @@
       return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    // ─── Render: KYC ─────────────────────────────────────────────────────────
+    // ─── Render: KYC ──────────────────────────────────────────────────────────
     function renderKyc(byCycle) {
       var cycleNums = Object.keys(byCycle).map(Number).sort(function(a,b){return b-a;});
       if (cycleNums.length === 0) return;
 
-      // Auto-seleciona o ciclo mais recente se nenhum selecionado
       if (_selectedCycle === null || byCycle[_selectedCycle] === undefined) {
         _selectedCycle = cycleNums[0];
       }
 
-      // Tabs
       var tabsEl = document.getElementById('kyc-tabs');
       var tabsHtml = '';
       for (var i = 0; i < cycleNums.length; i++) {
@@ -444,7 +430,6 @@
       }
       tabsEl.innerHTML = tabsHtml;
 
-      // Painel do ciclo selecionado
       var cycleData = byCycle[_selectedCycle] || {};
       var entries = Object.entries(cycleData);
       if (entries.length === 0) {
@@ -482,7 +467,7 @@
         .catch(function() {});
     }
 
-    // ─── Start polling ────────────────────────────────────────────────────────
+    // ─── Init ─────────────────────────────────────────────────────────────────
     pollStatus();
     pollLogs();
     pollKyc();
