@@ -15,10 +15,7 @@ export class TempMailClient implements IEmailClient {
   private config: TempMailConfig;
 
   constructor(apiKey: string) {
-    this.config = {
-      apiKey,
-      baseUrl: 'https://api.temp-mail.io',
-    };
+    this.config = { apiKey, baseUrl: 'https://api.temp-mail.io' };
   }
 
   private async request<T>(endpoint: string, method: 'GET' | 'POST' = 'GET'): Promise<T> {
@@ -71,13 +68,13 @@ export class TempMailClient implements IEmailClient {
     return this.request<{ body_text: string; body_html: string }>(`/v1/messages/${messageId}`);
   }
 
-  async waitForOTP(email: string, timeoutMs = 60000): Promise<string> {
+  async waitForOTP(email: string, timeoutMs = 60000, cycle?: number): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
     const POLL_INTERVAL_MS = 12_000;
     const INITIAL_WAIT_MS  = 15_000;
 
-    globalState.addLog('info', `⏳ [temp-mail.io] Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`);
+    globalState.addLog('info', `⏳ [temp-mail.io] Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`, cycle);
 
     const inicioEspera = Date.now();
     while (Date.now() - inicioEspera < INITIAL_WAIT_MS) {
@@ -90,20 +87,20 @@ export class TempMailClient implements IEmailClient {
       try {
         const messages = await this.listMessages(email);
         if (messages.length > lastMessageCount) {
-          globalState.addLog('info', `📨 ${messages.length} mensagem(s) recebida(s) — verificando OTP...`);
+          globalState.addLog('info', `📨 ${messages.length} mensagem(s) recebida(s) — verificando OTP...`, cycle);
           for (const message of messages.slice(lastMessageCount).reverse()) {
             try {
               const full = await this.getFullMessage(message.mail_id);
               const msgWithBody = { ...message, mail_text: full.body_text ?? '', mail_html: full.body_html ?? '' };
               const otp = OTPParser.extractFromMessage(msgWithBody as MailMessage);
-              if (otp) { globalState.addLog('success', `🎉 OTP encontrado: ${otp}`); return otp; }
+              if (otp) { globalState.addLog('success', `🎉 OTP encontrado: ${otp}`, cycle); return otp; }
             } catch { /* ignora erro individual */ }
           }
           lastMessageCount = messages.length;
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
-        globalState.addLog('warn', '⚠️ Erro ao verificar mensagens temp-mail.io, tentando novamente...');
+        globalState.addLog('warn', '⚠️ Erro ao verificar mensagens temp-mail.io, tentando novamente...', cycle);
       }
       const fimPoll = Date.now() + POLL_INTERVAL_MS;
       while (Date.now() < fimPoll) {
@@ -168,9 +165,7 @@ export class MailTmClient implements IEmailClient {
   async createRandomEmail(): Promise<EmailAccount> {
     globalState.addLog('info', '📧 [mail.tm] Buscando domínios disponíveis...');
 
-    const domainsResp = await this.request<{ 'hydra:member': Array<{ domain: string; isActive: boolean }> }>(
-      '/domains?page=1'
-    );
+    const domainsResp = await this.request<{ 'hydra:member': Array<{ domain: string; isActive: boolean }> }>('/domains?page=1');
     const domains = domainsResp['hydra:member']?.filter(d => d.isActive);
     if (!domains || domains.length === 0) throw new Error('Mail.tm: nenhum domínio disponível');
 
@@ -181,17 +176,9 @@ export class MailTmClient implements IEmailClient {
 
     globalState.addLog('info', `📧 [mail.tm] Criando conta: ${address}`);
 
-    await this.request<{ id: string; address: string }>(
-      '/accounts',
-      'POST',
-      { address, password }
-    );
+    await this.request<{ id: string; address: string }>('/accounts', 'POST', { address, password });
 
-    const tokenResp = await this.request<{ id: string; token: string }>(
-      '/token',
-      'POST',
-      { address, password }
-    );
+    const tokenResp = await this.request<{ id: string; token: string }>('/token', 'POST', { address, password });
 
     this.authToken = tokenResp.token;
     this.accountEmail = address;
@@ -217,8 +204,6 @@ export class MailTmClient implements IEmailClient {
       intro?: string;
     }>(`/messages/${id}`, 'GET', undefined, true);
 
-    // FIX: ao joinear o array de html, usa '' (sem quebra) para não fragmentar tags HTML
-    // que o mail.tm às vezes parte em múltiplos itens do array.
     const normalizeField = (field: string | string[] | undefined, sep = ' '): string => {
       if (!field) return '';
       if (Array.isArray(field)) return field.join(sep);
@@ -226,24 +211,22 @@ export class MailTmClient implements IEmailClient {
     };
 
     return {
-      // HTML: join sem quebra de linha — evita tags partidas que enganam o replace(/<[^>]+>/g)
       html: normalizeField(resp.html, ''),
-      // text: join com espaço é OK pois não tem tags
       text: normalizeField(resp.text, ' ') || resp.intro || '',
     };
   }
 
-  async waitForOTP(email: string, timeoutMs = 60000): Promise<string> {
+  async waitForOTP(email: string, timeoutMs = 60000, cycle?: number): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
     const POLL_INTERVAL_MS = 8_000;
     const INITIAL_WAIT_MS  = 8_000;
 
-    globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`);
+    globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`, cycle);
 
     if (!this.authToken) throw new Error('Mail.tm: não autenticado — chame createRandomEmail() primeiro');
 
-    globalState.addLog('info', `⏳ [mail.tm] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`);
+    globalState.addLog('info', `⏳ [mail.tm] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`, cycle);
     const inicioEspera = Date.now();
     while (Date.now() - inicioEspera < INITIAL_WAIT_MS) {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) throw new Error('Parado pelo usuário');
@@ -255,21 +238,20 @@ export class MailTmClient implements IEmailClient {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) throw new Error('Parado pelo usuário');
 
       tentativaPoll++;
-      globalState.addLog('info', `🔄 [mail.tm] Poll #${tentativaPoll} — buscando mensagens...`);
+      globalState.addLog('info', `🔄 [mail.tm] Poll #${tentativaPoll} — buscando mensagens...`, cycle);
 
       try {
         const messages = await this.listMessages();
-        globalState.addLog('info', `📬 [mail.tm] Caixa com ${messages.length} mensagem(s) (contagem anterior: ${lastMessageCount})`);
+        globalState.addLog('info', `📬 [mail.tm] Caixa com ${messages.length} mensagem(s) (anterior: ${lastMessageCount})`, cycle);
 
         if (messages.length > lastMessageCount) {
-          globalState.addLog('info', `📨 [mail.tm] ${messages.length - lastMessageCount} mensagem(s) nova(s) — verificando OTP...`);
+          globalState.addLog('info', `📨 [mail.tm] ${messages.length - lastMessageCount} mensagem(s) nova(s) — verificando OTP...`, cycle);
           for (const msg of messages.slice(lastMessageCount).reverse()) {
-            globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`);
+            globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`, cycle);
             try {
               const full = await this.getFullMessage(msg.id);
-              // Log dos primeiros 200 chars de cada fonte para debug
-              globalState.addLog('info', `📄 [mail.tm] html(200): ${full.html.slice(0, 200)}`);
-              globalState.addLog('info', `📄 [mail.tm] text(200): ${full.text.slice(0, 200)}`);
+              globalState.addLog('info', `📄 [mail.tm] html(200): ${full.html.slice(0, 200)}`, cycle);
+              globalState.addLog('info', `📄 [mail.tm] text(200): ${full.text.slice(0, 200)}`, cycle);
               const mailMsg: MailMessage = {
                 mail_id: msg.id,
                 mail_from: msg.from.address,
@@ -282,22 +264,22 @@ export class MailTmClient implements IEmailClient {
               };
               const otp = OTPParser.extractFromMessage(mailMsg);
               if (otp) {
-                globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`);
+                globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`, cycle);
                 return otp;
               } else {
-                globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído de "${msg.subject}"`);
+                globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído de "${msg.subject}"`, cycle);
               }
             } catch (e) {
-              globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`);
+              globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`, cycle);
             }
           }
           lastMessageCount = messages.length;
         } else {
-          globalState.addLog('info', `📭 [mail.tm] Sem mensagens novas — próximo poll em ${POLL_INTERVAL_MS / 1000}s`);
+          globalState.addLog('info', `📭 [mail.tm] Sem mensagens novas — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
-        globalState.addLog('warn', `⚠️ [mail.tm] Erro no poll #${tentativaPoll}: ${e instanceof Error ? e.message : e}`);
+        globalState.addLog('warn', `⚠️ [mail.tm] Erro no poll #${tentativaPoll}: ${e instanceof Error ? e.message : e}`, cycle);
       }
 
       const fimPoll = Date.now() + POLL_INTERVAL_MS;
@@ -311,12 +293,10 @@ export class MailTmClient implements IEmailClient {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Factory
+// IEmailClient interface update — waitForOTP agora aceita cycle opcional
 // ─────────────────────────────────────────────────────────────────────────────
 export function createEmailClient(provider: 'temp-mail.io' | 'mail.tm', apiKey?: string): IEmailClient {
-  if (provider === 'mail.tm') {
-    return new MailTmClient();
-  }
+  if (provider === 'mail.tm') return new MailTmClient();
   if (!apiKey) throw new Error('temp-mail.io requer uma API key');
   return new TempMailClient(apiKey);
 }

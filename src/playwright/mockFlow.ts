@@ -49,8 +49,6 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   }
 }
 
-// ─── waitForElementInteractable: tenta confirmar via elementFromPoint,
-//     mas após timeoutMs desiste e avança mesmo assim (não trava mais silenciosamente)
 async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -71,7 +69,6 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
     } catch { /* ignora e repete */ }
     await humanPause(400);
   }
-  // Timeout atingido: tenta scroll para remover overlay e avança
   try {
     await p.locator(selector).scrollIntoViewIfNeeded({ timeout: 3000 });
   } catch { /* ignora */ }
@@ -182,10 +179,25 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
-// ─── humanClickForwardButton: aguarda #forward-button enabled, remove overlays e clica com force ──
-// Após o clique, aguarda domcontentloaded para detectar a navegação que a página dispara,
-// evitando que chamadas seguintes na page fiquem penduradas silenciosamente.
+// ─── safeLoadState: aguarda loadState mas NUNCA trava — usa Promise.race com timeout manual.
+// waitForLoadState do Playwright pode congelar indefinidamente em SPAs que não disparam
+// eventos de navegação reais (ex: Uber que faz transição via React Router sem reload).
+async function safeLoadState(
+  p: Page,
+  state: 'domcontentloaded' | 'load' | 'networkidle',
+  timeoutMs: number,
+  cycle: number,
+  label = ''
+): Promise<void> {
+  const tag = label ? ` [${label}]` : '';
+  await Promise.race([
+    p.waitForLoadState(state).catch(() => {}),
+    new Promise<void>((r) => setTimeout(r, timeoutMs)),
+  ]);
+  globalState.addLog('info', `✅ safeLoadState(${state})${tag} concluído`, cycle);
+}
 
+// ─── humanClickForwardButton ──────────────────────────────────────────────────────────
 async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
   globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
 
@@ -206,12 +218,12 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
   }
 
   if (!habilitado) {
-    globalState.addLog('warn', '⚠️ #forward-button não habilitou em tempo — tentando click force mesmo assim', cycle);
+    globalState.addLog('warn', '⚠️ #forward-button não habilitou — tentando click force mesmo assim', cycle);
   } else {
     globalState.addLog('info', '✅ #forward-button habilitado — clicando', cycle);
   }
 
-  // Remove overlays que possam cobrir o botão
+  // Remove overlays
   await p.evaluate(`
     (function() {
       var btn = document.querySelector('#forward-button');
@@ -238,7 +250,6 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     try {
       await p.mouse.click(tx, ty);
     } catch {
-      // tenta force
       try {
         await p.click('#forward-button', { force: true, timeout: 5000 });
       } catch {
@@ -254,7 +265,6 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
       }
     }
   } else {
-    // Fallback: force click direto
     try {
       await p.click('#forward-button', { force: true, timeout: 5000 });
     } catch {
@@ -270,22 +280,19 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     }
   }
 
-  // FIX: aguarda a navegação que o clique dispara antes de qualquer interação seguinte.
-  // Se não houver navegação em 4s, simplesmente continua (SPA que faz transição interna).
-  globalState.addLog('info', '⏳ Aguardando navegação pós-clique (domcontentloaded, até 4s)...', cycle);
-  await p.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => {});
-  globalState.addLog('info', '✅ Pós-clique estabilizado', cycle);
+  // FIX: usa safeLoadState com race/timeout manual — nunca trava mesmo em SPA sem navegação real
+  globalState.addLog('info', '⏳ Aguardando estabilização pós-clique (até 4s)...', cycle);
+  await safeLoadState(p, 'domcontentloaded', 4000, cycle, 'pós-forward-click');
 }
 
-// ─── Aguarda botão #forward-button ficar habilitado (não disabled) ─────────────────────────────
-
+// ─── Aguarda botão #forward-button ficar habilitado ───────────────────────────────────
 async function aguardarForwardHabilitado(p: Page, timeoutMs = 12000, cycle: number): Promise<boolean> {
   const inicio = Date.now();
   while (Date.now() - inicio < timeoutMs) {
     try {
       const disabled = await p.evaluate(() => {
         const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
-        if (!btn) return true; // ainda não existe
+        if (!btn) return true;
         return btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
       });
       if (!disabled) return true;
@@ -295,18 +302,11 @@ async function aguardarForwardHabilitado(p: Page, timeoutMs = 12000, cycle: numb
   return false;
 }
 
-// ─── Preencher OTP (multi-estratégia) ───────────────────────────────────────────────
-// O Uber usa inputs separados por dígito. Tenta várias estratégias em ordem:
-// 1. IDs padrão (#EMAIL_OTP_CODE-0, -1, -2, -3)
-// 2. Qualquer input[maxlength="1"] visível na tela
-// 3. Campo único (copia o código inteiro)
-// 4. Fallback: pressiona teclas na página (campo focado automaticamente)
-
+// ─── Preencher OTP ────────────────────────────────────────────────────────────────────
 async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> {
   const digits = otp.replace(/\D/g, '').split('');
   globalState.addLog('info', `⌨️ Preenchendo OTP: ${otp} (${digits.length} dígitos)`, cycle);
 
-  // Estratégia 1: IDs padrão do Uber — aguarda até 10s para garantir que a tela já renderizou
   const idPadrao = await p.locator('#EMAIL_OTP_CODE-0').isVisible({ timeout: 10000 }).catch(() => false);
   if (idPadrao) {
     globalState.addLog('info', '🔑 OTP: usando seletor #EMAIL_OTP_CODE-{i}', cycle);
@@ -317,7 +317,6 @@ async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> 
     return;
   }
 
-  // Estratégia 2: inputs de 1 caractere visíveis (inputs separados por dígito)
   const inputsUnitarios = p.locator('input[maxlength="1"]');
   const countUnitarios = await inputsUnitarios.count().catch(() => 0);
   if (countUnitarios >= digits.length) {
@@ -340,7 +339,6 @@ async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> 
     return;
   }
 
-  // Estratégia 3: inputs[type=number] ou inputs[type=tel] com 1 dígito
   const inputsNum = p.locator('input[type="number"], input[type="tel"]');
   const countNum = await inputsNum.count().catch(() => 0);
   if (countNum >= digits.length) {
@@ -358,7 +356,6 @@ async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> 
     return;
   }
 
-  // Estratégia 4: campo único (input que aceite o código todo)
   const camposOtp = [
     'input[autocomplete="one-time-code"]',
     'input[name*="otp"]',
@@ -377,8 +374,7 @@ async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> 
     }
   }
 
-  // Estratégia 5: fallback — foca no primeiro input visível e digita digit por digit
-  globalState.addLog('warn', '⚠️ OTP: nenhum seletor específico encontrado — fallback teclado', cycle);
+  globalState.addLog('warn', '⚠️ OTP: nenhum seletor específico — fallback teclado', cycle);
   const primeiroInput = p.locator('input').first();
   const primeiroVisivel = await primeiroInput.isVisible({ timeout: 3000 }).catch(() => false);
   if (primeiroVisivel) {
@@ -460,11 +456,9 @@ async function aceitarTermos(p: Page): Promise<void> {
   for (const tentativa of candidatos) {
     try { await tentativa(); aceitou = true; break; } catch { /* tenta próximo */ }
   }
-  if (!aceitou) throw new Error('Não foi possível aceitar os termos — nenhum seletor funcionou');
+  if (!aceitou) throw new Error('Não foi possível aceitar os termos');
   globalState.addLog('info', '☑️ Termos aceitos');
 }
-
-// ─── Seleciona cidade ────────────────────────────────────────────────────────────────────────
 
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
@@ -563,8 +557,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await humanPause(randInt(400, 700));
 }
 
-// ─── JS helpers ────────────────────────────────────────────────────────────────────────
-
 const JS_NAO_ATIVAR = `
   (function() {
     var normalize = function(s) {
@@ -594,8 +586,6 @@ const JS_FALLBACK_SUBMIT = `
     return null;
   })()
 `;
-
-// ─── KYC init script ────────────────────────────────────────────────────────────────────────
 
 const KYC_INIT_SCRIPT = `
   (function() {
@@ -696,8 +686,6 @@ const KYC_INIT_SCRIPT = `
   })();
 `;
 
-// ─── WhatsApp ────────────────────────────────────────────────────────────────────────────────
-
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   try {
     await humanPause(randInt(2000, 3500));
@@ -782,8 +770,6 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   }
 }
 
-// ─── KYC: resolve provider dominante por score ────────────────────────────────────────────
-
 function resolverProviderDominante(
   cycle: number,
   scoreMinimo = 4
@@ -804,11 +790,7 @@ function resolverProviderDominante(
   return melhor;
 }
 
-// ─── aguardarTelaOTP: bloqueia até a tela do OTP estar visível (ou timeout) ─────────────────
-// Detecta a presença de qualquer input de OTP antes de iniciar o polling de email.
-// Quando a página não responde (navegando), aguarda waitForLoadState('domcontentloaded')
-// explicitamente antes de tentar interagir novamente.
-
+// ─── aguardarTelaOTP ─────────────────────────────────────────────────────────────────
 async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Promise<boolean> {
   const SELETORES_OTP = [
     '#EMAIL_OTP_CODE-0',
@@ -824,13 +806,12 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
   const inicio = Date.now();
 
   while (Date.now() - inicio < timeoutMs) {
-    // Verifica se a página ainda está respondendo
+    // Verifica se página responde — se não, usa safeLoadState em vez de waitForLoadState direto
     try {
       await p.evaluate('1 + 1');
     } catch {
-      // Página não responde — está navegando. Aguarda load estabilizar antes de continuar.
-      globalState.addLog('warn', '⚠️ Página navegando — aguardando domcontentloaded...', cycle);
-      await p.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+      globalState.addLog('warn', '⚠️ Página navegando — aguardando estabilização...', cycle);
+      await safeLoadState(p, 'domcontentloaded', 10000, cycle, 'aguardarTelaOTP');
       await humanPause(500);
       continue;
     }
@@ -852,8 +833,7 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
   return false;
 }
 
-// ─── OTP: polling com retentativas e re-envio ───────────────────────────────────────────────
-
+// ─── OTP: polling com retentativas e re-envio ─────────────────────────────────────────
 async function aguardarOTPComRetry(
   p: Page,
   client: IEmailClient,
@@ -862,8 +842,6 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  // Com otpTimeout=90000: JANELA_MS = max(60000, 90000/3) = max(60000, 30000) = 60000
-  // Com otpTimeout=180000: JANELA_MS = 60000 — sem mudança por enquanto
   const JANELA_MS = Math.max(60_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
@@ -884,7 +862,7 @@ async function aguardarOTPComRetry(
     );
 
     try {
-      const otp = await client.waitForOTP(email, JANELA_MS);
+      const otp = await client.waitForOTP(email, JANELA_MS, cycle);
       if (otp) {
         globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
         return otp;
@@ -895,7 +873,7 @@ async function aguardarOTPComRetry(
     }
 
     if (tentativa < MAX_TENTATIVAS) {
-      globalState.addLog('warn', `⚠️ OTP não chegou em ${JANELA_MS / 1000}s — tentando reenviar...`, cycle);
+      globalState.addLog('warn', `⚠️ OTP não chegou — tentando reenviar...`, cycle);
       let reenvioClicado = false;
       for (const sel of SELETORES_REENVIO) {
         try {
@@ -921,10 +899,8 @@ async function aguardarOTPComRetry(
     }
   }
 
-  throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas (${(JANELA_MS * MAX_TENTATIVAS) / 1000}s total)`);
+  throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas`);
 }
-
-// ─── Foto do perfil + KYC ──────────────────────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
@@ -1020,12 +996,12 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
-      globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
+      globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba`, cycle);
       await humanPause(randInt(500, 1000));
       await context.close().catch(() => {});
       contextosPorCiclo.delete(cycle);
     } else {
-      globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida aberta`, cycle);
+      globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida`, cycle);
     }
   };
 
@@ -1082,10 +1058,8 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     globalState.addLog('warn', `⚠️ Erro no re-clique: ${e}`, cycle);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspecão.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
 }
-
-// ─── Stealth script ─────────────────────────────────────────────────────────────────────────
 
 const stealthScript = `
   (function() {
@@ -1136,8 +1110,6 @@ const stealthScript = `
   })();
 `;
 
-// ─── KYC patterns ────────────────────────────────────────────────────────────────────────────
-
 const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
   { pattern: /socure/i,              provider: 'Socure'  },
   { pattern: /devicer\.io/i,         provider: 'Socure'  },
@@ -1166,8 +1138,6 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
-// ─── Registra listeners ────────────────────────────────────────────────────────────────────────
-
 function registrarListenersFrame(frame: Frame, cycle: number): void {
   try {
     const url = frame.url();
@@ -1183,9 +1153,7 @@ function registrarListenersPage(page: Page, cycle: number): void {
     }
   } catch { /* ignora */ }
 
-  page.on('frameattached', (frame) => {
-    registrarListenersFrame(frame, cycle);
-  });
+  page.on('frameattached', (frame) => { registrarListenersFrame(frame, cycle); });
 
   page.on('framenavigated', (frame) => {
     const url = frame.url();
@@ -1210,12 +1178,9 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
-// ─── Aplica CDP mobile em uma página ──────────────────────────────────────────────────────────
-
 async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<void> {
   try {
     await page.setViewportSize({ width: MOBILE_WIDTH, height: MOBILE_HEIGHT });
-
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       mobile: true,
@@ -1231,7 +1196,6 @@ async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<
       platform: 'iPhone',
     });
     await cdp.send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' }).catch(() => {});
-
     const tag = label ? ` [${label}]` : '';
     globalState.addLog('info', `📱 CDP mobile aplicado${tag} (${MOBILE_WIDTH}x${MOBILE_HEIGHT} @${MOBILE_DPR}x, iPhone 14 UA)`, cycle);
   } catch (e) {
@@ -1239,11 +1203,7 @@ async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<
   }
 }
 
-// ─── Cria contexto isolado ───────────────────────────────────────────────────────────────────────
-
-async function criarContextoIsolado(
-  cycle: number
-): Promise<{ context: BrowserContext; page: Page }> {
+async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
   const context = await browser!.newContext({
@@ -1252,9 +1212,7 @@ async function criarContextoIsolado(
     timezoneId: 'America/Sao_Paulo',
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
-    extraHTTPHeaders: {
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-    },
+    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
     ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
@@ -1269,32 +1227,24 @@ async function criarContextoIsolado(
   });
 
   const page = await context.newPage();
-
   await aplicarCDPMobile(page, cycle, 'página principal');
-
   registrarListenersPage(page, cycle);
 
   context.on('page', async (novaPage) => {
     const url = novaPage.url() || '(carregando...)';
     globalState.addLog('info', `📌 Nova aba/popup: ${url} — aplicando mobile...`, cycle);
-
     await aplicarCDPMobile(novaPage, cycle, `popup:${url.slice(0, 40)}`);
     registrarListenersPage(novaPage, cycle);
-
     novaPage.once('domcontentloaded', async () => {
       await aplicarCDPMobile(novaPage, cycle, `popup-dce:${novaPage.url().slice(0, 40)}`).catch(() => {});
     });
   });
 
-  if (proxy) {
-    globalState.addLog('info', `🔁 Proxy ativo: ${proxy.server}`, cycle);
-  }
+  if (proxy) globalState.addLog('info', `🔁 Proxy ativo: ${proxy.server}`, cycle);
 
   contextosPorCiclo.set(cycle, context);
   return { context, page };
 }
-
-// ─── Flow principal ─────────────────────────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
   static async init(headless = false): Promise<void> {
@@ -1303,7 +1253,7 @@ export class MockPlaywrightFlow {
       return;
     }
     if (browserLaunching) {
-      globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
+      globalState.addLog('info', '⏳ Aguardando browser iniciar...');
       const deadline = Date.now() + 30_000;
       while (!browser && Date.now() < deadline) {
         await new Promise<void>((r) => setTimeout(r, 200));
@@ -1328,7 +1278,7 @@ export class MockPlaywrightFlow {
           '--no-default-browser-check',
         ],
       }) as unknown as Browser;
-      globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
+      globalState.addLog('info', '✅ Browser pronto');
     } finally {
       browserLaunching = false;
     }
@@ -1343,7 +1293,7 @@ export class MockPlaywrightFlow {
         contextosPorCiclo.delete(cycle);
       }
       await browser.close();
-    } catch { /* ignora erros no shutdown */ } finally {
+    } catch { /* ignora */ } finally {
       browser = null;
     }
   }
@@ -1375,13 +1325,11 @@ export class MockPlaywrightFlow {
       await p.waitForSelector('#PHONE_NUMBER_or_EMAIL_ADDRESS', { state: 'visible', timeout: 30000 });
       globalState.addLog('info', '✅ Campo de email visível — prosseguindo', cycle);
 
-      // ─── Garante que a página terminou animações de entrada antes de interagir ───
       await humanPause(randInt(1800, 2800));
       try {
         await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').scrollIntoViewIfNeeded({ timeout: 3000 });
       } catch { /* ignora */ }
 
-      // ─── Remove overlays que bloqueiam pointer-events no campo de email ───────────
       await p.evaluate(`
         (function() {
           var input = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
@@ -1389,8 +1337,7 @@ export class MockPlaywrightFlow {
           var rect = input.getBoundingClientRect();
           var cx = rect.left + rect.width / 2;
           var cy = rect.top  + rect.height / 2;
-          var maxDepth = 10;
-          for (var i = 0; i < maxDepth; i++) {
+          for (var i = 0; i < 10; i++) {
             var top = document.elementFromPoint(cx, cy);
             if (!top || top === input || input.contains(top)) break;
             top.style.pointerEvents = 'none';
@@ -1403,29 +1350,20 @@ export class MockPlaywrightFlow {
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
-      // ─── USA humanTypeForce: bypassa waitForElementInteractable que travava com overlay ───
       globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-
-      // ─── humanClickForwardButton: aguarda enabled + remove overlays + force click ───
-      // Já inclui waitForLoadState('domcontentloaded') após o clique para detectar navegação.
       await humanClickForwardButton(p, cycle, 15000);
 
-      // ─── aguarda a tela de OTP aparecer antes de iniciar o polling de email ───
-      // Se a página não responde (navegando), aguarda waitForLoadState explicitamente.
       await aguardarTelaOTP(p, cycle, 20_000);
 
-      // ─── aguarda OTP e preenche com estratégia robusta ───
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
 
-      // Pausa natural antes de preencher — dá tempo da UI processar o OTP recebido
       await humanPause(randInt(1200, 2000));
       await preencherOTP(p, otp, cycle);
 
-      // Aguarda botão habilitado (Uber habilita após validar todos os dígitos client-side)
       globalState.addLog('info', '⏳ Aguardando #forward-button habilitar após OTP...', cycle);
       const habilitado = await aguardarForwardHabilitado(p, 12000, cycle);
 
@@ -1434,7 +1372,6 @@ export class MockPlaywrightFlow {
         await humanPause(randInt(400, 700));
         await humanClick(p, '#forward-button');
       } else {
-        // Fallback: tenta pressionar Enter no último input do OTP
         globalState.addLog('warn', '⚠️ Botão não habilitou em 12s — tentando Enter no campo OTP', cycle);
         try {
           const lastOtpInput = p.locator('#EMAIL_OTP_CODE-3, input[maxlength="1"]').last();
