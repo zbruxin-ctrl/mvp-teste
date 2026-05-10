@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../../src/frontend')));
 
-// Registra o executor do Playwright — suporta parallelCycles
+// Registra o executor do Playwright — repassa inviteCode para o flow
 globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.init(config.headless);
   await MockPlaywrightFlow.execute(
@@ -18,6 +18,7 @@ globalState.setExecutor(async (config, cycle) => {
       tempMailApiKey: config.tempMailApiKey,
       otpTimeout: config.otpTimeout,
       extraDelay: config.extraDelay,
+      inviteCode: config.inviteCode,
     },
     cycle
   );

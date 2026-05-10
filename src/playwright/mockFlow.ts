@@ -16,7 +16,7 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 // Emula iPhone 12 — garante que a Uber sirva o fluxo mobile com botão "Tirar foto"
 const MOBILE_DEVICE = devices['iPhone 12'];
 
-// ─── Helpers humanos ──────────────────────────────────────────────────────────
+// ─── Helpers humanos ───────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -203,7 +203,7 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
-// ─── Seleciona cidade no autocomplete ───────────────────────────────────────────
+// ─── Seleciona cidade no autocomplete ─────────────────────────────────────────────
 
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
@@ -505,12 +505,10 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
-// ─── Clica em "Foto do perfil", depois clica "Tirar foto" (modo mobile) ─────────
-// Aguarda KYC até 20s. Se Veriff → fecha aba. Se Socure → mantém aberta.
+// ─── Clica em "Foto do perfil", depois clica "Tirar foto" (modo mobile) ───────────
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
-  // ── Passo 1: clica no item "Foto do perfil" da lista de requisitos ──
   const SELETORES_ITEM = [
     '[data-testid="stepItem profilePhoto"]',
     '[data-dgui="requirement-list-item"]:has-text("Foto do perfil")',
@@ -549,7 +547,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
-  // ── Passo 2: aguarda tela "Tire sua foto do perfil" e clica em "Tirar foto" ──
   globalState.addLog('info', '📸 Aguardando botão "Tirar foto"...', cycle);
 
   const SELETORES_TIRAR = [
@@ -590,7 +587,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
-  // ── Passo 3: aguarda sinal KYC (até 20s) e decide fechar ou manter ──
   globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 20s)...', cycle);
 
   const TIMEOUT_KYC = 20_000;
@@ -603,13 +599,11 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       globalState.addLog('info', `✅ KYC detectado: ${provider} (fonte: ${sinais[0]!.source})`, cycle);
 
       if (provider === 'Veriff') {
-        // Veriff — fecha o contexto para liberar RAM
         globalState.addLog('info', '🗑️ Veriff detectado → fechando aba para liberar RAM', cycle);
         await humanPause(randInt(500, 1000));
         await context.close().catch(() => {});
         contextosPorCiclo.delete(cycle);
       } else {
-        // Socure (ou outro) — mantém aberta
         globalState.addLog('success', `🟢 ${provider} detectado → aba mantida aberta`, cycle);
       }
       return;
@@ -620,8 +614,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   globalState.addLog('warn', '⚠️ KYC não detectado após 20s. Aba mantida aberta para inspeção.', cycle);
 }
 
-// ─── Fingerprint stealth ───────────────────────────────────────────────────────
-
+// ─── Fingerprint stealth ──────────────────────────────────────────────────────────
 const stealthScript = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   const makePlugin = (name, filename, desc, mimeTypes) => {
@@ -718,7 +711,7 @@ const stealthScript = `
   };
 `;
 
-// ─── KYC patterns ─────────────────────────────────────────────────────────────
+// ─── KYC patterns ─────────────────────────────────────────────────────────────────
 
 const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
   { pattern: /socure/i,            provider: 'Socure' },
@@ -741,7 +734,6 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
-// ─── Registra listeners numa Page ─────────────────────────────────────────────
 function registrarListenersPage(page: Page, cycle: number): void {
   page.on('framenavigated', (frame) => {
     const url = frame.url();
@@ -755,7 +747,6 @@ function registrarListenersPage(page: Page, cycle: number): void {
     if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
   });
 
-  // Monitora requisições de rede na page também (complementa o context.route)
   page.on('request', (req) => {
     const url = req.url();
     const provider = detectKycProvider(url);
@@ -767,12 +758,9 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
-// ─── Cria contexto isolado emulando dispositivo mobile ────────────────────────
-
 async function criarContextoIsolado(
   cycle: number
 ): Promise<{ context: BrowserContext; page: Page }> {
-  // Usa emulação de iPhone 12 — garante que a Uber sirva UI mobile com "Tirar foto"
   const context = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -806,7 +794,7 @@ async function criarContextoIsolado(
   return { context, page };
 }
 
-// ─── Flow principal ───────────────────────────────────────────────────────────
+// ─── Flow principal ───────────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
   static async init(headless = false): Promise<void> {
@@ -842,6 +830,7 @@ export class MockPlaywrightFlow {
       tempMailApiKey: string;
       otpTimeout: number;
       extraDelay: number;
+      inviteCode: string;
     },
     cycle: number
   ): Promise<void> {
@@ -858,7 +847,8 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
-      const payload = gerarPayloadCompleto(emailAccount);
+      // inviteCode vem da config do painel — não mais hardcoded
+      const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
       // Etapa 1 — email
@@ -937,7 +927,6 @@ export class MockPlaywrightFlow {
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
 
-      // Só loga "concluído" se a aba ainda estiver aberta (Socure mantém, Veriff fechou)
       const aindaAberta = contextosPorCiclo.has(cycle);
       if (aindaAberta) {
         globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta (Socure).`, cycle);

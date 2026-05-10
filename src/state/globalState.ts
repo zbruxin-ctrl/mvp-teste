@@ -27,7 +27,7 @@ function kycLevel(score: number): KycProviderState['level'] {
   return 'WEAK';
 }
 
-// ─── GlobalState ──────────────────────────────────────────────────────────────
+// ─── GlobalState ─────────────────────────────────────────────────────────────────
 
 class GlobalState {
   private state: AppState = {
@@ -35,13 +35,16 @@ class GlobalState {
     isLoop: false,
     cyclesCompleted: 0,
     cyclesTotal: 0,
+    activeParallel: 0,
     status: 'STOPPED',
     config: {
       cadastroUrl: '',
       tempMailApiKey: '',
+      inviteCode: '',
       otpTimeout: 30000,
       cycleInterval: 60000,
       extraDelay: 2000,
+      parallelCycles: 1,
       headless: true,
     },
     shouldStop: false,
@@ -82,7 +85,6 @@ class GlobalState {
     );
   }
 
-  /** Retorna todos os sinais KYC registrados para um ciclo específico. */
   getKycSignals(cycle: number): KycSignal[] {
     const result: KycSignal[] = [];
     for (const state of Object.values(this.kycProviders)) {
@@ -101,7 +103,7 @@ class GlobalState {
     this.kycProviders = {};
   }
 
-  // ─── Core API ───────────────────────────────────────────────────────────────
+  // ─── Core API ────────────────────────────────────────────────────────────────
 
   setExecutor(fn: CycleExecutor): void {
     this.executor = fn;
@@ -155,7 +157,7 @@ class GlobalState {
     this.state.shouldStop = false;
     this.state.status = 'STARTING';
     this.addLog('info', '🔄 Loop iniciado', 0);
-    await this.runLoop(true);
+    void this.runLoop(true);
   }
 
   async startOnce(): Promise<void> {
@@ -164,27 +166,53 @@ class GlobalState {
     this.state.shouldStop = false;
     this.state.status = 'STARTING';
     this.addLog('info', '▶️ Ciclo único iniciado', 0);
-    await this.runLoop(false);
+    void this.runLoop(false);
   }
 
   private async runLoop(loop: boolean): Promise<void> {
     do {
-      await this.executeCycleWithRetry();
+      await this.executeBatch();
       if (loop && !this.state.shouldStop) {
         this.addLog('info', `⏳ Aguardando ${Math.round(this.state.config.cycleInterval / 1000)}s para próximo ciclo...`);
         await sleep(this.state.config.cycleInterval);
       }
     } while (loop && !this.state.shouldStop);
+
+    if (!this.state.isLoop || this.state.shouldStop) {
+      this.state.status = 'STOPPED';
+      this.state.isRunning = false;
+      this.state.shouldStop = false;
+      this.state.activeParallel = 0;
+      this.addLog('info', '⏹️ Processo finalizado');
+    }
   }
 
-  private async executeCycleWithRetry(): Promise<void> {
+  /**
+   * Dispara N ciclos em paralelo conforme config.parallelCycles.
+   * Aguarda todos terminarem antes de continuar o loop.
+   */
+  private async executeBatch(): Promise<void> {
+    const n = Math.max(1, this.state.config.parallelCycles || 1);
+    this.state.isRunning = true;
+    this.state.status = 'RUNNING';
+    this.addLog('info', `⚡ Iniciando lote de ${n} ciclo(s) em paralelo...`);
+
+    const promises = Array.from({ length: n }, () => {
+      this.currentCycle += 1;
+      this.state.cyclesTotal += 1;
+      this.state.activeParallel += 1;
+      const cycle = this.currentCycle;
+      return this.executeCycleWithRetry(cycle).finally(() => {
+        this.state.activeParallel = Math.max(0, this.state.activeParallel - 1);
+      });
+    });
+
+    await Promise.allSettled(promises);
+  }
+
+  private async executeCycleWithRetry(cycle: number): Promise<void> {
     const MAX_RETRIES = 3;
     const BACKOFF = [0, 5000, 15000];
-
-    this.currentCycle += 1;
-    this.state.cyclesTotal += 1;
-    this.state.status = 'RUNNING';
-    this.state.isRunning = true;
 
     let lastError: string = 'Erro desconhecido';
 
@@ -193,7 +221,7 @@ class GlobalState {
 
       const backoff = BACKOFF[attempt - 1] ?? 15000;
       if (backoff > 0) {
-        this.addLog('warn', `⏳ Retry #${attempt} em ${backoff / 1000}s...`, this.currentCycle);
+        this.addLog('warn', `⏳ Retry #${attempt} em ${backoff / 1000}s...`, cycle);
         await sleep(backoff);
       }
 
@@ -201,30 +229,24 @@ class GlobalState {
         this.addLog(
           'info',
           attempt === 1
-            ? `🚀 Iniciando ciclo #${this.currentCycle}`
-            : `🔁 Ciclo #${this.currentCycle} — tentativa ${attempt}/${MAX_RETRIES}`,
-          this.currentCycle
+            ? `🚀 Iniciando ciclo #${cycle}`
+            : `🔁 Ciclo #${cycle} — tentativa ${attempt}/${MAX_RETRIES}`,
+          cycle
         );
 
         if (!this.executor) throw new Error('Nenhum executor registrado.');
 
-        await this.executor(this.state.config, this.currentCycle);
+        await this.executor(this.state.config, cycle);
 
         this.state.cyclesCompleted += 1;
-        this.addLog('success', `✅ Ciclo #${this.currentCycle} concluído!`, this.currentCycle);
-        this.state.isRunning = false;
-        if (!this.state.isLoop || this.state.shouldStop) {
-          this.state.status = 'STOPPED';
-          this.state.shouldStop = false;
-          this.addLog('info', '⏹️ Processo finalizado', this.currentCycle);
-        }
+        this.addLog('success', `✅ Ciclo #${cycle} concluído!`, cycle);
         return;
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'Erro desconhecido';
         this.addLog(
           'error',
           `❌ Tentativa ${attempt}/${MAX_RETRIES} falhou: ${lastError}`,
-          this.currentCycle
+          cycle
         );
         await sleep(2000);
       }
@@ -232,13 +254,7 @@ class GlobalState {
 
     this.state.status = 'ERROR';
     this.state.lastError = lastError;
-    this.addLog('error', `💀 Ciclo #${this.currentCycle} falhou após ${MAX_RETRIES} tentativas: ${lastError}`, this.currentCycle);
-    this.state.isRunning = false;
-    if (!this.state.isLoop || this.state.shouldStop) {
-      this.state.status = 'STOPPED';
-      this.state.shouldStop = false;
-      this.addLog('info', '⏹️ Processo finalizado', this.currentCycle);
-    }
+    this.addLog('error', `💀 Ciclo #${cycle} falhou após ${MAX_RETRIES} tentativas: ${lastError}`, cycle);
   }
 }
 

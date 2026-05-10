@@ -46,47 +46,45 @@ const rand = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 
 /**
  * Gera um número de celular brasileiro válido.
- *
  * Formato retornado: só dígitos, sem máscara — ex: "11987654321"
- * (DDD 2 dígitos + 9 + 8 dígitos aleatórios)
- *
- * Caso precise do formato com máscara, use gerarTelefoneFormatado().
  */
 export function gerarTelefone(): string {
   const ddd = rand(DDDS);
-  // 8 dígitos finais: 10000000–99999999 garante sempre 8 dígitos
   const sufixo = Math.floor(10000000 + Math.random() * 90000000).toString();
-  // Celular brasileiro: DDD + 9 (dígito fixo) + 8 dígitos
   return `${ddd}9${sufixo}`;
 }
 
-/**
- * Mesma lógica, mas no formato visual: (11) 98765-4321
- * Útil para exibir nos logs.
- */
 export function gerarTelefoneFormatado(): string {
-  const raw = gerarTelefone(); // ex: "11987654321" (11 dígitos)
+  const raw = gerarTelefone();
   const ddd = raw.substring(0, 2);
-  const parte1 = raw.substring(2, 7);  // 5 dígitos: 9XXXX
-  const parte2 = raw.substring(7);     // 4 dígitos
+  const parte1 = raw.substring(2, 7);
+  const parte2 = raw.substring(7);
   return `(${ddd}) ${parte1}-${parte2}`;
 }
 
-/** @deprecated Use gerarTelefone() — esta função gerava fixo de 8 dígitos (inválido) */
+/** @deprecated Use gerarTelefone() */
 export function gerarTelefoneFixo(): string { return gerarTelefone(); }
 
 export function gerarNome(): string { return rand(NOMES_MASCULINOS); }
 export function gerarSobrenome(): string { return rand(SOBRENOMES); }
 
-export function gerarPayloadCompleto(emailAccount?: EmailAccount): RegistrationPayload {
+/**
+ * Gera o payload completo para um ciclo de cadastro.
+ * @param emailAccount - conta de email temporário criada
+ * @param inviteCode   - código de indicação vindo da config do painel
+ */
+export function gerarPayloadCompleto(
+  emailAccount?: EmailAccount,
+  inviteCode?: string
+): RegistrationPayload {
   return {
     email: emailAccount?.email ?? `test${Math.floor(Math.random() * 10000)}@tempmail.lol`,
-    telefone: gerarTelefone(),   // só dígitos — o campo da Uber aceita direto
+    telefone: gerarTelefone(),
     senha: 'connect@10',
     nome: gerarNome(),
     sobrenome: gerarSobrenome(),
     localizacao: 'Itajubá, MG, Brasil',
-    codigoIndicacao: 'gkd2n7c',
+    codigoIndicacao: inviteCode ?? '',
   };
 }
 
