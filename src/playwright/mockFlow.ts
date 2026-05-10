@@ -621,8 +621,8 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  const POLL_INTERVAL  = 5_000;
-  const JANELA_MS = Math.max(20_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
+  // Divide o timeout total igualmente entre as tentativas, com mínimo de 30s por janela
+  const JANELA_MS = Math.max(30_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
     'button:has-text("Reenviar")',
@@ -641,17 +641,17 @@ async function aguardarOTPComRetry(
       cycle
     );
 
-    const fimJanela = Date.now() + JANELA_MS;
-    while (Date.now() < fimJanela) {
-      try {
-        const otp = await client.waitForOTP(email, POLL_INTERVAL);
-        if (otp) {
-          globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
-          return otp;
-        }
-      } catch { /* continua polling */ }
-      if (Date.now() >= fimJanela) break;
-      await humanPause(POLL_INTERVAL);
+    try {
+      // Passa a janela completa como timeout para o client — ele controla o polling interno
+      const otp = await client.waitForOTP(email, JANELA_MS);
+      if (otp) {
+        globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
+        return otp;
+      }
+    } catch (err) {
+      // Se for parada manual, propaga imediatamente
+      if (err instanceof Error && err.message.includes('Parado')) throw err;
+      globalState.addLog('warn', `⚠️ OTP tentativa ${tentativa} falhou: ${err instanceof Error ? err.message : err}`, cycle);
     }
 
     if (tentativa < MAX_TENTATIVAS) {
