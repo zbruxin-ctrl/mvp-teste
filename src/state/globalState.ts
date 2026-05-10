@@ -4,7 +4,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export type CycleExecutor = (config: Config, cycle: number) => Promise<void>;
 
-// ─── KYC State ────────────────────────────────────────────────────────────────
+// ─── KYC State ────────────────────────────────────────────────────────────────────────
 
 export interface KycSignal {
   provider: 'Socure' | 'Veriff' | string;
@@ -30,7 +30,7 @@ function kycLevel(score: number): KycProviderState['level'] {
   return 'WEAK';
 }
 
-// ─── Helpers de proxy ─────────────────────────────────────────────────────────
+// ─── Helpers de proxy ─────────────────────────────────────────────────────────────
 
 /**
  * Parseia uma string de proxy em ProxyConfig.
@@ -73,7 +73,7 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   return null;
 }
 
-// ─── GlobalState ──────────────────────────────────────────────────────────────
+// ─── GlobalState ─────────────────────────────────────────────────────────────────────
 
 class GlobalState {
   private state: AppState = {
@@ -86,6 +86,7 @@ class GlobalState {
     config: {
       cadastroUrl: '',
       tempMailApiKey: '',
+      emailProvider: 'temp-mail.io',
       inviteCode: '',
       otpTimeout: 30000,
       cycleInterval: 60000,
@@ -104,7 +105,7 @@ class GlobalState {
   // KYC isolado por ciclo: cycle → provider → KycProviderState
   private kycByCycle: KycByCycle = {};
 
-  // ─── Proxy API ────────────────────────────────────────────────────────────
+  // ─── Proxy API ───────────────────────────────────────────────────────────────────
 
   getProxyForCycle(cycle: number): ProxyConfig | undefined {
     const proxies = this.state.config.proxies;
@@ -119,7 +120,7 @@ class GlobalState {
     return proxy;
   }
 
-  // ─── KYC API ──────────────────────────────────────────────────────────────
+  // ─── KYC API ────────────────────────────────────────────────────────────────────
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
     if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
@@ -165,7 +166,7 @@ class GlobalState {
     this.kycByCycle = {};
   }
 
-  // ─── Core API ─────────────────────────────────────────────────────────────
+  // ─── Core API ─────────────────────────────────────────────────────────────────────
 
   setExecutor(fn: CycleExecutor): void {
     this.executor = fn;
@@ -190,7 +191,6 @@ class GlobalState {
 
   addLog(level: LogEntry['level'], message: string, cycle?: number): void {
     this.logs.unshift({ timestamp: new Date().toISOString(), level, message, cycle });
-    // Etapa 9: logs crescem livremente (sem limite), não afeta o processo
   }
 
   stop(): void {
@@ -269,7 +269,6 @@ class GlobalState {
     let lastError = 'Erro desconhecido';
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      // Etapa 10: verifica shouldStop ANTES do backoff para parar imediatamente
       if (this.state.shouldStop) {
         this.addLog('info', `🛑 Ciclo #${cycle} interrompido (shouldStop)`, cycle);
         return;
@@ -278,7 +277,6 @@ class GlobalState {
       const backoff = BACKOFF[attempt - 1] ?? 15000;
       if (backoff > 0) {
         this.addLog('warn', `⏳ Retry #${attempt} em ${backoff / 1000}s...`, cycle);
-        // Espera o backoff em fatias de 500ms para reagir ao shouldStop
         const end = Date.now() + backoff;
         while (Date.now() < end) {
           if (this.state.shouldStop) {
@@ -304,7 +302,6 @@ class GlobalState {
         return;
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'Erro desconhecido';
-        // Se foi parado pelo usuário, não tenta novamente
         if (this.state.shouldStop || lastError.includes('Parado pelo usuário')) {
           this.addLog('info', `🛑 Ciclo #${cycle} encerrado pelo usuário`, cycle);
           return;
