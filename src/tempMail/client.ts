@@ -10,7 +10,6 @@ import { OTPParser } from '../utils/otpParser';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TempMailClient  (temp-mail.io)
-// Docs: https://docs.temp-mail.io
 // ─────────────────────────────────────────────────────────────────────────────
 export class TempMailClient implements IEmailClient {
   private config: TempMailConfig;
@@ -100,7 +99,6 @@ export class TempMailClient implements IEmailClient {
               if (otp) { globalState.addLog('success', `🎉 OTP encontrado: ${otp}`); return otp; }
             } catch { /* ignora erro individual */ }
           }
-          // FIX: atualiza contador mesmo quando nenhum OTP foi encontrado nas mensagens novas
           lastMessageCount = messages.length;
         }
       } catch (e) {
@@ -119,8 +117,6 @@ export class TempMailClient implements IEmailClient {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MailTmClient  (mail.tm)
-// Docs: https://docs.mail.tm
-// Não requer API key — cria conta com endereço+senha e obtém JWT token.
 // ─────────────────────────────────────────────────────────────────────────────
 export class MailTmClient implements IEmailClient {
   private baseUrl = 'https://api.mail.tm';
@@ -169,11 +165,9 @@ export class MailTmClient implements IEmailClient {
     }
   }
 
-  /** Busca um domínio disponível e cria uma conta com endereço aleatório */
   async createRandomEmail(): Promise<EmailAccount> {
     globalState.addLog('info', '📧 [mail.tm] Buscando domínios disponíveis...');
 
-    // GET /domains — retorna lista paginada; pega o primeiro domínio ativo
     const domainsResp = await this.request<{ 'hydra:member': Array<{ domain: string; isActive: boolean }> }>(
       '/domains?page=1'
     );
@@ -187,14 +181,12 @@ export class MailTmClient implements IEmailClient {
 
     globalState.addLog('info', `📧 [mail.tm] Criando conta: ${address}`);
 
-    // POST /accounts — cria a conta
     await this.request<{ id: string; address: string }>(
       '/accounts',
       'POST',
       { address, password }
     );
 
-    // POST /token — obtém JWT
     const tokenResp = await this.request<{ id: string; token: string }>(
       '/token',
       'POST',
@@ -218,8 +210,6 @@ export class MailTmClient implements IEmailClient {
     return resp['hydra:member'] ?? [];
   }
 
-  // FIX: API mail.tm retorna 'intro' em emails curtos (OTPs) em vez de 'text'.
-  // Adicionado fallback: intro → text, para garantir que o OTP seja capturado.
   private async getFullMessage(id: string): Promise<{ text: string; html: string }> {
     const resp = await this.request<{ text?: string; html?: string; intro?: string }>(
       `/messages/${id}`,
@@ -237,27 +227,38 @@ export class MailTmClient implements IEmailClient {
     const startTime = Date.now();
     let lastMessageCount = 0;
     const POLL_INTERVAL_MS = 8_000;
-    const INITIAL_WAIT_MS  = 20_000;
+    const INITIAL_WAIT_MS  = 8_000;
 
     globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`);
 
     if (!this.authToken) throw new Error('Mail.tm: não autenticado — chame createRandomEmail() primeiro');
 
+    // Espera inicial
+    globalState.addLog('info', `⏳ [mail.tm] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`);
     const inicioEspera = Date.now();
     while (Date.now() - inicioEspera < INITIAL_WAIT_MS) {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) throw new Error('Parado pelo usuário');
       await new Promise<void>(r => setTimeout(r, 500));
     }
 
+    let tentativaPoll = 0;
     while (Date.now() - startTime < timeoutMs) {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) throw new Error('Parado pelo usuário');
+
+      tentativaPoll++;
+      globalState.addLog('info', `🔄 [mail.tm] Poll #${tentativaPoll} — buscando mensagens...`);
+
       try {
         const messages = await this.listMessages();
+        globalState.addLog('info', `📬 [mail.tm] Caixa com ${messages.length} mensagem(s) (última contagem: ${lastMessageCount})`);
+
         if (messages.length > lastMessageCount) {
-          globalState.addLog('info', `📨 [mail.tm] ${messages.length} mensagem(s) — verificando OTP...`);
+          globalState.addLog('info', `📨 [mail.tm] ${messages.length - lastMessageCount} mensagem(s) nova(s) — verificando OTP...`);
           for (const msg of messages.slice(lastMessageCount).reverse()) {
+            globalState.addLog('info', `📧 [mail.tm] Lendo mensagem: "${msg.subject}" de ${msg.from.address}`);
             try {
               const full = await this.getFullMessage(msg.id);
+              globalState.addLog('info', `📄 [mail.tm] Body text: ${full.text.slice(0, 120)}`);
               const mailMsg: MailMessage = {
                 mail_id: msg.id,
                 mail_from: msg.from.address,
@@ -269,17 +270,25 @@ export class MailTmClient implements IEmailClient {
                 created_at: msg.createdAt,
               };
               const otp = OTPParser.extractFromMessage(mailMsg);
-              if (otp) { globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`); return otp; }
-            } catch { /* ignora erro individual */ }
+              if (otp) {
+                globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`);
+                return otp;
+              } else {
+                globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído da mensagem "${msg.subject}"`);
+              }
+            } catch (e) {
+              globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`);
+            }
           }
-          // FIX: atualiza contador mesmo quando nenhum OTP foi encontrado nas mensagens novas,
-          // evitando reprocessamento infinito das mesmas mensagens nas próximas iterações.
           lastMessageCount = messages.length;
+        } else {
+          globalState.addLog('info', `📭 [mail.tm] Sem mensagens novas — próximo poll em ${POLL_INTERVAL_MS / 1000}s`);
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
-        globalState.addLog('warn', '⚠️ Erro ao verificar mensagens mail.tm, tentando novamente...');
+        globalState.addLog('warn', `⚠️ [mail.tm] Erro no poll #${tentativaPoll}: ${e instanceof Error ? e.message : e}`);
       }
+
       const fimPoll = Date.now() + POLL_INTERVAL_MS;
       while (Date.now() < fimPoll) {
         if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) throw new Error('Parado pelo usuário');
@@ -291,7 +300,7 @@ export class MailTmClient implements IEmailClient {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Factory — instancia o client correto com base no provider
+// Factory
 // ─────────────────────────────────────────────────────────────────────────────
 export function createEmailClient(provider: 'temp-mail.io' | 'mail.tm', apiKey?: string): IEmailClient {
   if (provider === 'mail.tm') {
