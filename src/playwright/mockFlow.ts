@@ -426,7 +426,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   await humanPause(randInt(2000, 3500));
 
   const SELETORES_WHATSAPP = [
-    'button:has-text("N\u00c3O ATIVAR")',
+    'button:has-text("\u00c3O ATIVAR")',
     'button:has-text("Nao ativar")',
     'button:has-text("Not now")',
     'button:has-text("Agora n\u00e3o")',
@@ -505,7 +505,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
-// ─── Clica em "Foto do perfil", depois clica "Tirar foto" (modo mobile) ───────────
+// ─── Clica em "Foto do perfil" → tenta "Tirar foto" em paralelo → detecta KYC ───
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
@@ -547,49 +547,43 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
-  globalState.addLog('info', '📸 Aguardando botão "Tirar foto"...', cycle);
-
+  // ── Tenta clicar no botão de foto em fire-and-forget (não bloqueia o KYC listener) ──
   const SELETORES_TIRAR = [
     '[data-dgui="button"]:has-text("Tirar foto")',
     'button:has-text("Tirar foto")',
+    'button:has-text("Enviar foto")',
+    'button:has-text("Escolher foto")',
     '[data-testid="step-bottom-navigation"] button',
     '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
   ];
 
-  const TIMEOUT_TIRAR = 15_000;
-  const inicioTirar = Date.now();
-  let clicouTirar = false;
-
-  while (Date.now() - inicioTirar < TIMEOUT_TIRAR) {
-    for (const sel of SELETORES_TIRAR) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
-        if (visivel) {
-          const box = await el.boundingBox().catch(() => null);
-          if (box) {
-            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-            await humanPause(randInt(300, 600));
+  void (async () => {
+    for (let tentativa = 0; tentativa < 5; tentativa++) {
+      for (const sel of SELETORES_TIRAR) {
+        try {
+          const el = p.locator(sel).first();
+          const visivel = await el.isVisible({ timeout: 1000 }).catch(() => false);
+          if (visivel) {
+            const box = await el.boundingBox().catch(() => null);
+            if (box) {
+              await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+              await humanPause(randInt(300, 600));
+            }
+            await el.click({ force: true, timeout: 5000 });
+            globalState.addLog('info', `📸 Botão foto clicado (${sel})`, cycle);
+            return;
           }
-          await el.click({ force: true, timeout: 5000 });
-          globalState.addLog('info', `📸 "Tirar foto" clicado (${sel})`, cycle);
-          clicouTirar = true;
-          break;
-        }
-      } catch { /* tenta próximo */ }
+        } catch { /* tenta próximo */ }
+      }
+      await humanPause(2000);
     }
-    if (clicouTirar) break;
-    await humanPause(1000);
-  }
+    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 5 tentativas (KYC listener ainda ativo)', cycle);
+  })();
 
-  if (!clicouTirar) {
-    globalState.addLog('warn', '⚠️ Botão "Tirar foto" não encontrado após 15s, pulando...', cycle);
-    return;
-  }
+  // ── Aguarda sinal KYC independente do botão ──────────────────────────────────
+  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 25s)...', cycle);
 
-  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 20s)...', cycle);
-
-  const TIMEOUT_KYC = 20_000;
+  const TIMEOUT_KYC = 25_000;
   const fimKyc = Date.now() + TIMEOUT_KYC;
 
   while (Date.now() < fimKyc) {
@@ -611,7 +605,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     await humanPause(1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após 20s. Aba mantida aberta para inspeção.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após 25s. Aba mantida aberta para inspeção.', cycle);
 }
 
 // ─── Fingerprint stealth ──────────────────────────────────────────────────────────
@@ -922,16 +916,16 @@ export class MockPlaywrightFlow {
       // Tela do WhatsApp
       await dispensarWhatsApp(p, cycle);
 
-      // Clica em "Foto do perfil" → "Tirar foto" → detecta KYC → fecha se Veriff
+      // Clica em "Foto do perfil" → tenta botão de foto em paralelo → detecta KYC
       await clicarFotoPerfil(p, cycle, context);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
 
       const aindaAberta = contextosPorCiclo.has(cycle);
       if (aindaAberta) {
-        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta (Socure).`, cycle);
+        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
       } else {
-        globalState.addLog('info', `✅ Ciclo #${cycle} concluído! Aba fechada (Veriff descartado).`, cycle);
+        globalState.addLog('info', `✅ Ciclo #${cycle} concluído!`, cycle);
       }
 
     } catch (error) {
