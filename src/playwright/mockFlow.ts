@@ -176,6 +176,24 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
+// ─── Aguarda botão #forward-button ficar habilitado (não disabled) ─────────────────────────────
+
+async function aguardarForwardHabilitado(p: Page, timeoutMs = 12000, cycle: number): Promise<boolean> {
+  const inicio = Date.now();
+  while (Date.now() - inicio < timeoutMs) {
+    try {
+      const disabled = await p.evaluate(() => {
+        const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
+        if (!btn) return true; // ainda não existe
+        return btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
+      });
+      if (!disabled) return true;
+    } catch { /* ignora */ }
+    await humanPause(300);
+  }
+  return false;
+}
+
 // ─── Preencher OTP (multi-estratégia) ───────────────────────────────────────────────
 // O Uber usa inputs separados por dígito. Tenta várias estratégias em ordem:
 // 1. IDs padrão (#EMAIL_OTP_CODE-0, -1, -2, -3)
@@ -1203,8 +1221,6 @@ export class MockPlaywrightFlow {
       await p.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
-      // Aguarda o campo de email ficar visível antes de criar a conta temporária
-      // Isso evita o bug onde createRandomEmail() é chamado mas a página ainda não renderizou o formulário
       globalState.addLog('info', '⏳ Aguardando campo de email ficar visível...', cycle);
       await p.waitForSelector('#PHONE_NUMBER_or_EMAIL_ADDRESS', { state: 'visible', timeout: 30000 });
       globalState.addLog('info', '✅ Campo de email visível — prosseguindo', cycle);
@@ -1221,10 +1237,39 @@ export class MockPlaywrightFlow {
 
       // ─── aguarda OTP e preenche com estratégia robusta ───
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
-      await humanPause(randInt(800, 1400));
+
+      // Pausa natural antes de preencher — dá tempo da UI processar o OTP recebido
+      await humanPause(randInt(1200, 2000));
       await preencherOTP(p, otp, cycle);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
+
+      // Aguarda botão habilitado (Uber habilita após validar todos os dígitos client-side)
+      globalState.addLog('info', '⏳ Aguardando #forward-button habilitar após OTP...', cycle);
+      const habilitado = await aguardarForwardHabilitado(p, 12000, cycle);
+
+      if (habilitado) {
+        globalState.addLog('info', '✅ Botão habilitado — clicando para avançar', cycle);
+        await humanPause(randInt(400, 700));
+        await humanClick(p, '#forward-button');
+      } else {
+        // Fallback: tenta pressionar Enter no último input do OTP
+        globalState.addLog('warn', '⚠️ Botão não habilitou em 12s — tentando Enter no campo OTP', cycle);
+        try {
+          const lastOtpInput = p.locator('#EMAIL_OTP_CODE-3, input[maxlength="1"]').last();
+          const visivel = await lastOtpInput.isVisible({ timeout: 2000 }).catch(() => false);
+          if (visivel) {
+            await lastOtpInput.click({ force: true });
+            await humanPause(randInt(200, 400));
+            await p.keyboard.press('Enter');
+            globalState.addLog('info', '⌨️ Enter pressionado no último campo OTP (fallback)', cycle);
+          } else {
+            // Último recurso: clica no botão de qualquer forma
+            await humanClick(p, '#forward-button');
+          }
+        } catch {
+          await humanClick(p, '#forward-button');
+        }
+      }
+
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
       await humanPause(randInt(400, 900));
