@@ -508,12 +508,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
 }
 
 // ─── KYC: resolve provider dominante por score ────────────────────────────────
-//
-// FIX BUG #1 + BUG #3: em vez de pegar sinais[0] (que pode ser de qualquer
-// provider dependendo da ordem), consultamos o estado por provider e retornamos
-// apenas o provider com o maior score, exigindo score mínimo de 4 para evitar
-// falsos positivos de sinais fracos (weight=3 via network-route).
-//
+
 function resolverProviderDominante(
   cycle: number,
   scoreMinimo = 4
@@ -532,6 +527,94 @@ function resolverProviderDominante(
     }
   }
   return melhor;
+}
+
+// ─── OTP: polling com retentativas e re-envio ─────────────────────────────────
+//
+// Estratégia:
+//   - Divide o otpTimeout em até MAX_TENTATIVAS janelas de polling
+//   - Cada janela tenta a cada POLL_INTERVAL até o tempo da janela acabar
+//   - Se a janela expirar sem OTP → clica em "reenviar" e abre nova janela
+//   - Se não houver botão de reenvio ou todas as tentativas falharem → lança erro
+//
+async function aguardarOTPComRetry(
+  p: Page,
+  client: TempMailClient,
+  email: string,
+  otpTimeout: number,
+  cycle: number
+): Promise<string> {
+  const MAX_TENTATIVAS = 3;
+  const POLL_INTERVAL  = 5_000; // verifica a cada 5s
+  // Cada tentativa tem no máximo (otpTimeout / MAX_TENTATIVAS), mínimo 20s
+  const JANELA_MS = Math.max(20_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
+
+  const SELETORES_REENVIO = [
+    'button:has-text("Reenviar")',
+    'button:has-text("Resend")',
+    'button:has-text("Reenviar código")',
+    'a:has-text("Reenviar")',
+    'a:has-text("Resend")',
+    '[data-testid*="resend"]',
+    'span:has-text("Reenviar")',
+  ];
+
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    globalState.addLog(
+      'info',
+      `🔑 OTP tentativa ${tentativa}/${MAX_TENTATIVAS} — aguardando até ${JANELA_MS / 1000}s...`,
+      cycle
+    );
+
+    const fimJanela = Date.now() + JANELA_MS;
+    while (Date.now() < fimJanela) {
+      try {
+        const otp = await client.waitForOTP(email, POLL_INTERVAL);
+        if (otp) {
+          globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
+          return otp;
+        }
+      } catch {
+        // waitForOTP lançou timeout parcial — continua polling
+      }
+      // Verifica se ainda tem tempo na janela antes de fazer novo poll
+      if (Date.now() >= fimJanela) break;
+      await humanPause(POLL_INTERVAL);
+    }
+
+    // Janela expirou sem OTP
+    if (tentativa < MAX_TENTATIVAS) {
+      globalState.addLog('warn', `⚠️ OTP não chegou em ${JANELA_MS / 1000}s — tentando reenviar...`, cycle);
+
+      let reenvioClicado = false;
+      for (const sel of SELETORES_REENVIO) {
+        try {
+          const el = p.locator(sel).first();
+          const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+          if (visivel) {
+            const box = await el.boundingBox().catch(() => null);
+            if (box) {
+              await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+              await humanPause(randInt(200, 400));
+            }
+            await el.click({ timeout: 5000 });
+            globalState.addLog('info', `🔄 Código reenviado (${sel}) — aguardando nova mensagem...`, cycle);
+            reenvioClicado = true;
+            break;
+          }
+        } catch { /* tenta próximo seletor */ }
+      }
+
+      if (!reenvioClicado) {
+        globalState.addLog('warn', '⚠️ Botão de reenvio não encontrado — aguardando mesma caixa de entrada...', cycle);
+      }
+
+      // Pausa humana antes de iniciar a próxima janela
+      await humanPause(randInt(2000, 4000));
+    }
+  }
+
+  throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas (${(JANELA_MS * MAX_TENTATIVAS) / 1000}s total)`);
 }
 
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
@@ -562,7 +645,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
   ];
 
-  // ── Clica em "Foto do perfil" na lista de requisitos ──────────────────────
   const TIMEOUT_ITEM = 20_000;
   const inicioItem = Date.now();
   let clicouItem = false;
@@ -596,10 +678,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   await humanPause(randInt(1500, 2500));
 
-  // ── FIX BUG #2: clica no botão de foto com await (não mais void fire-and-forget)
-  // Garante que o clique ocorre antes do loop de detecção de KYC começar.
-  // Isso evita a race condition onde o loop de 30s terminava sem o KYC ter sido
-  // disparado porque o botão ainda não tinha sido clicado.
   let botaoFotoClicado = false;
   for (let tentativa = 0; tentativa < 6; tentativa++) {
     for (const sel of SELETORES_TIRAR) {
@@ -633,7 +711,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
   }
 
-  // ── Ação pós-detecção: fecha se Veriff, mantém se Socure/outros ──────────
   const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
       globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
@@ -645,11 +722,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     }
   };
 
-  // ── Ronda 1: aguarda KYC por 30s usando score por provider ───────────────
-  // FIX BUG #1 + BUG #3: usa resolverProviderDominante() que:
-  //   - agrupa sinais por provider (não mistura)
-  //   - exige score mínimo de 4 (evita falsos positivos de network-route weight=3)
-  //   - retorna o provider com maior score acumulado
   globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
   const fimKyc1 = Date.now() + 30_000;
   while (Date.now() < fimKyc1) {
@@ -662,7 +734,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     await humanPause(1000);
   }
 
-  // ── Ronda 2: scroll + re-clique ───────────────────────────────────────────
   globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
   try {
     await p.evaluate('window.scrollTo(0, 0)');
@@ -710,23 +781,15 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
 }
 
-// ─── Stealth script — identidade MOBILE (iPhone 14, iOS 16) ──────────────────
-// IMPORTANTE: platform='iPhone', maxTouchPoints=5, sem Win32, sem plugins desktop.
-// Mantém consistência com o userAgent iPhone 14 definido pelo MOBILE_DEVICE do Playwright.
+// ─── Stealth script ───────────────────────────────────────────────────────────
 
 const stealthScript = `
   (function() {
-    // Remove webdriver flag
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-    // Plataforma e identidade mobile — DEVE ser iPhone, nunca Win32
     Object.defineProperty(navigator, 'platform',          { get: () => 'iPhone' });
     Object.defineProperty(navigator, 'maxTouchPoints',    { get: () => 5 });
     Object.defineProperty(navigator, 'languages',         { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
     Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 6 });
-    // deviceMemory não existe no iOS Safari — removido intencionalmente
-
-    // Sem plugins (iOS Safari não tem plugins de desktop)
     Object.defineProperty(navigator, 'plugins', {
       get: () => {
         const arr = Object.create(PluginArray.prototype);
@@ -737,27 +800,19 @@ const stealthScript = `
         return arr;
       }
     });
-
-    // Conexão mobile
     if (navigator.connection) {
       Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
       Object.defineProperty(navigator.connection, 'rtt',           { get: () => 80 });
       Object.defineProperty(navigator.connection, 'downlink',      { get: () => 8 });
       Object.defineProperty(navigator.connection, 'saveData',      { get: () => false });
     }
-
-    // Screen — iPhone 14: 390x844 logical, devicePixelRatio 3
     Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
     Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-    // Permissions — notificações
     const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
     window.navigator.permissions.query = (p) =>
       p.name === 'notifications'
         ? Promise.resolve({ state: Notification.permission, onchange: null })
         : _origQuery(p);
-
-    // Canvas noise sutil (anti-fingerprint)
     const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
     HTMLCanvasElement.prototype.toDataURL = function(type) {
       const ctx = this.getContext('2d');
@@ -768,8 +823,6 @@ const stealthScript = `
       }
       return origToDataURL.apply(this, arguments);
     };
-
-    // WebGL — mobile GPU genérico (Apple GPU não revela marca real)
     const getParameter = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(param) {
       if (param === 37445) return 'Apple Inc.';
@@ -872,7 +925,6 @@ async function criarContextoIsolado(
     ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
-  // stealthScript ANTES do KYC script — ordem importa
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
@@ -992,9 +1044,8 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
-      const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
-      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
+      // ── OTP com retry e reenvio automático ──────────────────────────────────
+      const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
       await humanPause(randInt(800, 1400));
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
