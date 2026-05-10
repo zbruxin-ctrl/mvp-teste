@@ -49,8 +49,41 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   }
 }
 
+/**
+ * Espera até que não haja nenhum elemento cobrindo o seletor alvo.
+ * Faz polling de até `timeoutMs` verificando se o elemento no topo das
+ * coordenadas centrais do alvo é ele mesmo (ou filho dele).
+ */
+async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 15000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const box = await p.locator(selector).boundingBox();
+      if (!box) { await humanPause(300); continue; }
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      const topEl = await p.evaluateHandle(
+        ({ x, y }) => document.elementFromPoint(x, y),
+        { x: cx, y: cy }
+      );
+      const isTarget = await p.evaluate(
+        ({ el, sel }) => {
+          const target = document.querySelector(sel);
+          return target ? (target === el || target.contains(el as Node)) : false;
+        },
+        { el: topEl, sel: selector }
+      );
+      await topEl.dispose();
+      if (isTarget) return;
+    } catch { /* ignora e repete */ }
+    await humanPause(400);
+  }
+  // Timeout expirou — tenta mesmo assim (pior caso: force click)
+}
+
 async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+  await waitForElementInteractable(p, selector, 12000);
   const box = await p.locator(selector).boundingBox();
   if (box) {
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
@@ -58,7 +91,12 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(50, 100));
   }
-  await p.click(selector);
+  // Tenta clique normal; cai em force se falhar
+  try {
+    await p.click(selector, { timeout: 8000 });
+  } catch {
+    await p.click(selector, { force: true, timeout: 5000 });
+  }
   await p.fill(selector, '');
   await humanPause(randInt(60, 150));
   for (let i = 0; i < value.length; i++) {
@@ -111,15 +149,20 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
 
 async function humanClick(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+  await waitForElementInteractable(p, selector, 8000);
   const box = await p.locator(selector).boundingBox();
   if (box) {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(40, 100));
-    await p.mouse.click(tx, ty);
+    try {
+      await p.mouse.click(tx, ty);
+    } catch {
+      await p.click(selector, { force: true });
+    }
   } else {
-    await p.click(selector);
+    await p.click(selector, { force: true });
   }
 }
 
@@ -1039,8 +1082,9 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-      await humanPause(randInt(800, 1600));
+      // Aguarda estabilizar — networkidle com fallback para não travar em páginas com polling
+      await p.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+      await humanPause(randInt(1200, 2000));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
