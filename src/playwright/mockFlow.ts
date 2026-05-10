@@ -179,22 +179,41 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
-// ─── safeLoadState: aguarda loadState mas NUNCA trava — usa Promise.race com timeout manual.
-// waitForLoadState do Playwright pode congelar indefinidamente em SPAs que não disparam
-// eventos de navegação reais (ex: Uber que faz transição via React Router sem reload).
-async function safeLoadState(
+// ─── pageStable: polling puro que verifica se a página parou de navegar.
+// Substitui completamente o safeLoadState/waitForLoadState — nunca trava porque
+// não usa nenhuma Promise interna do Playwright que pode ficar pendente para sempre.
+// Estratégia: tenta p.evaluate('1') em loop com timeout individual de 1s.
+// Se conseguir avaliar N vezes seguidas sem erro → página estável.
+// Se o loop externo expirar → retorna mesmo assim (nunca lança).
+async function pageStable(
   p: Page,
-  state: 'domcontentloaded' | 'load' | 'networkidle',
   timeoutMs: number,
   cycle: number,
   label = ''
 ): Promise<void> {
   const tag = label ? ` [${label}]` : '';
-  await Promise.race([
-    p.waitForLoadState(state).catch(() => {}),
-    new Promise<void>((r) => setTimeout(r, timeoutMs)),
-  ]);
-  globalState.addLog('info', `✅ safeLoadState(${state})${tag} concluído`, cycle);
+  const deadline = Date.now() + timeoutMs;
+  let okStreak = 0;
+  const STREAK_NEEDED = 2; // 2 polls OK consecutivos = estável
+  const POLL_MS = 400;
+
+  while (Date.now() < deadline) {
+    try {
+      await Promise.race([
+        p.evaluate('1'),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 1000)),
+      ]);
+      okStreak++;
+      if (okStreak >= STREAK_NEEDED) {
+        globalState.addLog('info', `✅ pageStable${tag} (${okStreak} polls OK)`, cycle);
+        return;
+      }
+    } catch {
+      okStreak = 0; // navegação em andamento — reseta streak
+    }
+    await new Promise<void>((r) => setTimeout(r, POLL_MS));
+  }
+  globalState.addLog('info', `⏱️ pageStable${tag} timeout — prosseguindo`, cycle);
 }
 
 // ─── humanClickForwardButton ──────────────────────────────────────────────────────────
@@ -205,15 +224,18 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
   let habilitado = false;
   while (Date.now() - inicio < timeoutMs) {
     try {
-      const disabled = await p.evaluate(() => {
-        const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
-        if (!btn) return true;
-        return btn.disabled
-          || btn.getAttribute('aria-disabled') === 'true'
-          || btn.classList.contains('disabled');
-      });
+      const disabled = await Promise.race([
+        p.evaluate(() => {
+          const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
+          if (!btn) return true;
+          return btn.disabled
+            || btn.getAttribute('aria-disabled') === 'true'
+            || btn.classList.contains('disabled');
+        }),
+        new Promise<true>((_, rej) => setTimeout(() => rej(new Error('t')), 1500)),
+      ]);
       if (!disabled) { habilitado = true; break; }
-    } catch { /* ignora */ }
+    } catch { /* ignora — página navegando ou timeout */ }
     await humanPause(300);
   }
 
@@ -224,20 +246,23 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
   }
 
   // Remove overlays
-  await p.evaluate(`
-    (function() {
-      var btn = document.querySelector('#forward-button');
-      if (!btn) return;
-      var rect = btn.getBoundingClientRect();
-      var cx = rect.left + rect.width / 2;
-      var cy = rect.top  + rect.height / 2;
-      for (var i = 0; i < 10; i++) {
-        var top = document.elementFromPoint(cx, cy);
-        if (!top || top === btn || btn.contains(top)) break;
-        top.style.pointerEvents = 'none';
-      }
-    })()
-  `).catch(() => {});
+  await Promise.race([
+    p.evaluate(`
+      (function() {
+        var btn = document.querySelector('#forward-button');
+        if (!btn) return;
+        var rect = btn.getBoundingClientRect();
+        var cx = rect.left + rect.width / 2;
+        var cy = rect.top  + rect.height / 2;
+        for (var i = 0; i < 10; i++) {
+          var top = document.elementFromPoint(cx, cy);
+          if (!top || top === btn || btn.contains(top)) break;
+          top.style.pointerEvents = 'none';
+        }
+      })()
+    `),
+    new Promise<void>((r) => setTimeout(r, 1500)),
+  ]).catch(() => {});
 
   await humanPause(randInt(200, 400));
 
@@ -261,7 +286,7 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
             btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
             btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
           })()
-        `);
+        `).catch(() => {});
       }
     }
   } else {
@@ -276,13 +301,13 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
           btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
           btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
         })()
-      `);
+      `).catch(() => {});
     }
   }
 
-  // FIX: usa safeLoadState com race/timeout manual — nunca trava mesmo em SPA sem navegação real
+  // FIX: pageStable — polling puro, nunca trava
   globalState.addLog('info', '⏳ Aguardando estabilização pós-clique (até 4s)...', cycle);
-  await safeLoadState(p, 'domcontentloaded', 4000, cycle, 'pós-forward-click');
+  await pageStable(p, 4000, cycle, 'pós-forward-click');
 }
 
 // ─── Aguarda botão #forward-button ficar habilitado ───────────────────────────────────
@@ -290,11 +315,14 @@ async function aguardarForwardHabilitado(p: Page, timeoutMs = 12000, cycle: numb
   const inicio = Date.now();
   while (Date.now() - inicio < timeoutMs) {
     try {
-      const disabled = await p.evaluate(() => {
-        const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
-        if (!btn) return true;
-        return btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
-      });
+      const disabled = await Promise.race([
+        p.evaluate(() => {
+          const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
+          if (!btn) return true;
+          return btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
+        }),
+        new Promise<true>((_, rej) => setTimeout(() => rej(new Error('t')), 1500)),
+      ]);
       if (!disabled) return true;
     } catch { /* ignora */ }
     await humanPause(300);
@@ -791,6 +819,9 @@ function resolverProviderDominante(
 }
 
 // ─── aguardarTelaOTP ─────────────────────────────────────────────────────────────────
+// FIX: sem safeLoadState/waitForLoadState interno.
+// Usa pageStable (polling puro) para esperar a página parar de navegar,
+// depois verifica os seletores. Nunca trava.
 async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Promise<boolean> {
   const SELETORES_OTP = [
     '#EMAIL_OTP_CODE-0',
@@ -806,28 +837,32 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
   const inicio = Date.now();
 
   while (Date.now() - inicio < timeoutMs) {
-    // FIX: p.evaluate sem timeout trava silenciosamente em SPAs durante navegação.
-    // Usa Promise.race com timeout de 2s para garantir que o catch sempre dispara.
+    // Verifica se a página está responsiva via polling puro (sem waitForLoadState)
+    let paginaOk = false;
     try {
       await Promise.race([
-        p.evaluate('1 + 1'),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('eval timeout')), 2000)),
+        p.evaluate('1'),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 1000)),
       ]);
+      paginaOk = true;
     } catch {
-      globalState.addLog('warn', '⚠️ Página navegando — aguardando estabilização...', cycle);
-      await safeLoadState(p, 'domcontentloaded', 10000, cycle, 'aguardarTelaOTP');
-      await humanPause(500);
+      // Página navegando — aguarda estabilizar com pageStable (máx 5s por iteração)
+      globalState.addLog('info', '⚠️ Página navegando — aguardando estabilização...', cycle);
+      await pageStable(p, 5000, cycle, 'aguardarTelaOTP');
+      await humanPause(300);
       continue;
     }
 
-    for (const sel of SELETORES_OTP) {
-      try {
-        const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
-        if (visivel) {
-          globalState.addLog('info', `✅ Tela de OTP detectada (${sel})`, cycle);
-          return true;
-        }
-      } catch { /* tenta próximo */ }
+    if (paginaOk) {
+      for (const sel of SELETORES_OTP) {
+        try {
+          const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
+          if (visivel) {
+            globalState.addLog('info', `✅ Tela de OTP detectada (${sel})`, cycle);
+            return true;
+          }
+        } catch { /* tenta próximo */ }
+      }
     }
 
     await humanPause(800);
