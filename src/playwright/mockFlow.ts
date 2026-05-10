@@ -216,11 +216,9 @@ async function pageStable(
 }
 
 // ─── humanClickForwardButton ──────────────────────────────────────────────────────────
-// FIX: removido safeLoadState/waitForLoadState pós-clique.
-// Pós-clique usa apenas:
-//   1. delay fixo curto (1s)
-//   2. polling de desaparecimento/desabilitação do botão como confirmação de navegação
-//   3. pageStable só se o botão ainda estiver visível e habilitado (página pode não ter navegado ainda)
+// FIX: pós-clique usa APENAS setTimeout puro — zero p.evaluate no polling de confirmação.
+// Isso evita que o Promise.race fique pendurado durante a navegação (quando p.evaluate
+// pode rejeitar de forma não-determinística ou simplesmente não resolver).
 async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
   globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
 
@@ -310,33 +308,12 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     }
   }
 
-  // FIX pós-clique: delay fixo curto — sem waitForLoadState, sem pageStable longo.
-  // O pageStable só é chamado UMA VEZ com timeout curto e nunca bloqueia o fluxo.
-  await new Promise<void>((r) => setTimeout(r, 1000));
-
-  // Confirma navegação verificando se o botão sumiu ou foi desabilitado (polling rápido, máx 3s)
-  const fimConfirma = Date.now() + 3000;
-  while (Date.now() < fimConfirma) {
-    try {
-      const btnSumiu = await Promise.race([
-        p.evaluate(() => {
-          const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
-          if (!btn) return true; // sumiu — navegou
-          return btn.disabled || btn.getAttribute('aria-disabled') === 'true';
-        }),
-        new Promise<false>((_, rej) => setTimeout(() => rej(new Error('t')), 800)),
-      ]);
-      if (btnSumiu) {
-        globalState.addLog('info', '✅ Navegação confirmada (botão desabilitado/removido)', cycle);
-        return;
-      }
-    } catch { /* ignora */ }
-    await new Promise<void>((r) => setTimeout(r, 300));
-  }
-
-  // Se o botão ainda está visível/habilitado após 3s, faz um pageStable curto de 2s apenas
-  globalState.addLog('info', '⏳ Botão ainda visível — aguardando estabilização (2s)...', cycle);
-  await pageStable(p, 2000, cycle, 'pós-forward-click');
+  // FIX pós-clique: setTimeout PURO — sem nenhum p.evaluate.
+  // O clique já foi disparado. A navegação vai acontecer (ou não).
+  // Aguardar com p.evaluate durante navegação é exatamente o que travava.
+  globalState.addLog('info', '⏳ Aguardando navegação pós-click (2s fixo)...', cycle);
+  await new Promise<void>((r) => setTimeout(r, 2000));
+  globalState.addLog('info', '✅ Pós-forward-click concluído — prosseguindo', cycle);
 }
 
 // ─── Aguarda botão #forward-button ficar habilitado ───────────────────────────────────
@@ -1383,8 +1360,6 @@ export class MockPlaywrightFlow {
     const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
 
     try {
-      // FIX: removido waitForLoadState('networkidle') solto — ele pode travar.
-      // Usa apenas domcontentloaded + timeout curto no catch.
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
@@ -1419,97 +1394,79 @@ export class MockPlaywrightFlow {
 
       globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await humanPause(randInt(400, 700));
+      await humanClickForwardButton(p, cycle);
 
-      // humanClickForwardButton agora não usa waitForLoadState internamente
-      await humanClickForwardButton(p, cycle, 15000);
+      await humanPause(randInt(800, 1400));
+      await dispensarCookies(p);
 
-      // aguardarTelaOTP agora é polling puro — sem waitForLoadState
+      globalState.addLog('info', '📝 Preenchendo nome...', cycle);
+      await humanPause(randInt(600, 1000));
+
+      await humanType(p, '#FIRST_NAME', payload.nome);
+      await humanPause(randInt(400, 700));
+      await humanType(p, '#LAST_NAME', payload.sobrenome);
+      await humanPause(randInt(400, 700));
+
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
+      globalState.addLog('info', '📅 Preenchendo data de nascimento...', cycle);
+      await humanType(p, '#DOB_MONTH', payload.mes);
+      await humanPause(randInt(300, 600));
+      await humanType(p, '#DOB_DAY', payload.dia);
+      await humanPause(randInt(300, 600));
+      await humanType(p, '#DOB_YEAR', payload.ano);
+      await humanPause(randInt(400, 700));
+
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
+      globalState.addLog('info', '📍 Selecionando cidade...', cycle);
+      await selecionarCidade(p, payload.cidade, cycle);
+      await humanPause(randInt(400, 700));
+
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
+      globalState.addLog('info', '☑️ Aceitando termos...', cycle);
+      await aceitarTermos(p);
+      await humanPause(randInt(400, 700));
+
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
       await aguardarTelaOTP(p, cycle, 20_000);
 
-      const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
-
-      await humanPause(randInt(1200, 2000));
+      const otp = await aguardarOTPComRetry(p, client, emailAccount, config.otpTimeout, cycle);
       await preencherOTP(p, otp, cycle);
+      await humanPause(randInt(500, 900));
 
-      globalState.addLog('info', '⏳ Aguardando #forward-button habilitar após OTP...', cycle);
-      const habilitado = await aguardarForwardHabilitado(p, 12000, cycle);
-
-      if (habilitado) {
-        globalState.addLog('info', '✅ Botão habilitado — clicando para avançar', cycle);
-        await humanPause(randInt(400, 700));
-        await humanClick(p, '#forward-button');
-      } else {
-        globalState.addLog('warn', '⚠️ Botão não habilitou em 12s — tentando Enter no campo OTP', cycle);
-        try {
-          const lastOtpInput = p.locator('#EMAIL_OTP_CODE-3, input[maxlength="1"]').last();
-          const visivel = await lastOtpInput.isVisible({ timeout: 2000 }).catch(() => false);
-          if (visivel) {
-            await lastOtpInput.click({ force: true });
-            await humanPause(randInt(200, 400));
-            await p.keyboard.press('Enter');
-            globalState.addLog('info', '⌨️ Enter pressionado no último campo OTP (fallback)', cycle);
-          } else {
-            await humanClick(p, '#forward-button');
-          }
-        } catch {
-          await humanClick(p, '#forward-button');
-        }
-      }
-
-      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
-
-      await humanPause(randInt(400, 900));
-      await humanType(p, '#PHONE_NUMBER', payload.telefone);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
-
-      await humanPause(randInt(400, 900));
-      await humanType(p, '#PASSWORD', payload.senha);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', '🔒 Senha preenchida', cycle);
-
-      await humanPause(randInt(400, 900));
-      await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(200, 400));
-      await humanType(p, '#LAST_NAME', payload.sobrenome);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
-
-      await aceitarTermos(p);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await humanClick(p, '#forward-button');
-
-      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
-      await humanPause(randInt(700, 1400));
-      globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
-
-      await dispensarCookies(p);
-      await selecionarCidade(p, payload.localizacao, cycle);
-      await dispensarCookies(p);
-
-      await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await dispensarCookies(p);
-      await humanClick(p, '[data-testid="submit-button"]');
-      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(1000, 2000));
 
       await dispensarWhatsApp(p, cycle);
       await humanPause(randInt(1000, 2000));
+
       await clicarFotoPerfil(p, cycle, context);
 
+      if (config.extraDelay > 0) {
+        globalState.addLog('info', `⏳ Extra delay: ${config.extraDelay}ms`, cycle);
+        await humanPause(config.extraDelay);
+      }
+
+      globalState.addLog('success', `✅ Ciclo #${cycle} concluído`, cycle);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      globalState.addLog('error', `❌ Ciclo #${cycle} falhou: ${msg}`, cycle);
-      try {
-        await ArtifactsManager.saveErrorArtifacts(p, cycle);
-      } catch { /* ignora */ }
+      globalState.addLog('error', `❌ Ciclo #${cycle} erro: ${msg}`, cycle);
       throw err;
+    } finally {
+      const ctx = contextosPorCiclo.get(cycle);
+      if (ctx) {
+        await ctx.close().catch(() => {});
+        contextosPorCiclo.delete(cycle);
+      }
     }
   }
 }
