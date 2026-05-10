@@ -1,6 +1,6 @@
 import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { Browser, Page, BrowserContext } from 'playwright';
+import { Browser, Page, BrowserContext, devices } from 'playwright';
 import { globalState } from '../state/globalState';
 import { TempMailClient } from '../tempMail/client';
 import { gerarPayloadCompleto } from '../utils/dataGenerators';
@@ -12,8 +12,9 @@ let browser: Browser | null = null;
 const contextosPorCiclo = new Map<number, BrowserContext>();
 
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
-const BRAVE_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.202 Safari/537.36';
+
+// Emula iPhone 12 — garante que a Uber sirva o fluxo mobile com botão "Tirar foto"
+const MOBILE_DEVICE = devices['iPhone 12'];
 
 // ─── Helpers humanos ──────────────────────────────────────────────────────────
 
@@ -28,10 +29,10 @@ async function humanPause(baseMs: number): Promise<void> {
 
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   const steps = randInt(5, 10);
-  const startX = randInt(200, 800);
-  const startY = randInt(200, 500);
-  const cpX = startX + (x - startX) * 0.4 + randInt(-40, 40);
-  const cpY = startY + (y - startY) * 0.4 + randInt(-30, 30);
+  const startX = randInt(50, 300);
+  const startY = randInt(100, 400);
+  const cpX = startX + (x - startX) * 0.4 + randInt(-20, 20);
+  const cpY = startY + (y - startY) * 0.4 + randInt(-15, 15);
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const bx = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * cpX + t * t * x);
@@ -204,20 +205,9 @@ async function aceitarTermos(p: Page): Promise<void> {
 
 // ─── Seleciona cidade no autocomplete ───────────────────────────────────────────
 
-/**
- * Digita a cidade no autocomplete da Uber e clica na opção correta do dropdown.
- *
- * Estratégia:
- * 1. Digita apenas o nome da cidade (ex: "Itajubá") caractere por caractere.
- * 2. Aguarda o dropdown aparecer (até 8s).
- * 3. Varre as opções visíveis e clica na primeira que contém o nome da cidade
- *    ignorando acentuação (normalize NFD).
- * 4. Fallback: se nenhuma opção bater, clica na primeira opção e loga aviso.
- */
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
 
-  // Seletores possíveis para os itens do dropdown
   const DROPDOWN_ITEM_SELS = [
     '[data-testid="flow-type-city-selector-v2-option"]',
     '[role="option"]',
@@ -227,17 +217,14 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
     '[class*="item"]',
   ];
 
-  // Normaliza texto para comparação sem acento
   const norm = (s: string) =>
     s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
-  // Nome base para busca (só a cidade, sem estado/país)
-  const nomeBusca = cidade.split(',')[0]!.trim(); // ex: "Itajubá"
+  const nomeBusca = cidade.split(',')[0]!.trim();
   const nomeBuscaNorm = norm(nomeBusca);
 
   globalState.addLog('info', `📍 Digitando cidade: "${nomeBusca}"`, cycle);
 
-  // 1. Foca e digita só o nome da cidade
   await p.waitForSelector(INPUT_SEL, { state: 'visible', timeout: 15000 });
   const box = await p.locator(INPUT_SEL).boundingBox().catch(() => null);
   if (box) {
@@ -253,7 +240,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
     if (Math.random() < 0.08) await humanPause(randInt(80, 200));
   }
 
-  // 2. Aguarda dropdown aparecer
   globalState.addLog('info', '⏳ Aguardando dropdown de cidade...', cycle);
   let itemSel: string | null = null;
   const fimDropdown = Date.now() + 8_000;
@@ -273,7 +259,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   }
 
   if (!itemSel) {
-    // Fallback de teclado se o dropdown não aparecer
     globalState.addLog('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter como fallback', cycle);
     await humanPause(randInt(300, 600));
     await p.keyboard.press('ArrowDown');
@@ -284,7 +269,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
 
   await humanPause(randInt(300, 600));
 
-  // 3. Varre opções e clica na correta
   const opcoes = p.locator(itemSel);
   const total = await opcoes.count();
   globalState.addLog('info', `📍 Dropdown aberto com ${total} opções`, cycle);
@@ -297,11 +281,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
       if (norm(texto).includes(nomeBuscaNorm)) {
         const opcaoBox = await opcao.boundingBox().catch(() => null);
         if (opcaoBox) {
-          await humanMouseMove(
-            p,
-            opcaoBox.x + opcaoBox.width / 2,
-            opcaoBox.y + opcaoBox.height / 2
-          );
+          await humanMouseMove(p, opcaoBox.x + opcaoBox.width / 2, opcaoBox.y + opcaoBox.height / 2);
           await humanPause(randInt(150, 300));
         }
         await opcao.click({ timeout: 5000 });
@@ -312,17 +292,12 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
     } catch { /* ignora e tenta proxima */ }
   }
 
-  // 4. Fallback: clica na primeira opção
   if (!clicou) {
     globalState.addLog('warn', `⚠️ Nenhuma opção com "${nomeBusca}" encontrada, clicando na primeira`, cycle);
     try {
       const primeiraBox = await opcoes.first().boundingBox().catch(() => null);
       if (primeiraBox) {
-        await humanMouseMove(
-          p,
-          primeiraBox.x + primeiraBox.width / 2,
-          primeiraBox.y + primeiraBox.height / 2
-        );
+        await humanMouseMove(p, primeiraBox.x + primeiraBox.width / 2, primeiraBox.y + primeiraBox.height / 2);
         await humanPause(randInt(150, 300));
       }
       await opcoes.first().click({ timeout: 5000 });
@@ -530,24 +505,25 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
-// ─── Clica em "Foto do perfil" e aguarda sinal KYC ativo (até 15s) ──────────────
-async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
-  globalState.addLog('info', '📸 Aguardando item "Foto do perfil"...', cycle);
+// ─── Clica em "Foto do perfil", depois clica "Tirar foto" (modo mobile) ─────────
+// Aguarda KYC até 20s. Se Veriff → fecha aba. Se Socure → mantém aberta.
+async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
+  globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
-  const SELETORES = [
+  // ── Passo 1: clica no item "Foto do perfil" da lista de requisitos ──
+  const SELETORES_ITEM = [
     '[data-testid="stepItem profilePhoto"]',
     '[data-dgui="requirement-list-item"]:has-text("Foto do perfil")',
     'a:has-text("Foto do perfil")',
     '[data-tracking-name="requirement-list-item"]:has-text("Foto")',
   ];
 
-  const TIMEOUT_ACHAR = 20_000;
-  const TIMEOUT_KYC  = 15_000;
-  const inicio = Date.now();
+  const TIMEOUT_ITEM = 20_000;
+  const inicioItem = Date.now();
+  let clicouItem = false;
 
-  let clicou = false;
-  while (Date.now() - inicio < TIMEOUT_ACHAR) {
-    for (const sel of SELETORES) {
+  while (Date.now() - inicioItem < TIMEOUT_ITEM) {
+    for (const sel of SELETORES_ITEM) {
       try {
         const el = p.locator(sel).first();
         const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
@@ -559,33 +535,89 @@ async function clicarFotoPerfil(p: Page, cycle: number): Promise<void> {
           }
           await el.click({ force: true, timeout: 5000 });
           globalState.addLog('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
-          clicou = true;
+          clicouItem = true;
           break;
         }
       } catch { /* tenta próximo seletor */ }
     }
-    if (clicou) break;
+    if (clicouItem) break;
     await humanPause(1500);
   }
 
-  if (!clicou) {
+  if (!clicouItem) {
     globalState.addLog('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle);
     return;
   }
 
-  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 15s)...', cycle);
+  // ── Passo 2: aguarda tela "Tire sua foto do perfil" e clica em "Tirar foto" ──
+  globalState.addLog('info', '📸 Aguardando botão "Tirar foto"...', cycle);
 
+  const SELETORES_TIRAR = [
+    '[data-dgui="button"]:has-text("Tirar foto")',
+    'button:has-text("Tirar foto")',
+    '[data-testid="step-bottom-navigation"] button',
+    '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
+  ];
+
+  const TIMEOUT_TIRAR = 15_000;
+  const inicioTirar = Date.now();
+  let clicouTirar = false;
+
+  while (Date.now() - inicioTirar < TIMEOUT_TIRAR) {
+    for (const sel of SELETORES_TIRAR) {
+      try {
+        const el = p.locator(sel).first();
+        const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
+        if (visivel) {
+          const box = await el.boundingBox().catch(() => null);
+          if (box) {
+            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+            await humanPause(randInt(300, 600));
+          }
+          await el.click({ force: true, timeout: 5000 });
+          globalState.addLog('info', `📸 "Tirar foto" clicado (${sel})`, cycle);
+          clicouTirar = true;
+          break;
+        }
+      } catch { /* tenta próximo */ }
+    }
+    if (clicouTirar) break;
+    await humanPause(1000);
+  }
+
+  if (!clicouTirar) {
+    globalState.addLog('warn', '⚠️ Botão "Tirar foto" não encontrado após 15s, pulando...', cycle);
+    return;
+  }
+
+  // ── Passo 3: aguarda sinal KYC (até 20s) e decide fechar ou manter ──
+  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 20s)...', cycle);
+
+  const TIMEOUT_KYC = 20_000;
   const fimKyc = Date.now() + TIMEOUT_KYC;
+
   while (Date.now() < fimKyc) {
     const sinais = globalState.getKycSignals(cycle);
     if (sinais && sinais.length > 0) {
-      globalState.addLog('info', `✅ KYC detectado: ${sinais[0]!.provider} (fonte: ${sinais[0]!.source})`, cycle);
+      const provider = sinais[0]!.provider;
+      globalState.addLog('info', `✅ KYC detectado: ${provider} (fonte: ${sinais[0]!.source})`, cycle);
+
+      if (provider === 'Veriff') {
+        // Veriff — fecha o contexto para liberar RAM
+        globalState.addLog('info', '🗑️ Veriff detectado → fechando aba para liberar RAM', cycle);
+        await humanPause(randInt(500, 1000));
+        await context.close().catch(() => {});
+        contextosPorCiclo.delete(cycle);
+      } else {
+        // Socure (ou outro) — mantém aberta
+        globalState.addLog('success', `🟢 ${provider} detectado → aba mantida aberta`, cycle);
+      }
       return;
     }
     await humanPause(1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após 15s.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após 20s. Aba mantida aberta para inspeção.', cycle);
 }
 
 // ─── Fingerprint stealth ───────────────────────────────────────────────────────
@@ -645,7 +677,7 @@ const stealthScript = `
   Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
   Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
   Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
   Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
   Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
   if (navigator.connection) {
@@ -709,7 +741,7 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
-// ─── Registra listeners numa Page (reutilizado para popup/nova aba) ─────────────
+// ─── Registra listeners numa Page ─────────────────────────────────────────────
 function registrarListenersPage(page: Page, cycle: number): void {
   page.on('framenavigated', (frame) => {
     const url = frame.url();
@@ -723,19 +755,26 @@ function registrarListenersPage(page: Page, cycle: number): void {
     if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
   });
 
+  // Monitora requisições de rede na page também (complementa o context.route)
+  page.on('request', (req) => {
+    const url = req.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
+  });
+
   page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
     globalState.addKycSignal(provider, source, weight, cycle, url);
   }).catch(() => {});
 }
 
-// ─── Cria contexto isolado + injeta KYC detector ──────────────────────────────
+// ─── Cria contexto isolado emulando dispositivo mobile ────────────────────────
 
 async function criarContextoIsolado(
   cycle: number
 ): Promise<{ context: BrowserContext; page: Page }> {
+  // Usa emulação de iPhone 12 — garante que a Uber sirva UI mobile com "Tirar foto"
   const context = await browser!.newContext({
-    viewport: { width: 1366, height: 768 },
-    userAgent: BRAVE_UA,
+    ...MOBILE_DEVICE,
     locale: 'pt-BR',
     timezoneId: 'America/Sao_Paulo',
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
@@ -790,11 +829,11 @@ export class MockPlaywrightFlow {
         '--disable-dev-shm-usage',
         '--no-first-run',
         '--no-default-browser-check',
-        '--window-size=1366,768',
+        '--window-size=430,932',
       ],
     }) as unknown as Browser;
 
-    globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba nova e a manterá aberta');
+    globalState.addLog('info', '✅ Browser pronto (modo mobile iPhone 12) — cada ciclo abrirá uma aba nova');
   }
 
   static async execute(
@@ -808,8 +847,8 @@ export class MockPlaywrightFlow {
   ): Promise<void> {
     if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
 
-    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada)`, cycle);
-    const { page: p } = await criarContextoIsolado(cycle);
+    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile)`, cycle);
+    const { context, page: p } = await criarContextoIsolado(cycle);
 
     const client = new TempMailClient(config.tempMailApiKey);
 
@@ -873,11 +912,11 @@ export class MockPlaywrightFlow {
       // FASE 2: bonjour.uber.com
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
       await humanPause(randInt(700, 1400));
-      globalState.addLog('info', '🔄 Redirecionado para bonjour.uber.com', cycle);
+      globalState.addLog('info', '🔄 Redirecionado para bonjo', cycle);
 
       await dispensarCookies(p);
 
-      // Cidade — seleção refinada via dropdown
+      // Cidade
       await selecionarCidade(p, payload.localizacao, cycle);
 
       await dispensarCookies(p);
@@ -893,11 +932,18 @@ export class MockPlaywrightFlow {
       // Tela do WhatsApp
       await dispensarWhatsApp(p, cycle);
 
-      // Clica em "Foto do perfil" e aguarda KYC
-      await clicarFotoPerfil(p, cycle);
+      // Clica em "Foto do perfil" → "Tirar foto" → detecta KYC → fecha se Veriff
+      await clicarFotoPerfil(p, cycle, context);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
-      globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
+
+      // Só loga "concluído" se a aba ainda estiver aberta (Socure mantém, Veriff fechou)
+      const aindaAberta = contextosPorCiclo.has(cycle);
+      if (aindaAberta) {
+        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta (Socure).`, cycle);
+      } else {
+        globalState.addLog('info', `✅ Ciclo #${cycle} concluído! Aba fechada (Veriff descartado).`, cycle);
+      }
 
     } catch (error) {
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
