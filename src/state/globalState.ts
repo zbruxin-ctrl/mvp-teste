@@ -1,4 +1,4 @@
-import { AppState, AppStatus, Config, LogEntry } from '../types';
+import { AppState, AppStatus, Config, LogEntry, ProxyConfig } from '../types';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -30,7 +30,50 @@ function kycLevel(score: number): KycProviderState['level'] {
   return 'WEAK';
 }
 
-// ─── GlobalState ─────────────────────────────────────────────────────────────────
+// ─── Helpers de proxy ─────────────────────────────────────────────────────────
+
+/**
+ * Parseia uma string de proxy em ProxyConfig.
+ * Suporta:
+ *   host:porta
+ *   host:porta:usuario:senha
+ *   http(s)://usuario:senha@host:porta
+ *   socks5://usuario:senha@host:porta
+ */
+export function parseProxyString(raw: string): ProxyConfig | null {
+  raw = raw.trim();
+  if (!raw) return null;
+
+  // Formato URL completo (http://, https://, socks5://)
+  if (/^(https?|socks[45]):\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      const server = `${u.protocol}//${u.host}`;
+      const username = u.username ? decodeURIComponent(u.username) : undefined;
+      const password = u.password ? decodeURIComponent(u.password) : undefined;
+      return { server, username, password };
+    } catch {
+      return null;
+    }
+  }
+
+  // Formato host:porta ou host:porta:usuario:senha
+  const parts = raw.split(':');
+  if (parts.length === 2) {
+    return { server: `http://${parts[0]}:${parts[1]}` };
+  }
+  if (parts.length === 4) {
+    return {
+      server: `http://${parts[0]}:${parts[1]}`,
+      username: parts[2],
+      password: parts[3],
+    };
+  }
+
+  return null;
+}
+
+// ─── GlobalState ──────────────────────────────────────────────────────────────
 
 class GlobalState {
   private state: AppState = {
@@ -49,6 +92,7 @@ class GlobalState {
       extraDelay: 2000,
       parallelCycles: 1,
       headless: true,
+      proxies: [],
     },
     shouldStop: false,
   };
@@ -60,18 +104,32 @@ class GlobalState {
   // KYC isolado por ciclo: cycle → provider → KycProviderState
   private kycByCycle: KycByCycle = {};
 
-  // ─── KYC API ────────────────────────────────────────────────────────────────
+  // ─── Proxy API ────────────────────────────────────────────────────────────
+
+  /**
+   * Retorna o proxy a usar para o ciclo dado, em rotação round-robin.
+   * Se não houver proxies configurados, retorna undefined (sem proxy).
+   */
+  getProxyForCycle(cycle: number): ProxyConfig | undefined {
+    const proxies = this.state.config.proxies;
+    if (!proxies || proxies.length === 0) return undefined;
+    const idx = (cycle - 1) % proxies.length;
+    const proxy = proxies[idx]!;
+    this.addLog(
+      'info',
+      `🌐 Proxy #${idx + 1}/${proxies.length}: ${proxy.server}${proxy.username ? ` (auth: ${proxy.username})` : ''}`,
+      cycle
+    );
+    return proxy;
+  }
+
+  // ─── KYC API ──────────────────────────────────────────────────────────────
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
-    // Garante entrada para este ciclo
-    if (!this.kycByCycle[cycle]) {
-      this.kycByCycle[cycle] = {};
-    }
+    if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
     const cycleMap = this.kycByCycle[cycle]!;
 
-    if (!cycleMap[provider]) {
-      cycleMap[provider] = { score: 0, level: 'WEAK', signals: [] };
-    }
+    if (!cycleMap[provider]) cycleMap[provider] = { score: 0, level: 'WEAK', signals: [] };
     const p = cycleMap[provider]!;
     p.score += weight;
     p.level = kycLevel(p.score);
@@ -95,18 +153,14 @@ class GlobalState {
     );
   }
 
-  /** Retorna sinais do provider para um ciclo específico */
   getKycSignals(cycle: number): KycSignal[] {
     const cycleMap = this.kycByCycle[cycle];
     if (!cycleMap) return [];
     const result: KycSignal[] = [];
-    for (const state of Object.values(cycleMap)) {
-      result.push(...state.signals);
-    }
+    for (const state of Object.values(cycleMap)) result.push(...state.signals);
     return result;
   }
 
-  /** Retorna o estado KYC completo por ciclo para o frontend */
   getKycState(): { byCycle: KycByCycle } {
     return { byCycle: this.kycByCycle };
   }
@@ -115,7 +169,7 @@ class GlobalState {
     this.kycByCycle = {};
   }
 
-  // ─── Core API ────────────────────────────────────────────────────────────────
+  // ─── Core API ─────────────────────────────────────────────────────────────
 
   setExecutor(fn: CycleExecutor): void {
     this.executor = fn;
@@ -139,12 +193,7 @@ class GlobalState {
   }
 
   addLog(level: LogEntry['level'], message: string, cycle?: number): void {
-    this.logs.unshift({
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      cycle,
-    });
+    this.logs.unshift({ timestamp: new Date().toISOString(), level, message, cycle });
     if (this.logs.length > 200) this.logs = this.logs.slice(0, 200);
   }
 
@@ -199,10 +248,6 @@ class GlobalState {
     }
   }
 
-  /**
-   * Dispara N ciclos em paralelo conforme config.parallelCycles.
-   * Aguarda todos terminarem antes de continuar o loop.
-   */
   private async executeBatch(): Promise<void> {
     const n = Math.max(1, this.state.config.parallelCycles || 1);
     this.state.isRunning = true;
@@ -225,12 +270,10 @@ class GlobalState {
   private async executeCycleWithRetry(cycle: number): Promise<void> {
     const MAX_RETRIES = 3;
     const BACKOFF = [0, 5000, 15000];
-
-    let lastError: string = 'Erro desconhecido';
+    let lastError = 'Erro desconhecido';
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       if (this.state.shouldStop) break;
-
       const backoff = BACKOFF[attempt - 1] ?? 15000;
       if (backoff > 0) {
         this.addLog('warn', `⏳ Retry #${attempt} em ${backoff / 1000}s...`, cycle);
@@ -245,21 +288,14 @@ class GlobalState {
             : `🔁 Ciclo #${cycle} — tentativa ${attempt}/${MAX_RETRIES}`,
           cycle
         );
-
         if (!this.executor) throw new Error('Nenhum executor registrado.');
-
         await this.executor(this.state.config, cycle);
-
         this.state.cyclesCompleted += 1;
         this.addLog('success', `✅ Ciclo #${cycle} concluído!`, cycle);
         return;
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'Erro desconhecido';
-        this.addLog(
-          'error',
-          `❌ Tentativa ${attempt}/${MAX_RETRIES} falhou: ${lastError}`,
-          cycle
-        );
+        this.addLog('error', `❌ Tentativa ${attempt}/${MAX_RETRIES} falhou: ${lastError}`, cycle);
         await sleep(2000);
       }
     }

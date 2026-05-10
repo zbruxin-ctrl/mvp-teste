@@ -6,6 +6,19 @@ export type AppStatus =
   | 'STOPPING'
   | 'ERROR';
 
+/**
+ * Proxy individual.
+ * Formatos aceitos:
+ *   - host:porta                          (sem autenticação)
+ *   - host:porta:usuario:senha            (com autenticação)
+ *   - http://usuario:senha@host:porta     (URL completa)
+ */
+export interface ProxyConfig {
+  server: string;   // ex: "http://1.2.3.4:8080" ou "socks5://1.2.3.4:1080"
+  username?: string;
+  password?: string;
+}
+
 export interface Config {
   cadastroUrl: string;
   tempMailApiKey: string;
@@ -15,6 +28,8 @@ export interface Config {
   extraDelay: number;
   parallelCycles: number;
   headless: boolean;
+  /** Lista de proxies — cada ciclo usa um em rotação round-robin */
+  proxies?: ProxyConfig[];
 }
 
 export interface AppState {

@@ -13,10 +13,10 @@ const contextosPorCiclo = new Map<number, BrowserContext>();
 
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
 
-// Emula iPhone 14 — garante que a Uber sirva o fluxo mobile com botão "Tirar foto"
+// Emula iPhone 14 — garante que a Uber sirva o fluxo mobile
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-// ─── Helpers humanos ───────────────────────────────────────────────────────────
+// ─── Helpers humanos ──────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -131,7 +131,6 @@ async function dispensarCookies(p: Page): Promise<void> {
     '.onetrust-accept-btn-handler',
     'button#accept-recommended-btn-handler',
   ];
-
   for (const seletor of candidatos) {
     try {
       const el = p.locator(seletor).first();
@@ -147,15 +146,12 @@ async function dispensarCookies(p: Page): Promise<void> {
         await humanPause(randInt(300, 600));
         return;
       }
-    } catch {
-      // ignora e tenta o proximo
-    }
+    } catch { /* ignora */ }
   }
 }
 
 async function aceitarTermos(p: Page): Promise<void> {
   await humanPause(randInt(500, 900));
-
   const candidatos = [
     async () => {
       const el = p.locator('input[type="checkbox"]').first();
@@ -183,31 +179,20 @@ async function aceitarTermos(p: Page): Promise<void> {
       await humanPause(randInt(60, 140));
       await el.click({ force: true, timeout: 5000 });
     },
-    async () => {
-      await p.click('text=Concordo', { force: true, timeout: 5000 });
-    },
+    async () => { await p.click('text=Concordo', { force: true, timeout: 5000 }); },
   ];
-
   let aceitou = false;
   for (const tentativa of candidatos) {
-    try {
-      await tentativa();
-      aceitou = true;
-      break;
-    } catch {
-      // tenta o proximo candidato
-    }
+    try { await tentativa(); aceitou = true; break; } catch { /* tenta próximo */ }
   }
-
-  if (!aceitou) throw new Error('Nao foi possivel aceitar os termos — nenhum seletor funcionou');
+  if (!aceitou) throw new Error('Não foi possível aceitar os termos — nenhum seletor funcionou');
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
-// ─── Seleciona cidade no autocomplete ─────────────────────────────────────────────
+// ─── Seleciona cidade ─────────────────────────────────────────────────────────
 
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
-
   const DROPDOWN_ITEM_SELS = [
     '[data-testid="flow-type-city-selector-v2-option"]',
     '[role="option"]',
@@ -216,15 +201,11 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
     '[class*="option"]',
     '[class*="item"]',
   ];
-
-  const norm = (s: string) =>
-    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-
+  const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
   const nomeBusca = cidade.split(',')[0]!.trim();
   const nomeBuscaNorm = norm(nomeBusca);
 
   globalState.addLog('info', `📍 Digitando cidade: "${nomeBusca}"`, cycle);
-
   await p.waitForSelector(INPUT_SEL, { state: 'visible', timeout: 15000 });
   const box = await p.locator(INPUT_SEL).boundingBox().catch(() => null);
   if (box) {
@@ -234,7 +215,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await p.click(INPUT_SEL);
   await p.fill(INPUT_SEL, '');
   await humanPause(randInt(100, 200));
-
   for (const ch of nomeBusca) {
     await p.keyboard.type(ch, { delay: randInt(50, 110) });
     if (Math.random() < 0.08) await humanPause(randInt(80, 200));
@@ -243,7 +223,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   globalState.addLog('info', '⏳ Aguardando dropdown de cidade...', cycle);
   let itemSel: string | null = null;
   const fimDropdown = Date.now() + 8_000;
-
   while (Date.now() < fimDropdown) {
     for (const sel of DROPDOWN_ITEM_SELS) {
       try {
@@ -252,14 +231,14 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
           const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
           if (visivel) { itemSel = sel; break; }
         }
-      } catch { /* tenta proximo */ }
+      } catch { /* tenta próximo */ }
     }
     if (itemSel) break;
     await humanPause(500);
   }
 
   if (!itemSel) {
-    globalState.addLog('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter como fallback', cycle);
+    globalState.addLog('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter', cycle);
     await humanPause(randInt(300, 600));
     await p.keyboard.press('ArrowDown');
     await humanPause(randInt(150, 300));
@@ -268,7 +247,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   }
 
   await humanPause(randInt(300, 600));
-
   const opcoes = p.locator(itemSel);
   const total = await opcoes.count();
   globalState.addLog('info', `📍 Dropdown aberto com ${total} opções`, cycle);
@@ -289,11 +267,11 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
         clicou = true;
         break;
       }
-    } catch { /* ignora e tenta proxima */ }
+    } catch { /* tenta próxima */ }
   }
 
   if (!clicou) {
-    globalState.addLog('warn', `⚠️ Nenhuma opção com "${nomeBusca}" encontrada, clicando na primeira`, cycle);
+    globalState.addLog('warn', `⚠️ Nenhuma opção com "${nomeBusca}", clicando na primeira`, cycle);
     try {
       const primeiraBox = await opcoes.first().boundingBox().catch(() => null);
       if (primeiraBox) {
@@ -307,9 +285,10 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
       await p.keyboard.press('Enter');
     }
   }
-
   await humanPause(randInt(400, 700));
 }
+
+// ─── JS helpers ───────────────────────────────────────────────────────────────
 
 const JS_NAO_ATIVAR = `
   (function() {
@@ -341,7 +320,8 @@ const JS_FALLBACK_SUBMIT = `
   })()
 `;
 
-// KYC_INIT_SCRIPT — roda no contexto MAIN da página em cada navegação
+// ─── KYC init script ──────────────────────────────────────────────────────────
+
 const KYC_INIT_SCRIPT = `
   (function() {
     if (window.__kycInjected) return;
@@ -422,25 +402,24 @@ const KYC_INIT_SCRIPT = `
   })();
 `;
 
+// ─── WhatsApp ─────────────────────────────────────────────────────────────────
+
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   await humanPause(randInt(2000, 3500));
-
   const SELETORES_WHATSAPP = [
-    'button:has-text("\u00c3O ATIVAR")',
+    'button:has-text("ÃO ATIVAR")',
     'button:has-text("Nao ativar")',
     'button:has-text("Not now")',
-    'button:has-text("Agora n\u00e3o")',
+    'button:has-text("Agora não")',
     '[data-testid*="whatsapp"]',
     'button[type="submit"]',
   ];
-
   const TIMEOUT_MS = 30_000;
-  const POLL_MS   = 3_000;
-  const inicio    = Date.now();
-  let   detectado = false;
+  const POLL_MS = 3_000;
+  const inicio = Date.now();
+  let detectado = false;
 
   globalState.addLog('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
-
   while (Date.now() - inicio < TIMEOUT_MS) {
     for (const sel of SELETORES_WHATSAPP) {
       try {
@@ -461,10 +440,10 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   await humanPause(randInt(400, 800));
 
   const candidatosCss = [
-    'button:has-text("N\u00c3O ATIVAR")',
+    'button:has-text("NÃO ATIVAR")',
     'button:has-text("Nao ativar")',
     'button:has-text("Not now")',
-    'button:has-text("Agora n\u00e3o")',
+    'button:has-text("Agora não")',
   ];
   for (const sel of candidatosCss) {
     try {
@@ -505,7 +484,8 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
-// ─── Clica em "Foto do perfil" → tenta "Tirar foto" em paralelo → detecta KYC ───
+// ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
+
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
@@ -547,10 +527,9 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
-  // ── Aguarda a tela de foto carregar completamente antes de tentar clicar ──
   await humanPause(randInt(1500, 2500));
 
-  // ── Tenta clicar no botão de foto em fire-and-forget (não bloqueia o KYC listener) ──
+  // Tenta clicar no botão de foto em fire-and-forget
   const SELETORES_TIRAR = [
     '[data-dgui="button"]:has-text("Tirar foto")',
     'button:has-text("Tirar foto")',
@@ -581,21 +560,17 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       }
       await humanPause(2500);
     }
-    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas (KYC listener ainda ativo)', cycle);
+    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
   })();
 
-  // ── Aguarda sinal KYC independente do botão ──────────────────────────────────
+  // Aguarda sinal KYC independente do botão
   globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
-
-  const TIMEOUT_KYC = 30_000;
-  const fimKyc = Date.now() + TIMEOUT_KYC;
-
+  const fimKyc = Date.now() + 30_000;
   while (Date.now() < fimKyc) {
     const sinais = globalState.getKycSignals(cycle);
     if (sinais && sinais.length > 0) {
       const provider = sinais[0]!.provider;
       globalState.addLog('info', `✅ KYC detectado: ${provider} (fonte: ${sinais[0]!.source})`, cycle);
-
       if (provider === 'Veriff') {
         globalState.addLog('info', '🗑️ Veriff detectado → fechando aba para liberar RAM', cycle);
         await humanPause(randInt(500, 1000));
@@ -608,11 +583,11 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     }
     await humanPause(1000);
   }
-
   globalState.addLog('warn', '⚠️ KYC não detectado após 30s. Aba mantida aberta para inspeção.', cycle);
 }
 
-// ─── Fingerprint stealth ──────────────────────────────────────────────────────────
+// ─── Fingerprint stealth ──────────────────────────────────────────────────────
+
 const stealthScript = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   const makePlugin = (name, filename, desc, mimeTypes) => {
@@ -641,15 +616,6 @@ const stealthScript = `
       { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
     ]),
     makePlugin('Chrome PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', [
-      { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
-    ]),
-    makePlugin('Chromium PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', [
-      { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
-    ]),
-    makePlugin('Microsoft Edge PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', [
-      { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
-    ]),
-    makePlugin('WebKit built-in PDF', 'internal-pdf-viewer', 'Portable Document Format', [
       { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
     ]),
   ];
@@ -686,11 +652,6 @@ const stealthScript = `
     p.name === 'notifications'
       ? Promise.resolve({ state: Notification.permission, onchange: null })
       : _origQuery(p);
-  const _origToString = Function.prototype.toString;
-  Function.prototype.toString = function () {
-    if (this === window.navigator.permissions.query) return 'function query() { [native code] }';
-    return _origToString.call(this);
-  };
   const getParameter = WebGLRenderingContext.prototype.getParameter;
   WebGLRenderingContext.prototype.getParameter = function (param) {
     if (param === 37445) return 'Intel Inc.';
@@ -709,20 +670,20 @@ const stealthScript = `
   };
 `;
 
-// ─── KYC patterns ─────────────────────────────────────────────────────────────────
+// ─── KYC patterns ─────────────────────────────────────────────────────────────
 
 const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
-  { pattern: /socure/i,            provider: 'Socure' },
-  { pattern: /devicer\.io/i,       provider: 'Socure' },
-  { pattern: /sigma\.socure/i,     provider: 'Socure' },
-  { pattern: /verify\.socure/i,    provider: 'Socure' },
-  { pattern: /veriff/i,            provider: 'Veriff' },
-  { pattern: /magic\.veriff/i,     provider: 'Veriff' },
-  { pattern: /api\.veriff\.me/i,   provider: 'Veriff' },
-  { pattern: /cdn\.veriff/i,       provider: 'Veriff' },
-  { pattern: /jumio/i,             provider: 'Jumio'  },
-  { pattern: /onfido/i,            provider: 'Onfido' },
-  { pattern: /withpersona/i,       provider: 'Persona'},
+  { pattern: /socure/i,            provider: 'Socure'  },
+  { pattern: /devicer\.io/i,       provider: 'Socure'  },
+  { pattern: /sigma\.socure/i,     provider: 'Socure'  },
+  { pattern: /verify\.socure/i,    provider: 'Socure'  },
+  { pattern: /veriff/i,            provider: 'Veriff'  },
+  { pattern: /magic\.veriff/i,     provider: 'Veriff'  },
+  { pattern: /api\.veriff\.me/i,   provider: 'Veriff'  },
+  { pattern: /cdn\.veriff/i,       provider: 'Veriff'  },
+  { pattern: /jumio/i,             provider: 'Jumio'   },
+  { pattern: /onfido/i,            provider: 'Onfido'  },
+  { pattern: /withpersona/i,       provider: 'Persona' },
 ];
 
 function detectKycProvider(url: string): string | null {
@@ -738,31 +699,30 @@ function registrarListenersPage(page: Page, cycle: number): void {
     const provider = detectKycProvider(url);
     if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
   });
-
   page.on('websocket', (ws) => {
     const url = ws.url();
     const provider = detectKycProvider(url);
     if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
   });
-
   page.on('request', (req) => {
     const url = req.url();
     const provider = detectKycProvider(url);
     if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
   });
-
   page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
     globalState.addKycSignal(provider, source, weight, cycle, url);
   }).catch(() => {});
 }
 
 /**
- * Cria contexto mobile isolado e aplica emulação de dispositivo via CDP.
- * Equivalente ao Ctrl+Shift+M do DevTools — garante viewport, UA e touch corretos.
+ * Cria contexto mobile isolado com proxy (se configurado) e emulação CDP.
+ * Equivalente ao Ctrl+Shift+M do DevTools.
  */
 async function criarContextoIsolado(
   cycle: number
 ): Promise<{ context: BrowserContext; page: Page }> {
+  const proxy = globalState.getProxyForCycle(cycle);
+
   const context = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -772,6 +732,8 @@ async function criarContextoIsolado(
     extraHTTPHeaders: {
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
     },
+    // Proxy nativo do Playwright — roteia TODO o tráfego da aba pelo proxy
+    ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
   await context.addInitScript({ content: stealthScript });
@@ -786,7 +748,7 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  // ── Emulação mobile via CDP (equivalente ao Ctrl+Shift+M do DevTools) ──────
+  // ── Emulação mobile via CDP (Ctrl+Shift+M) ────────────────────────────────
   try {
     const cdp = await context.newCDPSession(page);
     await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -802,7 +764,11 @@ async function criarContextoIsolado(
       acceptLanguage: 'pt-BR,pt;q=0.9',
       platform: 'iPhone',
     });
-    globalState.addLog('info', `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})`, cycle);
+    globalState.addLog(
+      'info',
+      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})${proxy ? ` | Proxy: ${proxy.server}` : ''}`,
+      cycle
+    );
   } catch (e) {
     globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
   }
@@ -818,7 +784,7 @@ async function criarContextoIsolado(
   return { context, page };
 }
 
-// ─── Flow principal ───────────────────────────────────────────────────────────────
+// ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
   static async init(headless = false): Promise<void> {
@@ -826,9 +792,7 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
       return;
     }
-
     globalState.addLog('info', '🦁 Iniciando Brave...');
-
     browser = await chromiumExtra.launch({
       headless,
       executablePath: BRAVE_PATH,
@@ -844,7 +808,6 @@ export class MockPlaywrightFlow {
         // Sem --window-size: o CDP controla o viewport por aba individualmente
       ],
     }) as unknown as Browser;
-
     globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
   }
 
@@ -866,8 +829,10 @@ export class MockPlaywrightFlow {
     const client = new TempMailClient(config.tempMailApiKey);
 
     try {
-      // Timeout generoso: 45s, networkidle para garantir que a página estabilizou
-      await p.goto(cadastroUrl, { waitUntil: 'networkidle', timeout: 45000 });
+      // goto com timeout 60s e domcontentloaded (mais tolerante a rede lenta via proxy)
+      await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      // Aguarda estabilização adicional da rede (até 10s extras, sem lançar erro)
+      await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await humanPause(randInt(800, 1600));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
@@ -923,30 +888,22 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
 
-      // FASE 2: bonjour.uber.com — timeout aumentado para 40s
+      // FASE 2: bonjour.uber.com — timeout 40s
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(700, 1400));
       globalState.addLog('info', '🔄 Redirecionado para bonjo', cycle);
 
       await dispensarCookies(p);
-
-      // Cidade
       await selecionarCidade(p, payload.localizacao, cycle);
-
       await dispensarCookies(p);
 
       await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-
       await dispensarCookies(p);
-
       await humanClick(p, '[data-testid="submit-button"]');
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
-      // Tela do WhatsApp
       await dispensarWhatsApp(p, cycle);
-
-      // Clica em "Foto do perfil" → tenta botão de foto em paralelo → detecta KYC
       await clicarFotoPerfil(p, cycle, context);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 500));
