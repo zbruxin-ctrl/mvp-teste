@@ -245,9 +245,9 @@ async function aguardarSeletorComTimeout(
 }
 
 // ─── humanClickForwardButton ──────────────────────────────────────────────────────────
-// FIX: pós-clique usa APENAS setTimeout puro — zero p.evaluate no polling de confirmação.
-// Isso evita que o Promise.race fique pendurado durante a navegação (quando p.evaluate
-// pode rejeitar de forma não-determinística ou simplesmente não resolver).
+// PARTE 1 FIX: após o clique, aguarda a página realmente mudar de estado usando polling
+// puro de seletores conhecidos da próxima tela. Só então retorna ao flow principal.
+// Isso substitui o setTimeout fixo de 2s que não era suficiente quando o servidor demorava.
 async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
   globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
 
@@ -337,11 +337,43 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     }
   }
 
-  // FIX pós-clique: setTimeout PURO — sem nenhum p.evaluate.
-  // O clique já foi disparado. A navegação vai acontecer (ou não).
-  // Aguardar com p.evaluate durante navegação é exatamente o que travava.
-  globalState.addLog('info', '⏳ Aguardando navegação pós-click (2s fixo)...', cycle);
-  await new Promise<void>((r) => setTimeout(r, 2000));
+  // PARTE 1 FIX: aguarda a URL ou o DOM mudar indicando que a navegação começou,
+  // depois aguarda a página estabilizar com polling puro (pageStable).
+  // Isso substitui o setTimeout fixo de 2s que causava travamento.
+  globalState.addLog('info', '⏳ Aguardando mudança de página pós-click...', cycle);
+
+  // Captura URL atual antes da navegação
+  let urlAntes = '';
+  try { urlAntes = p.url(); } catch { /* ignora */ }
+
+  // Aguarda até a URL mudar OU o #forward-button sumir (sinal de nova tela) — máx 8s
+  const deadlineNav = Date.now() + 8_000;
+  let navegou = false;
+  while (Date.now() < deadlineNav) {
+    await new Promise<void>((r) => setTimeout(r, 400));
+    try {
+      const urlAgora = p.url();
+      if (urlAgora !== urlAntes) { navegou = true; break; }
+      // Verifica se o forward-button sumiu (nova tela carregando)
+      const btnSumiu = await p.locator('#forward-button').isVisible({ timeout: 300 }).catch(() => false);
+      if (!btnSumiu) { navegou = true; break; }
+    } catch {
+      // Página navegando — considera como sinal de mudança
+      navegou = true;
+      break;
+    }
+  }
+
+  if (navegou) {
+    globalState.addLog('info', '🔄 Navegação detectada — aguardando estabilizar...', cycle);
+    // Aguarda página estabilizar (polling puro, máx 6s)
+    await pageStable(p, 6_000, cycle, 'pós-forward-click');
+  } else {
+    globalState.addLog('warn', '⚠️ Navegação não detectada em 8s — prosseguindo mesmo assim', cycle);
+    // Fallback: aguarda mínimo de 1.5s para dar chance à página
+    await new Promise<void>((r) => setTimeout(r, 1500));
+  }
+
   globalState.addLog('info', '✅ Pós-forward-click concluído — prosseguindo', cycle);
 }
 
@@ -1427,9 +1459,11 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(400, 700));
       await humanClickForwardButton(p, cycle);
 
-      // FIX: aguarda #FIRST_NAME aparecer (até 20s) em vez de 2s fixos + humanType que travava
+      // PARTE 1 FIX: aguardarSeletorComTimeout com 30s (era 20s antes) para absorver
+      // servidores lentos. humanClickForwardButton já fez pageStable, então aqui
+      // só confirma que o campo existe antes de tentar preencher.
       globalState.addLog('info', '⏳ Aguardando tela de nome (#FIRST_NAME)...', cycle);
-      await aguardarSeletorComTimeout(p, '#FIRST_NAME', 20_000, cycle, '#FIRST_NAME');
+      await aguardarSeletorComTimeout(p, '#FIRST_NAME', 30_000, cycle, '#FIRST_NAME');
 
       await dispensarCookies(p);
 
