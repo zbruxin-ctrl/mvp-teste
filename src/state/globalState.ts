@@ -45,7 +45,7 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   if (!raw) return null;
 
   // Formato URL completo (http://, https://, socks5://)
-  if (/^(https?|socks[45]):\\/\\//i.test(raw)) {
+  if (/^(https?|socks[45]):\/\//i.test(raw)) {
     try {
       const u = new URL(raw);
       const server = `${u.protocol}//${u.host}`;
