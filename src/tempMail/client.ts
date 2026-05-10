@@ -226,7 +226,8 @@ export class MailTmClient implements IEmailClient {
     const startTime = Date.now();
     let lastMessageCount = 0;
     const POLL_INTERVAL_MS = 8_000; // mail.tm é free, sem custo por request
-    const INITIAL_WAIT_MS  = 10_000;
+    // Aumentado de 10s para 20s: o Uber pode demorar 15-30s para enviar o email
+    const INITIAL_WAIT_MS  = 20_000;
 
     globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`);
 
