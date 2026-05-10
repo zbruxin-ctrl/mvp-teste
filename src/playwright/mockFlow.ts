@@ -806,9 +806,13 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
   const inicio = Date.now();
 
   while (Date.now() - inicio < timeoutMs) {
-    // Verifica se página responde — se não, usa safeLoadState em vez de waitForLoadState direto
+    // FIX: p.evaluate sem timeout trava silenciosamente em SPAs durante navegação.
+    // Usa Promise.race com timeout de 2s para garantir que o catch sempre dispara.
     try {
-      await p.evaluate('1 + 1');
+      await Promise.race([
+        p.evaluate('1 + 1'),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('eval timeout')), 2000)),
+      ]);
     } catch {
       globalState.addLog('warn', '⚠️ Página navegando — aguardando estabilização...', cycle);
       await safeLoadState(p, 'domcontentloaded', 10000, cycle, 'aguardarTelaOTP');
