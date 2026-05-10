@@ -211,15 +211,23 @@ export class MailTmClient implements IEmailClient {
   }
 
   private async getFullMessage(id: string): Promise<{ text: string; html: string }> {
-    const resp = await this.request<{ text?: string; html?: string; intro?: string }>(
-      `/messages/${id}`,
-      'GET',
-      undefined,
-      true
-    );
+    // A API do mail.tm retorna html como string[] e text como string[]
+    // — precisamos normalizar para string antes de passar ao OTPParser
+    const resp = await this.request<{
+      text?: string | string[];
+      html?: string | string[];
+      intro?: string;
+    }>(`/messages/${id}`, 'GET', undefined, true);
+
+    const normalizeField = (field: string | string[] | undefined): string => {
+      if (!field) return '';
+      if (Array.isArray(field)) return field.join('\n');
+      return field;
+    };
+
     return {
-      text: resp.text ?? resp.intro ?? '',
-      html: resp.html ?? '',
+      text: normalizeField(resp.text) || resp.intro || '',
+      html: normalizeField(resp.html),
     };
   }
 
@@ -233,7 +241,6 @@ export class MailTmClient implements IEmailClient {
 
     if (!this.authToken) throw new Error('Mail.tm: não autenticado — chame createRandomEmail() primeiro');
 
-    // Espera inicial
     globalState.addLog('info', `⏳ [mail.tm] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`);
     const inicioEspera = Date.now();
     while (Date.now() - inicioEspera < INITIAL_WAIT_MS) {
@@ -250,15 +257,15 @@ export class MailTmClient implements IEmailClient {
 
       try {
         const messages = await this.listMessages();
-        globalState.addLog('info', `📬 [mail.tm] Caixa com ${messages.length} mensagem(s) (última contagem: ${lastMessageCount})`);
+        globalState.addLog('info', `📬 [mail.tm] Caixa com ${messages.length} mensagem(s) (contagem anterior: ${lastMessageCount})`);
 
         if (messages.length > lastMessageCount) {
           globalState.addLog('info', `📨 [mail.tm] ${messages.length - lastMessageCount} mensagem(s) nova(s) — verificando OTP...`);
           for (const msg of messages.slice(lastMessageCount).reverse()) {
-            globalState.addLog('info', `📧 [mail.tm] Lendo mensagem: "${msg.subject}" de ${msg.from.address}`);
+            globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`);
             try {
               const full = await this.getFullMessage(msg.id);
-              globalState.addLog('info', `📄 [mail.tm] Body text: ${full.text.slice(0, 120)}`);
+              globalState.addLog('info', `📄 [mail.tm] text(100): ${full.text.slice(0, 100)}`);
               const mailMsg: MailMessage = {
                 mail_id: msg.id,
                 mail_from: msg.from.address,
@@ -274,7 +281,7 @@ export class MailTmClient implements IEmailClient {
                 globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`);
                 return otp;
               } else {
-                globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído da mensagem "${msg.subject}"`);
+                globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído de "${msg.subject}"`);
               }
             } catch (e) {
               globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`);
