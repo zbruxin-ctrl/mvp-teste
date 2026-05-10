@@ -49,7 +49,9 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   }
 }
 
-async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 15000): Promise<void> {
+// ─── waitForElementInteractable: tenta confirmar via elementFromPoint,
+//     mas após timeoutMs desiste e avança mesmo assim (não trava mais silenciosamente)
+async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -58,17 +60,21 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
       const isTarget = await p.evaluate(
-        `(function(){ \
-          var top = document.elementFromPoint(${cx}, ${cy}); \
-          var target = document.querySelector(${JSON.stringify(selector)}); \
-          if (!target || !top) return false; \
-          return target === top || target.contains(top); \
+        `(function(){
+          var top = document.elementFromPoint(${cx}, ${cy});
+          var target = document.querySelector(${JSON.stringify(selector)});
+          if (!target || !top) return false;
+          return target === top || target.contains(top);
         })()`
       ) as boolean;
       if (isTarget) return;
     } catch { /* ignora e repete */ }
     await humanPause(400);
   }
+  // Timeout atingido: tenta scroll para remover overlay e avança
+  try {
+    await p.locator(selector).scrollIntoViewIfNeeded({ timeout: 3000 });
+  } catch { /* ignora */ }
 }
 
 async function robustClick(p: Page, selector: string): Promise<void> {
@@ -98,7 +104,7 @@ async function robustClick(p: Page, selector: string): Promise<void> {
 
 async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  await waitForElementInteractable(p, selector, 12000);
+  await waitForElementInteractable(p, selector, 8000);
   const box = await p.locator(selector).boundingBox();
   if (box) {
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
@@ -1224,7 +1230,27 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '⏳ Aguardando campo de email ficar visível...', cycle);
       await p.waitForSelector('#PHONE_NUMBER_or_EMAIL_ADDRESS', { state: 'visible', timeout: 30000 });
       globalState.addLog('info', '✅ Campo de email visível — prosseguindo', cycle);
-      await humanPause(randInt(1200, 2000));
+
+      // ─── Garante que a página terminou animações de entrada antes de interagir ───
+      await humanPause(randInt(1800, 2800));
+      try {
+        await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').scrollIntoViewIfNeeded({ timeout: 3000 });
+      } catch { /* ignora */ }
+      // Remove possíveis overlays transparentes que bloqueiam o elementFromPoint
+      await p.evaluate(`
+        (function() {
+          var input = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
+          if (!input) return;
+          var rect = input.getBoundingClientRect();
+          var cx = rect.left + rect.width / 2;
+          var cy = rect.top + rect.height / 2;
+          var top = document.elementFromPoint(cx, cy);
+          if (top && top !== input && !input.contains(top)) {
+            top.style.pointerEvents = 'none';
+          }
+        })()
+      `).catch(() => {});
+      await humanPause(randInt(300, 600));
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
