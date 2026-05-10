@@ -80,6 +80,44 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
   // Timeout expirou — tenta mesmo assim (pior caso: force click)
 }
 
+/**
+ * Clica no elemento via três estratégias em cascata:
+ * 1. page.click normal
+ * 2. page.click com force: true
+ * 3. dispatchEvent via JS (contorna qualquer overlay/pointer-events)
+ */
+async function robustClick(p: Page, selector: string): Promise<void> {
+  // Garante que o elemento está visível e tenta scrollar para ele
+  try {
+    await p.locator(selector).scrollIntoViewIfNeeded({ timeout: 5000 });
+  } catch { /* ignora */ }
+  await humanPause(randInt(80, 150));
+
+  // Estratégia 1: clique normal
+  try {
+    await p.click(selector, { timeout: 4000 });
+    return;
+  } catch { /* tenta force */ }
+
+  // Estratégia 2: force click
+  try {
+    await p.click(selector, { force: true, timeout: 4000 });
+    return;
+  } catch { /* tenta dispatchEvent */ }
+
+  // Estratégia 3: dispatchEvent via JS — imune a overlays e pointer-events:none
+  await p.evaluate(
+    `(function(sel){
+      var el = document.querySelector(sel);
+      if (!el) return;
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
+      if (typeof el.focus === 'function') el.focus();
+    })(${JSON.stringify(selector)})`
+  );
+}
+
 async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   await waitForElementInteractable(p, selector, 12000);
@@ -90,12 +128,7 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(50, 100));
   }
-  // Tenta clique normal; cai em force se falhar
-  try {
-    await p.click(selector, { timeout: 8000 });
-  } catch {
-    await p.click(selector, { force: true, timeout: 5000 });
-  }
+  await robustClick(p, selector);
   await p.fill(selector, '');
   await humanPause(randInt(60, 150));
   for (let i = 0; i < value.length; i++) {
@@ -125,7 +158,7 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(50, 100));
   }
-  await p.click(selector, { force: true });
+  await robustClick(p, selector);
   await p.fill(selector, '');
   await humanPause(randInt(60, 150));
   for (let i = 0; i < value.length; i++) {
@@ -158,10 +191,10 @@ async function humanClick(p: Page, selector: string): Promise<void> {
     try {
       await p.mouse.click(tx, ty);
     } catch {
-      await p.click(selector, { force: true });
+      await robustClick(p, selector);
     }
   } else {
-    await p.click(selector, { force: true });
+    await robustClick(p, selector);
   }
 }
 
@@ -1145,30 +1178,17 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
       await dispensarWhatsApp(p, cycle);
+      await humanPause(randInt(1000, 2000));
       await clicarFotoPerfil(p, cycle, context);
 
-      const aindaAberta = contextosPorCiclo.has(cycle);
-      if (aindaAberta) {
-        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
-      } else {
-        globalState.addLog('info', `✅ Ciclo #${cycle} concluído!`, cycle);
-      }
-
-    } catch (error) {
-      await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
-      await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
-      throw error;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      globalState.addLog('error', `❌ Ciclo #${cycle} falhou: ${msg}`, cycle);
+      try {
+        const artifacts = new ArtifactsManager();
+        await artifacts.saveErrorArtifacts(p, cycle);
+      } catch { /* ignora */ }
+      throw err;
     }
-  }
-
-  static async cleanup(): Promise<void> {
-    for (const [cycle, ctx] of contextosPorCiclo.entries()) {
-      await ctx.close().catch(() => {});
-      globalState.addLog('info', `🗑️ Aba do ciclo #${cycle} fechada`);
-    }
-    contextosPorCiclo.clear();
-    await browser?.close().catch(() => {});
-    browser = null;
-    globalState.addLog('info', '🧹 Browser fechado');
   }
 }
