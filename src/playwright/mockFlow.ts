@@ -23,7 +23,7 @@ const MOBILE_HEIGHT = MOBILE_DEVICE.viewport?.height ?? 844;
 const MOBILE_DPR    = MOBILE_DEVICE.deviceScaleFactor ?? 3;
 const MOBILE_UA     = MOBILE_DEVICE.userAgent ?? '';
 
-// ─── Helpers humanos ──────────────────────────────────────────────────────────
+// ─── Helpers humanos ───────────────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -176,7 +176,7 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
-// ─── Preencher OTP (multi-estratégia) ────────────────────────────────────────
+// ─── Preencher OTP (multi-estratégia) ───────────────────────────────────────────────
 // O Uber usa inputs separados por dígito. Tenta várias estratégias em ordem:
 // 1. IDs padrão (#EMAIL_OTP_CODE-0, -1, -2, -3)
 // 2. Qualquer input[maxlength="1"] visível na tela
@@ -345,7 +345,7 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
-// ─── Seleciona cidade ─────────────────────────────────────────────────────────
+// ─── Seleciona cidade ────────────────────────────────────────────────────────────────────────
 
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
@@ -444,7 +444,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await humanPause(randInt(400, 700));
 }
 
-// ─── JS helpers ───────────────────────────────────────────────────────────────
+// ─── JS helpers ────────────────────────────────────────────────────────────────────────
 
 const JS_NAO_ATIVAR = `
   (function() {
@@ -476,7 +476,7 @@ const JS_FALLBACK_SUBMIT = `
   })()
 `;
 
-// ─── KYC init script ──────────────────────────────────────────────────────────
+// ─── KYC init script ────────────────────────────────────────────────────────────────────────
 
 const KYC_INIT_SCRIPT = `
   (function() {
@@ -577,7 +577,7 @@ const KYC_INIT_SCRIPT = `
   })();
 `;
 
-// ─── WhatsApp ─────────────────────────────────────────────────────────────────
+// ─── WhatsApp ────────────────────────────────────────────────────────────────────────────────
 
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   try {
@@ -663,7 +663,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   }
 }
 
-// ─── KYC: resolve provider dominante por score ────────────────────────────────
+// ─── KYC: resolve provider dominante por score ────────────────────────────────────────────
 
 function resolverProviderDominante(
   cycle: number,
@@ -685,7 +685,7 @@ function resolverProviderDominante(
   return melhor;
 }
 
-// ─── OTP: polling com retentativas e re-envio ─────────────────────────────────
+// ─── OTP: polling com retentativas e re-envio ───────────────────────────────────────────────
 
 async function aguardarOTPComRetry(
   p: Page,
@@ -695,7 +695,8 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  const JANELA_MS = Math.max(45_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
+  // Aumentado de 45s para 60s: garante janela suficiente mesmo com otpTimeout menor
+  const JANELA_MS = Math.max(60_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
     'button:has-text("Reenviar")',
@@ -755,7 +756,7 @@ async function aguardarOTPComRetry(
   throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas (${(JANELA_MS * MAX_TENTATIVAS) / 1000}s total)`);
 }
 
-// ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
+// ─── Foto do perfil + KYC ──────────────────────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
@@ -913,10 +914,10 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     globalState.addLog('warn', `⚠️ Erro no re-clique: ${e}`, cycle);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspecão.', cycle);
 }
 
-// ─── Stealth script ───────────────────────────────────────────────────────────
+// ─── Stealth script ─────────────────────────────────────────────────────────────────────────
 
 const stealthScript = `
   (function() {
@@ -967,7 +968,7 @@ const stealthScript = `
   })();
 `;
 
-// ─── KYC patterns ─────────────────────────────────────────────────────────────
+// ─── KYC patterns ────────────────────────────────────────────────────────────────────────────
 
 const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
   { pattern: /socure/i,              provider: 'Socure'  },
@@ -997,7 +998,7 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
-// ─── Registra listeners ───────────────────────────────────────────────────────
+// ─── Registra listeners ────────────────────────────────────────────────────────────────────────
 
 function registrarListenersFrame(frame: Frame, cycle: number): void {
   try {
@@ -1041,7 +1042,7 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
-// ─── Aplica CDP mobile em uma página ──────────────────────────────────────────
+// ─── Aplica CDP mobile em uma página ──────────────────────────────────────────────────────────
 
 async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<void> {
   try {
@@ -1070,7 +1071,7 @@ async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<
   }
 }
 
-// ─── Cria contexto isolado ────────────────────────────────────────────────────
+// ─── Cria contexto isolado ───────────────────────────────────────────────────────────────────────
 
 async function criarContextoIsolado(
   cycle: number
@@ -1125,12 +1126,12 @@ async function criarContextoIsolado(
   return { context, page };
 }
 
-// ─── Flow principal ───────────────────────────────────────────────────────────
+// ─── Flow principal ─────────────────────────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
   static async init(headless = false): Promise<void> {
     if (browser) {
-      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
+      globalState.addLog('info', '🧁 Browser já está rodando — próximo ciclo abrirá nova aba');
       return;
     }
     if (browserLaunching) {
@@ -1144,7 +1145,7 @@ export class MockPlaywrightFlow {
     }
     browserLaunching = true;
     try {
-      globalState.addLog('info', '🦁 Iniciando Brave...');
+      globalState.addLog('info', '🧁 Iniciando Brave...');
       browser = await chromiumExtra.launch({
         headless,
         executablePath: BRAVE_PATH,
