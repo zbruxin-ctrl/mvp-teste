@@ -785,6 +785,52 @@ function resolverProviderDominante(
   return melhor;
 }
 
+// ─── aguardarTelaOTP: bloqueia até a tela do OTP estar visível (ou timeout) ─────────────────
+// Detecta a presença de qualquer input de OTP antes de iniciar o polling de email.
+// Isso evita que o waitForOTP seja chamado enquanto a página ainda está navegando/carregando
+// após o clique no forward-button, o que causava o flow travar silenciosamente.
+
+async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Promise<boolean> {
+  const SELETORES_OTP = [
+    '#EMAIL_OTP_CODE-0',
+    'input[maxlength="1"]',
+    'input[autocomplete="one-time-code"]',
+    'input[name*="otp"]',
+    'input[name*="code"]',
+    'input[id*="otp"]',
+    'input[id*="code"]',
+  ];
+
+  globalState.addLog('info', '⏳ Aguardando tela de OTP aparecer...', cycle);
+  const inicio = Date.now();
+
+  while (Date.now() - inicio < timeoutMs) {
+    // Verifica se a página ainda está respondendo
+    try {
+      await p.evaluate('1 + 1');
+    } catch {
+      globalState.addLog('warn', '⚠️ Página não responde — possível navegação em curso, aguardando...', cycle);
+      await humanPause(1500);
+      continue;
+    }
+
+    for (const sel of SELETORES_OTP) {
+      try {
+        const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
+        if (visivel) {
+          globalState.addLog('info', `✅ Tela de OTP detectada (${sel})`, cycle);
+          return true;
+        }
+      } catch { /* tenta próximo */ }
+    }
+
+    await humanPause(800);
+  }
+
+  globalState.addLog('warn', `⚠️ Tela de OTP não detectada após ${timeoutMs / 1000}s — prosseguindo mesmo assim`, cycle);
+  return false;
+}
+
 // ─── OTP: polling com retentativas e re-envio ───────────────────────────────────────────────
 
 async function aguardarOTPComRetry(
@@ -1344,6 +1390,11 @@ export class MockPlaywrightFlow {
 
       // ─── humanClickForwardButton: aguarda enabled + remove overlays + force click ───
       await humanClickForwardButton(p, cycle, 15000);
+
+      // ─── FIX: aguarda a tela de OTP aparecer antes de iniciar o polling de email ───
+      // Sem isso, o waitForOTP era chamado imediatamente após o clique, enquanto
+      // a página ainda estava navegando/carregando, causando o flow travar silenciosamente.
+      await aguardarTelaOTP(p, cycle, 20_000);
 
       // ─── aguarda OTP e preenche com estratégia robusta ───
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
