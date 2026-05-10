@@ -507,6 +507,33 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   }
 }
 
+// ─── KYC: resolve provider dominante por score ────────────────────────────────
+//
+// FIX BUG #1 + BUG #3: em vez de pegar sinais[0] (que pode ser de qualquer
+// provider dependendo da ordem), consultamos o estado por provider e retornamos
+// apenas o provider com o maior score, exigindo score mínimo de 4 para evitar
+// falsos positivos de sinais fracos (weight=3 via network-route).
+//
+function resolverProviderDominante(
+  cycle: number,
+  scoreMinimo = 4
+): { provider: string; score: number; url: string } | null {
+  const { byCycle } = globalState.getKycState();
+  const cicloMap = byCycle[cycle];
+  if (!cicloMap) return null;
+
+  let melhor: { provider: string; score: number; url: string } | null = null;
+  for (const [provider, state] of Object.entries(cicloMap)) {
+    if (state.score >= scoreMinimo) {
+      if (!melhor || state.score > melhor.score) {
+        const urlSinal = state.signals[0]?.url ?? '';
+        melhor = { provider, score: state.score, url: urlSinal };
+      }
+    }
+  }
+  return melhor;
+}
+
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
@@ -525,6 +552,17 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     'li:has-text("Foto")',
   ];
 
+  const SELETORES_TIRAR = [
+    '[data-dgui="button"]:has-text("Tirar foto")',
+    'button:has-text("Tirar foto")',
+    'button:has-text("Usar meu telefone")',
+    'button:has-text("Enviar foto")',
+    'button:has-text("Escolher foto")',
+    '[data-testid="step-bottom-navigation"] button',
+    '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
+  ];
+
+  // ── Clica em "Foto do perfil" na lista de requisitos ──────────────────────
   const TIMEOUT_ITEM = 20_000;
   const inicioItem = Date.now();
   let clicouItem = false;
@@ -558,74 +596,78 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   await humanPause(randInt(1500, 2500));
 
-  const SELETORES_TIRAR = [
-    '[data-dgui="button"]:has-text("Tirar foto")',
-    'button:has-text("Tirar foto")',
-    'button:has-text("Usar meu telefone")',
-    'button:has-text("Enviar foto")',
-    'button:has-text("Escolher foto")',
-    '[data-testid="step-bottom-navigation"] button',
-    '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
-  ];
-
-  void (async () => {
-    for (let tentativa = 0; tentativa < 6; tentativa++) {
-      for (const sel of SELETORES_TIRAR) {
-        try {
-          const el = p.locator(sel).first();
-          const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-          if (visivel) {
-            const box = await el.boundingBox().catch(() => null);
-            if (box) {
-              await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-              await humanPause(randInt(300, 600));
-            }
-            await el.click({ force: true, timeout: 5000 });
-            globalState.addLog('info', `📸 Botão foto clicado (${sel})`, cycle);
-            return;
+  // ── FIX BUG #2: clica no botão de foto com await (não mais void fire-and-forget)
+  // Garante que o clique ocorre antes do loop de detecção de KYC começar.
+  // Isso evita a race condition onde o loop de 30s terminava sem o KYC ter sido
+  // disparado porque o botão ainda não tinha sido clicado.
+  let botaoFotoClicado = false;
+  for (let tentativa = 0; tentativa < 6; tentativa++) {
+    for (const sel of SELETORES_TIRAR) {
+      try {
+        const el = p.locator(sel).first();
+        const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+        if (visivel) {
+          const box = await el.boundingBox().catch(() => null);
+          if (box) {
+            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+            await humanPause(randInt(300, 600));
           }
-        } catch { /* tenta próximo */ }
-      }
-      if (tentativa > 0 && tentativa % 2 === 0) {
-        try {
-          await p.evaluate('window.scrollBy(0, 200)');
-          globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
-        } catch { /* ignora */ }
-      }
-      await humanPause(2500);
+          await el.click({ force: true, timeout: 5000 });
+          globalState.addLog('info', `📸 Botão foto clicado (${sel})`, cycle);
+          botaoFotoClicado = true;
+          break;
+        }
+      } catch { /* tenta próximo */ }
     }
-    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
-  })();
+    if (botaoFotoClicado) break;
+    if (tentativa > 0 && tentativa % 2 === 0) {
+      try {
+        await p.evaluate('window.scrollBy(0, 200)');
+        globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
+      } catch { /* ignora */ }
+    }
+    await humanPause(2500);
+  }
 
-  const detectarEFechar = async (provider: string, url: string): Promise<void> => {
+  if (!botaoFotoClicado) {
+    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
+  }
+
+  // ── Ação pós-detecção: fecha se Veriff, mantém se Socure/outros ──────────
+  const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
-      globalState.addLog('info', '🗑️ Veriff detectado → fechando aba para liberar RAM', cycle);
+      globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
       await humanPause(randInt(500, 1000));
       await context.close().catch(() => {});
       contextosPorCiclo.delete(cycle);
     } else {
-      globalState.addLog('success', `🟢 ${provider} detectado (${url}) → aba mantida aberta`, cycle);
+      globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida aberta`, cycle);
     }
   };
 
+  // ── Ronda 1: aguarda KYC por 30s usando score por provider ───────────────
+  // FIX BUG #1 + BUG #3: usa resolverProviderDominante() que:
+  //   - agrupa sinais por provider (não mistura)
+  //   - exige score mínimo de 4 (evita falsos positivos de network-route weight=3)
+  //   - retorna o provider com maior score acumulado
   globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
   const fimKyc1 = Date.now() + 30_000;
   while (Date.now() < fimKyc1) {
-    const sinais = globalState.getKycSignals(cycle);
-    if (sinais && sinais.length > 0) {
-      const s = sinais[0]!;
-      globalState.addLog('info', `✅ KYC detectado: ${s.provider} (fonte: ${s.source})`, cycle);
-      await detectarEFechar(s.provider, s.url ?? '');
+    const dominante = resolverProviderDominante(cycle, 4);
+    if (dominante) {
+      globalState.addLog('info', `✅ KYC detectado: ${dominante.provider} (score=${dominante.score})`, cycle);
+      await detectarEFechar(dominante.provider, dominante.score, dominante.url);
       return;
     }
     await humanPause(1000);
   }
 
-  // Ronda 2: scroll + re-clique
+  // ── Ronda 2: scroll + re-clique ───────────────────────────────────────────
   globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
   try {
     await p.evaluate('window.scrollTo(0, 0)');
     await humanPause(randInt(500, 1000));
+
     for (const sel of SELETORES_ITEM) {
       try {
         const el = p.locator(sel).first();
@@ -653,11 +695,10 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
     const fimKyc2 = Date.now() + 20_000;
     while (Date.now() < fimKyc2) {
-      const sinais = globalState.getKycSignals(cycle);
-      if (sinais && sinais.length > 0) {
-        const s = sinais[0]!;
-        globalState.addLog('info', `✅ KYC detectado (re-clique): ${s.provider} (fonte: ${s.source})`, cycle);
-        await detectarEFechar(s.provider, s.url ?? '');
+      const dominante = resolverProviderDominante(cycle, 4);
+      if (dominante) {
+        globalState.addLog('info', `✅ KYC detectado (re-clique): ${dominante.provider} (score=${dominante.score})`, cycle);
+        await detectarEFechar(dominante.provider, dominante.score, dominante.url);
         return;
       }
       await humanPause(1000);
