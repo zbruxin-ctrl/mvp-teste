@@ -176,6 +176,102 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
+// ─── Preencher OTP (multi-estratégia) ────────────────────────────────────────
+// O Uber usa inputs separados por dígito. Tenta várias estratégias em ordem:
+// 1. IDs padrão (#EMAIL_OTP_CODE-0, -1, -2, -3)
+// 2. Qualquer input[maxlength="1"] visível na tela
+// 3. Campo único (copia o código inteiro)
+// 4. Fallback: pressiona teclas na página (campo focado automaticamente)
+
+async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> {
+  const digits = otp.replace(/\D/g, '').split('');
+  globalState.addLog('info', `⌨️ Preenchendo OTP: ${otp} (${digits.length} dígitos)`, cycle);
+
+  // Estratégia 1: IDs padrão do Uber
+  const idPadrao = await p.locator('#EMAIL_OTP_CODE-0').isVisible({ timeout: 3000 }).catch(() => false);
+  if (idPadrao) {
+    globalState.addLog('info', '🔑 OTP: usando seletor #EMAIL_OTP_CODE-{i}', cycle);
+    for (let i = 0; i < digits.length; i++) {
+      await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
+      await humanPause(randInt(50, 120));
+    }
+    return;
+  }
+
+  // Estratégia 2: inputs de 1 caractere visíveis (inputs separados por dígito)
+  const inputsUnitarios = p.locator('input[maxlength="1"]');
+  const countUnitarios = await inputsUnitarios.count().catch(() => 0);
+  if (countUnitarios >= digits.length) {
+    globalState.addLog('info', `🔑 OTP: usando ${countUnitarios}x input[maxlength=1]`, cycle);
+    for (let i = 0; i < digits.length; i++) {
+      const el = inputsUnitarios.nth(i);
+      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      if (!visivel) continue;
+      const box = await el.boundingBox().catch(() => null);
+      if (box) {
+        await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+        await humanPause(randInt(40, 80));
+      }
+      await el.click({ force: true });
+      await humanPause(randInt(30, 60));
+      await el.fill('');
+      await p.keyboard.type(digits[i]!, { delay: randInt(40, 80) });
+      await humanPause(randInt(60, 130));
+    }
+    return;
+  }
+
+  // Estratégia 3: inputs[type=number] ou inputs[type=tel] com 1 dígito
+  const inputsNum = p.locator('input[type="number"], input[type="tel"]');
+  const countNum = await inputsNum.count().catch(() => 0);
+  if (countNum >= digits.length) {
+    globalState.addLog('info', `🔑 OTP: usando ${countNum}x input[type=number/tel]`, cycle);
+    for (let i = 0; i < digits.length; i++) {
+      const el = inputsNum.nth(i);
+      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      if (!visivel) continue;
+      await el.click({ force: true });
+      await humanPause(randInt(30, 70));
+      await el.fill('');
+      await p.keyboard.type(digits[i]!, { delay: randInt(40, 80) });
+      await humanPause(randInt(60, 130));
+    }
+    return;
+  }
+
+  // Estratégia 4: campo único (input que aceite o código todo)
+  const camposOtp = [
+    'input[autocomplete="one-time-code"]',
+    'input[name*="otp"]',
+    'input[name*="code"]',
+    'input[id*="otp"]',
+    'input[id*="code"]',
+    'input[placeholder*="código"]',
+    'input[placeholder*="code"]',
+  ];
+  for (const sel of camposOtp) {
+    const visivel = await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false);
+    if (visivel) {
+      globalState.addLog('info', `🔑 OTP: campo único (${sel})`, cycle);
+      await humanType(p, sel, otp.replace(/\D/g, ''));
+      return;
+    }
+  }
+
+  // Estratégia 5: fallback — foca no primeiro input visível e digita digit por digit
+  globalState.addLog('warn', '⚠️ OTP: nenhum seletor específico encontrado — fallback teclado', cycle);
+  const primeiroInput = p.locator('input').first();
+  const primeiroVisivel = await primeiroInput.isVisible({ timeout: 3000 }).catch(() => false);
+  if (primeiroVisivel) {
+    await primeiroInput.click({ force: true });
+    await humanPause(randInt(100, 200));
+  }
+  for (const d of digits) {
+    await p.keyboard.type(d, { delay: randInt(60, 120) });
+    await humanPause(randInt(50, 120));
+  }
+}
+
 async function dispensarCookies(p: Page): Promise<void> {
   const candidatos = [
     'button:has-text("Aceitar todos")',
@@ -599,7 +695,7 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  const JANELA_MS = Math.max(30_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
+  const JANELA_MS = Math.max(45_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
     'button:has-text("Reenviar")',
@@ -1069,7 +1165,6 @@ export class MockPlaywrightFlow {
     }
   }
 
-  /** Fecha o browser graciosamente — chamado no SIGINT/SIGTERM */
   static async cleanup(): Promise<void> {
     if (!browser) return;
     globalState.addLog('info', '🛑 Fechando browser (cleanup)...');
@@ -1117,13 +1212,10 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
+      // ─── aguarda OTP e preenche com estratégia robusta ───
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
       await humanPause(randInt(800, 1400));
-      const digits = otp.replace(/\D/g, '').split('');
-      for (let i = 0; i < digits.length; i++) {
-        await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-        await humanPause(randInt(50, 120));
-      }
+      await preencherOTP(p, otp, cycle);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
@@ -1154,7 +1246,7 @@ export class MockPlaywrightFlow {
 
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(700, 1400));
-      globalState.addLog('info', '🔄 Redirecionado para bonjo', cycle);
+      globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
 
       await dispensarCookies(p);
       await selecionarCidade(p, payload.localizacao, cycle);
