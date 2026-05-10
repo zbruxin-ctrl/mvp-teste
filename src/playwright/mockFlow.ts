@@ -588,8 +588,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       }
       if (tentativa > 0 && tentativa % 2 === 0) {
         try {
-          // FIX TS2304: usa string literal em vez de arrow function para evitar
-          // que o TypeScript interprete 'window' como contexto Node.
           await p.evaluate('window.scrollBy(0, 200)');
           globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
         } catch { /* ignora */ }
@@ -626,7 +624,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   // Ronda 2: scroll + re-clique
   globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
   try {
-    // FIX TS2304: usa string literal em vez de arrow function
     await p.evaluate('window.scrollTo(0, 0)');
     await humanPause(randInt(500, 1000));
     for (const sel of SELETORES_ITEM) {
@@ -672,88 +669,73 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
 }
 
-// ─── Fingerprint stealth ──────────────────────────────────────────────────────
+// ─── Stealth script — identidade MOBILE (iPhone 14, iOS 16) ──────────────────
+// IMPORTANTE: platform='iPhone', maxTouchPoints=5, sem Win32, sem plugins desktop.
+// Mantém consistência com o userAgent iPhone 14 definido pelo MOBILE_DEVICE do Playwright.
 
 const stealthScript = `
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  const makePlugin = (name, filename, desc, mimeTypes) => {
-    const plugin = Object.create(Plugin.prototype);
-    Object.defineProperties(plugin, {
-      name: { value: name, enumerable: true },
-      filename: { value: filename, enumerable: true },
-      description: { value: desc, enumerable: true },
-      length: { value: mimeTypes.length, enumerable: true },
+  (function() {
+    // Remove webdriver flag
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+    // Plataforma e identidade mobile — DEVE ser iPhone, nunca Win32
+    Object.defineProperty(navigator, 'platform',          { get: () => 'iPhone' });
+    Object.defineProperty(navigator, 'maxTouchPoints',    { get: () => 5 });
+    Object.defineProperty(navigator, 'languages',         { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+    Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 6 });
+    // deviceMemory não existe no iOS Safari — removido intencionalmente
+
+    // Sem plugins (iOS Safari não tem plugins de desktop)
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const arr = Object.create(PluginArray.prototype);
+        Object.defineProperty(arr, 'length', { value: 0 });
+        arr.item = () => null;
+        arr.namedItem = () => null;
+        arr.refresh = () => {};
+        return arr;
+      }
     });
-    mimeTypes.forEach((mt, i) => {
-      const mime = Object.create(MimeType.prototype);
-      Object.defineProperties(mime, {
-        type: { value: mt.type, enumerable: true },
-        suffixes: { value: mt.suffixes, enumerable: true },
-        description: { value: mt.description, enumerable: true },
-        enabledPlugin: { value: plugin, enumerable: true },
-      });
-      plugin[i] = mime;
-    });
-    return plugin;
-  };
-  const fakePlugins = [
-    makePlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', [
-      { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
-      { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
-    ]),
-    makePlugin('Chrome PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', [
-      { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
-    ]),
-  ];
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-      const arr = Object.create(PluginArray.prototype);
-      fakePlugins.forEach((p, i) => { arr[i] = p; });
-      Object.defineProperty(arr, 'length', { value: fakePlugins.length });
-      arr.item = i => fakePlugins[i];
-      arr.namedItem = name => fakePlugins.find(p => p.name === name) || null;
-      arr.refresh = () => {};
-      return arr;
+
+    // Conexão mobile
+    if (navigator.connection) {
+      Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
+      Object.defineProperty(navigator.connection, 'rtt',           { get: () => 80 });
+      Object.defineProperty(navigator.connection, 'downlink',      { get: () => 8 });
+      Object.defineProperty(navigator.connection, 'saveData',      { get: () => false });
     }
-  });
-  Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-  Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
-  Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-  Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-  if (navigator.connection) {
-    Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
-    Object.defineProperty(navigator.connection, 'rtt', { get: () => 50 });
-    Object.defineProperty(navigator.connection, 'downlink', { get: () => 10 });
-    Object.defineProperty(navigator.connection, 'saveData', { get: () => false });
-  }
-  if (!window.chrome) window.chrome = {};
-  if (!window.chrome.runtime) {
-    window.chrome.runtime = { connect: () => ({}), sendMessage: () => {}, id: undefined, OnInstalledReason: {} };
-  }
-  const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
-  window.navigator.permissions.query = (p) =>
-    p.name === 'notifications'
-      ? Promise.resolve({ state: Notification.permission, onchange: null })
-      : _origQuery(p);
-  const getParameter = WebGLRenderingContext.prototype.getParameter;
-  WebGLRenderingContext.prototype.getParameter = function (param) {
-    if (param === 37445) return 'Intel Inc.';
-    if (param === 37446) return 'Intel Iris OpenGL Engine';
-    return getParameter.call(this, param);
-  };
-  const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-  HTMLCanvasElement.prototype.toDataURL = function (type) {
-    const ctx = this.getContext('2d');
-    if (ctx) {
-      const noise = ctx.createImageData(1, 1);
-      noise.data[0] = Math.floor(Math.random() * 3);
-      ctx.putImageData(noise, Math.random() * this.width | 0, Math.random() * this.height | 0);
-    }
-    return origToDataURL.apply(this, arguments);
-  };
+
+    // Screen — iPhone 14: 390x844 logical, devicePixelRatio 3
+    Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+    Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+    // Permissions — notificações
+    const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
+    window.navigator.permissions.query = (p) =>
+      p.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission, onchange: null })
+        : _origQuery(p);
+
+    // Canvas noise sutil (anti-fingerprint)
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type) {
+      const ctx = this.getContext('2d');
+      if (ctx) {
+        const noise = ctx.createImageData(1, 1);
+        noise.data[0] = Math.floor(Math.random() * 3);
+        ctx.putImageData(noise, Math.random() * this.width | 0, Math.random() * this.height | 0);
+      }
+      return origToDataURL.apply(this, arguments);
+    };
+
+    // WebGL — mobile GPU genérico (Apple GPU não revela marca real)
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(param) {
+      if (param === 37445) return 'Apple Inc.';
+      if (param === 37446) return 'Apple GPU';
+      return getParameter.call(this, param);
+    };
+  })();
 `;
 
 // ─── KYC patterns ─────────────────────────────────────────────────────────────
@@ -849,6 +831,7 @@ async function criarContextoIsolado(
     ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
+  // stealthScript ANTES do KYC script — ordem importa
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
