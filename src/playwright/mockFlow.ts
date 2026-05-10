@@ -187,8 +187,8 @@ async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> 
   const digits = otp.replace(/\D/g, '').split('');
   globalState.addLog('info', `⌨️ Preenchendo OTP: ${otp} (${digits.length} dígitos)`, cycle);
 
-  // Estratégia 1: IDs padrão do Uber
-  const idPadrao = await p.locator('#EMAIL_OTP_CODE-0').isVisible({ timeout: 3000 }).catch(() => false);
+  // Estratégia 1: IDs padrão do Uber — aguarda até 10s para garantir que a tela já renderizou
+  const idPadrao = await p.locator('#EMAIL_OTP_CODE-0').isVisible({ timeout: 10000 }).catch(() => false);
   if (idPadrao) {
     globalState.addLog('info', '🔑 OTP: usando seletor #EMAIL_OTP_CODE-{i}', cycle);
     for (let i = 0; i < digits.length; i++) {
@@ -1201,8 +1201,14 @@ export class MockPlaywrightFlow {
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await p.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
-      await humanPause(randInt(1200, 2000));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
+
+      // Aguarda o campo de email ficar visível antes de criar a conta temporária
+      // Isso evita o bug onde createRandomEmail() é chamado mas a página ainda não renderizou o formulário
+      globalState.addLog('info', '⏳ Aguardando campo de email ficar visível...', cycle);
+      await p.waitForSelector('#PHONE_NUMBER_or_EMAIL_ADDRESS', { state: 'visible', timeout: 30000 });
+      globalState.addLog('info', '✅ Campo de email visível — prosseguindo', cycle);
+      await humanPause(randInt(1200, 2000));
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
