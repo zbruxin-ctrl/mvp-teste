@@ -8,9 +8,9 @@ import {
 } from '../types/tempMail';
 import { OTPParser } from '../utils/otpParser';
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 
 function isStopped(): boolean {
   return !!(globalState.getState() as { shouldStop?: boolean }).shouldStop;
@@ -25,7 +25,6 @@ async function sleep(ms: number): Promise<void> {
   }
 }
 
-/** fetch com timeout, retorna null em erros de rede (não lança) */
 async function safeFetch(
   url: string,
   options: Parameters<typeof fetch>[1] & { timeoutMs?: number }
@@ -43,7 +42,6 @@ async function safeFetch(
   }
 }
 
-/** Faz até `maxAttempts` tentativas com backoff exponencial. Lança apenas se todas falharem. */
 async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
@@ -66,9 +64,9 @@ async function withRetry<T>(
   throw lastErr;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 // TempMailClient  (temp-mail.io)
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 export class TempMailClient implements IEmailClient {
   private config: TempMailConfig;
 
@@ -82,7 +80,6 @@ export class TempMailClient implements IEmailClient {
       'Content-Type': 'application/json',
       'X-API-Key': this.config.apiKey,
     };
-
     const res = await safeFetch(url, { method, headers });
     if (!res) throw new Error(`Temp-Mail ${endpoint}: erro de rede/timeout`);
     if (!res.ok) {
@@ -134,17 +131,15 @@ export class TempMailClient implements IEmailClient {
 
     while (Date.now() - startTime < timeoutMs) {
       if (isStopped()) throw new Error('Parado pelo usuário');
-
       try {
         const messages = await withRetry('temp-mail.io listMessages', () => this.listMessages(email), 3, 1500);
-
         if (messages.length > lastMessageCount) {
           globalState.addLog('info', `📨 [temp-mail.io] ${messages.length} mensagem(s) — verificando OTP...`, cycle);
           for (const message of messages.slice(lastMessageCount).reverse()) {
             try {
               const full = await withRetry('temp-mail.io getFullMessage', () => this.getFullMessage(message.mail_id), 3, 1500);
               const mailMsg: MailMessage = { ...message, mail_text: full.body_text ?? '', mail_html: full.body_html ?? '' };
-              const otp = OTPParser.extractFromMessage(mailMsg);
+              const otp = await OTPParser.extractFromMessageAsync(mailMsg);
               if (otp) {
                 globalState.addLog('success', `🎉 [temp-mail.io] OTP encontrado: ${otp}`, cycle);
                 return otp;
@@ -159,16 +154,15 @@ export class TempMailClient implements IEmailClient {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
         globalState.addLog('warn', `⚠️ [temp-mail.io] Erro no poll: ${e instanceof Error ? e.message : e}`, cycle);
       }
-
       await sleep(POLL_INTERVAL_MS);
     }
     throw new Error(`⏰ Timeout aguardando OTP temp-mail.io (${Math.round(timeoutMs / 1000)}s)`);
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 // MailTmClient  (mail.tm)
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 
 interface MailTmMessageSummary {
   id: string;
@@ -220,11 +214,9 @@ export class MailTmClient implements IEmailClient {
 
     if (!res) throw new Error(`Mail.tm ${endpoint}: erro de rede/timeout`);
 
-    // Token expirado — tenta relogin automático
     if (res.status === 401 && auth) {
       globalState.addLog('warn', '🔑 [mail.tm] Token expirado — reautenticando...');
       await this.relogin();
-      // refaz a request uma vez com o novo token
       const headers2: Record<string, string> = { 'Content-Type': 'application/json' };
       if (this.authToken) headers2['Authorization'] = `Bearer ${this.authToken}`;
       const res2 = await safeFetch(url, {
@@ -265,7 +257,6 @@ export class MailTmClient implements IEmailClient {
 
   async createRandomEmail(): Promise<EmailAccount> {
     globalState.addLog('info', '📧 [mail.tm] Buscando domínios disponíveis...');
-
     const domainsResp = await withRetry(
       'mail.tm getDomains',
       () => this.request<{ 'hydra:member': Array<{ domain: string; isActive: boolean }> }>('/domains?page=1')
@@ -305,12 +296,10 @@ export class MailTmClient implements IEmailClient {
 
   private async getFullMessage(id: string): Promise<{ html: string; text: string }> {
     const resp = await this.request<MailTmMessageFull>(`/messages/${id}`, 'GET', undefined, true);
-
     const html = Array.isArray(resp.html) ? resp.html.join('\n') : (resp.html ?? '');
     const text = (typeof resp.text === 'string' && resp.text.trim().length > 0)
       ? resp.text
       : (resp.intro ?? '');
-
     return { html, text };
   }
 
@@ -321,7 +310,6 @@ export class MailTmClient implements IEmailClient {
     const INITIAL_WAIT_MS  = 6_000;
 
     globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`, cycle);
-
     if (!this.authToken) throw new Error('Mail.tm: não autenticado — chame createRandomEmail() primeiro');
 
     globalState.addLog('info', `⏳ [mail.tm] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`, cycle);
@@ -346,8 +334,8 @@ export class MailTmClient implements IEmailClient {
             globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`, cycle);
             try {
               const full = await withRetry('mail.tm getFullMessage', () => this.getFullMessage(msg.id), 3, 1500);
-              globalState.addLog('info', `📄 [mail.tm] html(200): ${full.html.slice(0, 200)}`, cycle);
-              globalState.addLog('info', `📄 [mail.tm] text(200): ${full.text.slice(0, 200)}`, cycle);
+              globalState.addLog('info', `📄 [mail.tm] html(300): ${full.html.slice(0, 300)}`, cycle);
+              globalState.addLog('info', `📄 [mail.tm] text(300): ${full.text.slice(0, 300)}`, cycle);
 
               const mailMsg: MailMessage = {
                 mail_id: msg.id,
@@ -360,7 +348,8 @@ export class MailTmClient implements IEmailClient {
                 created_at: msg.createdAt,
               };
 
-              const otp = OTPParser.extractFromMessage(mailMsg);
+              // extractFromMessageAsync resolve iframes antes de extrair
+              const otp = await OTPParser.extractFromMessageAsync(mailMsg);
               if (otp) {
                 globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`, cycle);
                 return otp;
