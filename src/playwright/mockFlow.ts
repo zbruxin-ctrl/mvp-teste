@@ -599,7 +599,6 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  // Divide o timeout total igualmente entre as tentativas, com mínimo de 30s por janela
   const JANELA_MS = Math.max(30_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
@@ -620,14 +619,12 @@ async function aguardarOTPComRetry(
     );
 
     try {
-      // Passa a janela completa como timeout para o client — ele controla o polling interno
       const otp = await client.waitForOTP(email, JANELA_MS);
       if (otp) {
         globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
         return otp;
       }
     } catch (err) {
-      // Se for parada manual, propaga imediatamente
       if (err instanceof Error && err.message.includes('Parado')) throw err;
       globalState.addLog('warn', `⚠️ OTP tentativa ${tentativa} falhou: ${err instanceof Error ? err.message : err}`, cycle);
     }
@@ -1077,7 +1074,6 @@ export class MockPlaywrightFlow {
     if (!browser) return;
     globalState.addLog('info', '🛑 Fechando browser (cleanup)...');
     try {
-      // Fecha todos os contextos abertos antes de fechar o browser
       for (const [cycle, ctx] of contextosPorCiclo.entries()) {
         await ctx.close().catch(() => {});
         contextosPorCiclo.delete(cycle);
@@ -1178,8 +1174,7 @@ export class MockPlaywrightFlow {
       const msg = err instanceof Error ? err.message : String(err);
       globalState.addLog('error', `❌ Ciclo #${cycle} falhou: ${msg}`, cycle);
       try {
-        const artifacts = new ArtifactsManager();
-        await artifacts.saveErrorArtifacts(p, cycle);
+        await ArtifactsManager.saveErrorArtifacts(p, cycle);
       } catch { /* ignora */ }
       throw err;
     }
