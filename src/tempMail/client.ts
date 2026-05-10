@@ -115,6 +115,33 @@ export class TempMailClient implements IEmailClient {
 // ─────────────────────────────────────────────────────────────────────────────
 // MailTmClient  (mail.tm)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Tipos exatos conforme a API do mail.tm:
+// GET /messages        → lista resumida (sem html/text/intro no item)
+// GET /messages/{id}   → objeto completo com html: string[], text: string, intro: string
+
+interface MailTmMessageSummary {
+  id: string;
+  from: { address: string; name: string };
+  subject: string;
+  createdAt: string;
+  seen: boolean;
+}
+
+interface MailTmMessageFull {
+  id: string;
+  from: { address: string; name: string };
+  subject: string;
+  createdAt: string;
+  seen: boolean;
+  // html é SEMPRE array de strings conforme a doc oficial
+  html: string[];
+  // text é sempre string simples
+  text: string;
+  // intro é um resumo curto do conteúdo (só existe no objeto completo)
+  intro: string;
+}
+
 export class MailTmClient implements IEmailClient {
   private baseUrl = 'https://api.mail.tm';
   private authToken: string | null = null;
@@ -175,11 +202,9 @@ export class MailTmClient implements IEmailClient {
     const password = this.generatePassword();
 
     globalState.addLog('info', `📧 [mail.tm] Criando conta: ${address}`);
-
     await this.request<{ id: string; address: string }>('/accounts', 'POST', { address, password });
 
     const tokenResp = await this.request<{ id: string; token: string }>('/token', 'POST', { address, password });
-
     this.authToken = tokenResp.token;
     this.accountEmail = address;
     this.accountPassword = password;
@@ -188,32 +213,32 @@ export class MailTmClient implements IEmailClient {
     return { email: address, token: tokenResp.token };
   }
 
-  private async listMessages(): Promise<Array<{
-    id: string; from: { address: string; name: string }; subject: string; createdAt: string; seen: boolean;
-  }>> {
-    const resp = await this.request<{ 'hydra:member': Array<{
-      id: string; from: { address: string; name: string }; subject: string; createdAt: string; seen: boolean;
-    }> }>('/messages?page=1', 'GET', undefined, true);
+  private async listMessages(): Promise<MailTmMessageSummary[]> {
+    const resp = await this.request<{ 'hydra:member': MailTmMessageSummary[] }>(
+      '/messages?page=1', 'GET', undefined, true
+    );
     return resp['hydra:member'] ?? [];
   }
 
-  private async getFullMessage(id: string): Promise<{ text: string; html: string }> {
-    const resp = await this.request<{
-      text?: string | string[];
-      html?: string | string[];
-      intro?: string;
-    }>(`/messages/${id}`, 'GET', undefined, true);
+  // FIX: tipagem correta conforme doc oficial do mail.tm:
+  // - html é string[] (array de chunks HTML) — une com '\n' para preservar estrutura
+  // - text é string simples
+  // - intro é string (resumo curto, fallback quando text vier vazio)
+  // intro NÃO existe na listagem /messages — só no objeto completo /messages/{id}
+  private async getFullMessage(id: string): Promise<{ html: string; text: string }> {
+    const resp = await this.request<MailTmMessageFull>(`/messages/${id}`, 'GET', undefined, true);
 
-    const normalizeField = (field: string | string[] | undefined, sep = ' '): string => {
-      if (!field) return '';
-      if (Array.isArray(field)) return field.join(sep);
-      return field;
-    };
+    // html: array de chunks — une com newline para não colapsar tags adjacentes
+    const html = Array.isArray(resp.html)
+      ? resp.html.join('\n')
+      : (resp.html ?? '');
 
-    return {
-      html: normalizeField(resp.html, ''),
-      text: normalizeField(resp.text, ' ') || resp.intro || '',
-    };
+    // text: sempre string; usa intro como último fallback se text vier completamente vazio
+    const text = (typeof resp.text === 'string' && resp.text.trim().length > 0)
+      ? resp.text
+      : (resp.intro ?? '');
+
+    return { html, text };
   }
 
   async waitForOTP(email: string, timeoutMs = 60000, cycle?: number): Promise<string> {
@@ -245,13 +270,16 @@ export class MailTmClient implements IEmailClient {
         globalState.addLog('info', `📬 [mail.tm] Caixa com ${messages.length} mensagem(s) (anterior: ${lastMessageCount})`, cycle);
 
         if (messages.length > lastMessageCount) {
-          globalState.addLog('info', `📨 [mail.tm] ${messages.length - lastMessageCount} mensagem(s) nova(s) — verificando OTP...`, cycle);
-          for (const msg of messages.slice(lastMessageCount).reverse()) {
+          const novas = messages.slice(lastMessageCount);
+          globalState.addLog('info', `📨 [mail.tm] ${novas.length} mensagem(s) nova(s) — verificando OTP...`, cycle);
+
+          for (const msg of novas.reverse()) {
             globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`, cycle);
             try {
               const full = await this.getFullMessage(msg.id);
               globalState.addLog('info', `📄 [mail.tm] html(200): ${full.html.slice(0, 200)}`, cycle);
               globalState.addLog('info', `📄 [mail.tm] text(200): ${full.text.slice(0, 200)}`, cycle);
+
               const mailMsg: MailMessage = {
                 mail_id: msg.id,
                 mail_from: msg.from.address,
@@ -262,13 +290,13 @@ export class MailTmClient implements IEmailClient {
                 mail_text: full.text,
                 created_at: msg.createdAt,
               };
+
               const otp = OTPParser.extractFromMessage(mailMsg);
               if (otp) {
                 globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`, cycle);
                 return otp;
-              } else {
-                globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído de "${msg.subject}"`, cycle);
               }
+              globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído de "${msg.subject}"`, cycle);
             } catch (e) {
               globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`, cycle);
             }
@@ -292,9 +320,6 @@ export class MailTmClient implements IEmailClient {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IEmailClient interface update — waitForOTP agora aceita cycle opcional
-// ─────────────────────────────────────────────────────────────────────────────
 export function createEmailClient(provider: 'temp-mail.io' | 'mail.tm', apiKey?: string): IEmailClient {
   if (provider === 'mail.tm') return new MailTmClient();
   if (!apiKey) throw new Error('temp-mail.io requer uma API key');
