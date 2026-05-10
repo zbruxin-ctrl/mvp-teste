@@ -2,9 +2,10 @@ import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page, BrowserContext, Frame, devices } from 'playwright';
 import { globalState } from '../state/globalState';
-import { TempMailClient } from '../tempMail/client';
+import { createEmailClient, IEmailClient } from '../tempMail/client';
 import { gerarPayloadCompleto } from '../utils/dataGenerators';
 import { ArtifactsManager } from '../utils/artifacts';
+import { EmailProvider } from '../types/tempMail';
 
 chromiumExtra.use(StealthPlugin());
 
@@ -536,9 +537,10 @@ function resolverProviderDominante(
 }
 
 // ─── OTP: polling com retentativas e re-envio ─────────────────────────────────
+
 async function aguardarOTPComRetry(
   p: Page,
-  client: TempMailClient,
+  client: IEmailClient,
   email: string,
   otpTimeout: number,
   cycle: number
@@ -894,17 +896,11 @@ function registrarListenersPage(page: Page, cycle: number): void {
 }
 
 // ─── Aplica CDP mobile em uma página ──────────────────────────────────────────────
-//
-// Garante que TODA página/popup no contexto (inclusive novas abas abertas
-// por window.open ou links target=_blank) seja emulada como iPhone 14.
-// Sem isso, abas secundárias abrem com viewport de desktop.
-//
+
 async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<void> {
   try {
-    // setViewportSize é a camada Playwright — garante que .viewport() retorne certo
     await page.setViewportSize({ width: MOBILE_WIDTH, height: MOBILE_HEIGHT });
 
-    // CDP: sobrescreve métricas de device na camada Blink
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       mobile: true,
@@ -919,7 +915,6 @@ async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<
       acceptLanguage: 'pt-BR,pt;q=0.9',
       platform: 'iPhone',
     });
-    // Garante que a CSS media query (hover:none / pointer:coarse) seja correta
     await cdp.send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' }).catch(() => {});
 
     const tag = label ? ` [${label}]` : '';
@@ -936,9 +931,6 @@ async function criarContextoIsolado(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
-  // O spread de MOBILE_DEVICE já define userAgent, viewport e deviceScaleFactor
-  // no contexto. O CDP abaixo complementa com mobile:true e touch emulation,
-  // garantindo que o Blink também saiba que é mobile (essencial para media queries).
   const context = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -963,25 +955,17 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  // Aplica CDP mobile na página principal
   await aplicarCDPMobile(page, cycle, 'página principal');
 
   registrarListenersPage(page, cycle);
 
-  // ⚠️ CORREÇÃO PRINCIPAL:
-  // Qualquer nova aba ou popup aberto pelo site (window.open, target="_blank",
-  // links internos etc.) recebe CDP mobile imediatamente antes de navegar.
-  // Sem isso, novas abas abrem com configuração de desktop.
   context.on('page', async (novaPage) => {
     const url = novaPage.url() || '(carregando...)';
     globalState.addLog('info', `📌 Nova aba/popup: ${url} — aplicando mobile...`, cycle);
 
-    // Aplica CDP mobile ANTES da página começar a carregar
     await aplicarCDPMobile(novaPage, cycle, `popup:${url.slice(0, 40)}`);
     registrarListenersPage(novaPage, cycle);
 
-    // Aguarda a aba começar a carregar e aplica novamente após navegação
-    // (some popups ignoram o CDP do evento 'page' se ainda não tm target)
     novaPage.once('domcontentloaded', async () => {
       await aplicarCDPMobile(novaPage, cycle, `popup-dce:${novaPage.url().slice(0, 40)}`).catch(() => {});
     });
@@ -1038,6 +1022,7 @@ export class MockPlaywrightFlow {
   static async execute(
     cadastroUrl: string,
     config: {
+      emailProvider: EmailProvider;
       tempMailApiKey: string;
       otpTimeout: number;
       extraDelay: number;
@@ -1050,7 +1035,8 @@ export class MockPlaywrightFlow {
     globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
     const { context, page: p } = await criarContextoIsolado(cycle);
 
-    const client = new TempMailClient(config.tempMailApiKey);
+    // Instancia o client correto com base no provider escolhido na UI
+    const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
