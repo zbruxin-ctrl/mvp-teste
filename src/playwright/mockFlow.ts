@@ -182,6 +182,82 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   }
 }
 
+// ─── humanClickForwardButton: aguarda #forward-button enabled, remove overlays e clica com force ──
+// Usado especificamente após preencher o email, onde o botão fica disabled até validação client-side
+// e overlays de loading cobrem o elemento bloqueando pointer-events normais.
+
+async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
+  globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
+
+  const inicio = Date.now();
+  let habilitado = false;
+  while (Date.now() - inicio < timeoutMs) {
+    try {
+      const disabled = await p.evaluate(() => {
+        const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
+        if (!btn) return true;
+        return btn.disabled
+          || btn.getAttribute('aria-disabled') === 'true'
+          || btn.classList.contains('disabled');
+      });
+      if (!disabled) { habilitado = true; break; }
+    } catch { /* ignora */ }
+    await humanPause(300);
+  }
+
+  if (!habilitado) {
+    globalState.addLog('warn', '⚠️ #forward-button não habilitou em tempo — tentando click force mesmo assim', cycle);
+  } else {
+    globalState.addLog('info', '✅ #forward-button habilitado — clicando', cycle);
+  }
+
+  // Remove overlays que possam cobrir o botão
+  await p.evaluate(`
+    (function() {
+      var btn = document.querySelector('#forward-button');
+      if (!btn) return;
+      var rect = btn.getBoundingClientRect();
+      var cx = rect.left + rect.width / 2;
+      var cy = rect.top  + rect.height / 2;
+      for (var i = 0; i < 10; i++) {
+        var top = document.elementFromPoint(cx, cy);
+        if (!top || top === btn || btn.contains(top)) break;
+        top.style.pointerEvents = 'none';
+      }
+    })()
+  `).catch(() => {});
+
+  await humanPause(randInt(200, 400));
+
+  const box = await p.locator('#forward-button').boundingBox().catch(() => null);
+  if (box) {
+    const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
+    const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
+    await humanMouseMove(p, tx, ty);
+    await humanPause(randInt(60, 130));
+    try {
+      await p.mouse.click(tx, ty);
+      return;
+    } catch { /* tenta force */ }
+  }
+
+  // Fallback: force click direto
+  try {
+    await p.click('#forward-button', { force: true, timeout: 5000 });
+    return;
+  } catch { /* tenta dispatchEvent */ }
+
+  await p.evaluate(`
+    (function() {
+      var btn = document.querySelector('#forward-button');
+      if (!btn) return;
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
+    })()
+  `);
+}
+
 // ─── Aguarda botão #forward-button ficar habilitado (não disabled) ─────────────────────────────
 
 async function aguardarForwardHabilitado(p: Page, timeoutMs = 12000, cycle: number): Promise<boolean> {
@@ -1245,7 +1321,6 @@ export class MockPlaywrightFlow {
           var rect = input.getBoundingClientRect();
           var cx = rect.left + rect.width / 2;
           var cy = rect.top  + rect.height / 2;
-          // Remove pointerEvents de todos os elementos na pilha, exceto o próprio input
           var maxDepth = 10;
           for (var i = 0; i < maxDepth; i++) {
             var top = document.elementFromPoint(cx, cy);
@@ -1266,7 +1341,9 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await humanClick(p, '#forward-button');
+
+      // ─── humanClickForwardButton: aguarda enabled + remove overlays + force click ───
+      await humanClickForwardButton(p, cycle, 15000);
 
       // ─── aguarda OTP e preenche com estratégia robusta ───
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
@@ -1295,7 +1372,6 @@ export class MockPlaywrightFlow {
             await p.keyboard.press('Enter');
             globalState.addLog('info', '⌨️ Enter pressionado no último campo OTP (fallback)', cycle);
           } else {
-            // Último recurso: clica no botão de qualquer forma
             await humanClick(p, '#forward-button');
           }
         } catch {
