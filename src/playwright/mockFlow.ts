@@ -51,7 +51,8 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
 
 /**
  * Espera até que não haja nenhum elemento cobrindo o seletor alvo.
- * Tudo roda dentro do browser via p.evaluate (sem referências a tipos DOM no Node).
+ * Usa string literal no p.evaluate para evitar que o TypeScript do Node
+ * tente checar referências a `document` / `Node` (TS2584).
  */
 async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -62,16 +63,15 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
 
-      // Roda inteiramente no contexto do browser — sem referências a document/Node no Node.js
+      // String literal → TypeScript não faz type-check do conteúdo (roda só no browser)
       const isTarget = await p.evaluate(
-        ([x, y, sel]: [number, number, string]) => {
-          const top = document.elementFromPoint(x, y);
-          const target = document.querySelector(sel);
-          if (!target || !top) return false;
-          return target === top || target.contains(top);
-        },
-        [cx, cy, selector] as [number, number, string]
-      );
+        `(function(){ \
+          var top = document.elementFromPoint(${cx}, ${cy}); \
+          var target = document.querySelector(${JSON.stringify(selector)}); \
+          if (!target || !top) return false; \
+          return target === top || target.contains(top); \
+        })()`
+      ) as boolean;
 
       if (isTarget) return;
     } catch { /* ignora e repete */ }
