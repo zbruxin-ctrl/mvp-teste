@@ -19,9 +19,12 @@ export interface ProxyConfig {
   password?: string;
 }
 
+export type EmailProvider = 'temp-mail.io' | 'mail.tm';
+
 export interface Config {
   cadastroUrl: string;
   tempMailApiKey: string;
+  emailProvider: EmailProvider;
   inviteCode: string;
   otpTimeout: number;
   cycleInterval: number;

@@ -2,10 +2,11 @@ import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page, BrowserContext, Frame, devices } from 'playwright';
 import { globalState } from '../state/globalState';
-import { createEmailClient, IEmailClient } from '../tempMail/client';
+import { createEmailClient } from '../tempMail/client';
+import { IEmailClient } from '../types/tempMail';
+import { EmailProvider } from '../types';
 import { gerarPayloadCompleto } from '../utils/dataGenerators';
 import { ArtifactsManager } from '../utils/artifacts';
-import { EmailProvider } from '../types/tempMail';
 
 chromiumExtra.use(StealthPlugin());
 
@@ -17,7 +18,6 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-// Dimensões fixas do iPhone 14 — usadas em todos os contextos CDP
 const MOBILE_WIDTH  = MOBILE_DEVICE.viewport?.width  ?? 390;
 const MOBILE_HEIGHT = MOBILE_DEVICE.viewport?.height ?? 844;
 const MOBILE_DPR    = MOBILE_DEVICE.deviceScaleFactor ?? 3;
@@ -895,7 +895,7 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
-// ─── Aplica CDP mobile em uma página ──────────────────────────────────────────────
+// ─── Aplica CDP mobile em uma página ──────────────────────────────────────────
 
 async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<void> {
   try {
@@ -1035,7 +1035,6 @@ export class MockPlaywrightFlow {
     globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
     const { context, page: p } = await criarContextoIsolado(cycle);
 
-    // Instancia o client correto com base no provider escolhido na UI
     const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
 
     try {
