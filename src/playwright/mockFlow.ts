@@ -1439,7 +1439,8 @@ export class MockPlaywrightFlow {
 
       await aguardarTelaOTP(p, cycle, 20_000);
 
-      const otp = await aguardarOTPComRetry(p, client, emailAccount, config.otpTimeout, cycle);
+      // FIX: passa emailAccount.email (string) em vez do objeto EmailAccount
+      const otp = await aguardarOTPComRetry(p, client, emailAccount.email, config.otpTimeout, cycle);
       await preencherOTP(p, otp, cycle);
       await humanPause(randInt(500, 900));
 
