@@ -1424,6 +1424,7 @@ export class MockPlaywrightFlow {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
+      // ── 1. EMAIL ──────────────────────────────────────────────────────────────
       globalState.addLog('info', '⏳ Aguardando campo de email ficar visível...', cycle);
       await p.waitForSelector('#PHONE_NUMBER_or_EMAIL_ADDRESS', { state: 'visible', timeout: 30000 });
       globalState.addLog('info', '✅ Campo de email visível — prosseguindo', cycle);
@@ -1455,63 +1456,59 @@ export class MockPlaywrightFlow {
 
       globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-
       await humanPause(randInt(400, 700));
       await humanClickForwardButton(p, cycle);
 
-      // PARTE 1 FIX: aguardarSeletorComTimeout com 30s (era 20s antes) para absorver
-      // servidores lentos. humanClickForwardButton já fez pageStable, então aqui
-      // só confirma que o campo existe antes de tentar preencher.
+      // ── 2. OTP ────────────────────────────────────────────────────────────────
+      await aguardarTelaOTP(p, cycle, 20_000);
+      const otp = await aguardarOTPComRetry(p, client, emailAccount.email, config.otpTimeout, cycle);
+      await preencherOTP(p, otp, cycle);
+      await humanPause(randInt(500, 900));
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
+      // ── 3. TELEFONE ───────────────────────────────────────────────────────────
+      globalState.addLog('info', '📱 Aguardando campo de telefone...', cycle);
+      await aguardarSeletorComTimeout(p, '#PHONE_NUMBER', 20_000, cycle, '#PHONE_NUMBER');
+      await dispensarCookies(p);
+      await humanPause(randInt(600, 1000));
+      globalState.addLog('info', '📱 Preenchendo telefone...', cycle);
+      await humanType(p, '#PHONE_NUMBER', payload.telefone);
+      await humanPause(randInt(400, 700));
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
+      // ── 4. SENHA ──────────────────────────────────────────────────────────────
+      globalState.addLog('info', '🔒 Aguardando campo de senha...', cycle);
+      await aguardarSeletorComTimeout(p, '#PASSWORD', 20_000, cycle, '#PASSWORD');
+      await humanPause(randInt(600, 1000));
+      globalState.addLog('info', '🔒 Preenchendo senha...', cycle);
+      await humanType(p, '#PASSWORD', payload.senha);
+      await humanPause(randInt(400, 700));
+      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(800, 1400));
+
+      // ── 5. NOME ───────────────────────────────────────────────────────────────
       globalState.addLog('info', '⏳ Aguardando tela de nome (#FIRST_NAME)...', cycle);
       await aguardarSeletorComTimeout(p, '#FIRST_NAME', 30_000, cycle, '#FIRST_NAME');
-
       await dispensarCookies(p);
-
-      globalState.addLog('info', '📝 Preenchendo nome...', cycle);
       await humanPause(randInt(600, 1000));
-
+      globalState.addLog('info', '📝 Preenchendo nome...', cycle);
       await humanType(p, '#FIRST_NAME', payload.nome);
       await humanPause(randInt(400, 700));
       await humanType(p, '#LAST_NAME', payload.sobrenome);
       await humanPause(randInt(400, 700));
-
       await humanClickForwardButton(p, cycle);
       await humanPause(randInt(800, 1400));
 
-      globalState.addLog('info', '📅 Preenchendo data de nascimento...', cycle);
-      await humanType(p, '#DOB_MONTH', payload.mes);
-      await humanPause(randInt(300, 600));
-      await humanType(p, '#DOB_DAY', payload.dia);
-      await humanPause(randInt(300, 600));
-      await humanType(p, '#DOB_YEAR', payload.ano);
-      await humanPause(randInt(400, 700));
-
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(800, 1400));
-
-      globalState.addLog('info', '📍 Selecionando cidade...', cycle);
-      await selecionarCidade(p, payload.cidade, cycle);
-      await humanPause(randInt(400, 700));
-
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(800, 1400));
-
+      // ── 6. TERMOS ─────────────────────────────────────────────────────────────
       globalState.addLog('info', '☑️ Aceitando termos...', cycle);
       await aceitarTermos(p);
       await humanPause(randInt(400, 700));
-
       await humanClickForwardButton(p, cycle);
       await humanPause(randInt(800, 1400));
 
-      await aguardarTelaOTP(p, cycle, 20_000);
-
-      const otp = await aguardarOTPComRetry(p, client, emailAccount.email, config.otpTimeout, cycle);
-      await preencherOTP(p, otp, cycle);
-      await humanPause(randInt(500, 900));
-
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(1000, 2000));
-
+      // ── Pós-cadastro ──────────────────────────────────────────────────────────
       await dispensarWhatsApp(p, cycle);
       await humanPause(randInt(1000, 2000));
 
