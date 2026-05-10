@@ -321,9 +321,6 @@ const JS_FALLBACK_SUBMIT = `
 `;
 
 // ─── KYC init script ──────────────────────────────────────────────────────────
-// FIX: ampliado para capturar iframes cross-origin via MutationObserver
-// e via PerformanceObserver (resource timing), cobrindo casos onde o
-// provider é carregado dentro de um iframe que não herda o script.
 
 const KYC_INIT_SCRIPT = `
   (function() {
@@ -356,21 +353,18 @@ const KYC_INIT_SCRIPT = `
       }
     }
 
-    // Intercepta fetch
     var _fetch = window.fetch;
     window.fetch = function() {
       try { analyze(arguments[0] && (arguments[0].url || arguments[0]), 'fetch'); } catch(e) {}
       return _fetch.apply(this, arguments);
     };
 
-    // Intercepta XHR
     var _open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
       try { analyze(url, 'xhr'); } catch(e) {}
       return _open.apply(this, arguments);
     };
 
-    // Intercepta WebSocket
     var _WS = window.WebSocket;
     if (_WS) {
       window.WebSocket = function(url, proto) {
@@ -380,7 +374,6 @@ const KYC_INIT_SCRIPT = `
       window.WebSocket.prototype = _WS.prototype;
     }
 
-    // Intercepta createElement (script + iframe)
     var _create = document.createElement.bind(document);
     document.createElement = function(tag) {
       var el = _create(tag);
@@ -399,7 +392,6 @@ const KYC_INIT_SCRIPT = `
       return el;
     };
 
-    // MutationObserver: captura scripts/iframes adicionados ao DOM
     new MutationObserver(function(ms) {
       ms.forEach(function(m) {
         m.addedNodes.forEach(function(n) {
@@ -409,7 +401,6 @@ const KYC_INIT_SCRIPT = `
             var src = n.src || n.getAttribute('src') || '';
             analyze(src, tag.toLowerCase() + '-dom');
           }
-          // Captura também links de preload/preconnect que revelam o provider
           if (tag === 'LINK') {
             var href = n.href || n.getAttribute('href') || '';
             analyze(href, 'link-dom');
@@ -418,8 +409,6 @@ const KYC_INIT_SCRIPT = `
       });
     }).observe(document.documentElement, { childList: true, subtree: true });
 
-    // PerformanceObserver: captura recursos carregados (inclui sub-recursos de iframes
-    // que referenciam o documento pai via performance.getEntriesByType)
     try {
       var po = new PerformanceObserver(function(list) {
         list.getEntries().forEach(function(entry) {
@@ -520,13 +509,6 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
 
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
-/**
- * FIX principal:
- *   1. Após clicar em "Foto do perfil", aguarda KYC sem limite de ciclo.
- *      O ciclo só é encerrado com sucesso DEPOIS que KYC é detectado.
- *   2. O fallback de re-clique foi mantido e expandido.
- *   3. Aba permanece aberta após detecção (exceto Veriff).
- */
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
@@ -576,7 +558,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   await humanPause(randInt(1500, 2500));
 
-  // Tenta clicar no botão de foto em fire-and-forget
   const SELETORES_TIRAR = [
     '[data-dgui="button"]:has-text("Tirar foto")',
     'button:has-text("Tirar foto")',
@@ -607,7 +588,9 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       }
       if (tentativa > 0 && tentativa % 2 === 0) {
         try {
-          await p.evaluate(() => window.scrollBy(0, 200));
+          // FIX TS2304: usa string literal em vez de arrow function para evitar
+          // que o TypeScript interprete 'window' como contexto Node.
+          await p.evaluate('window.scrollBy(0, 200)');
           globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
         } catch { /* ignora */ }
       }
@@ -616,7 +599,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
   })();
 
-  // ── FIX: aguarda KYC em duas rondas (30s + re-clique + 20s) ─────────────────
   const detectarEFechar = async (provider: string, url: string): Promise<void> => {
     if (provider === 'Veriff') {
       globalState.addLog('info', '🗑️ Veriff detectado → fechando aba para liberar RAM', cycle);
@@ -644,7 +626,8 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   // Ronda 2: scroll + re-clique
   globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
   try {
-    await p.evaluate(() => window.scrollTo(0, 0));
+    // FIX TS2304: usa string literal em vez de arrow function
+    await p.evaluate('window.scrollTo(0, 0)');
     await humanPause(randInt(500, 1000));
     for (const sel of SELETORES_ITEM) {
       try {
@@ -659,7 +642,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     }
     await humanPause(randInt(1500, 2500));
 
-    // Tenta também clicar no botão de foto novamente
     for (const sel of SELETORES_TIRAR) {
       try {
         const el = p.locator(sel).first();
@@ -804,15 +786,9 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
-// ─── FIX: registra listeners também em frames (iframes cross-origin) ──────────
-/**
- * Registra listeners de KYC em uma Page E em todos os seus frames.
- * O Playwright consegue ver requisições de iframes cross-origin via
- * page.on('request'), mas só se o listener for registrado na page pai.
- * Além disso, registramos 'frameattached' para cobrir iframes futuros.
- */
+// ─── Registra listeners ───────────────────────────────────────────────────────
+
 function registrarListenersFrame(frame: Frame, cycle: number): void {
-  // Frame URL já pode ser do provider
   try {
     const url = frame.url();
     const provider = detectKycProvider(url);
@@ -821,19 +797,16 @@ function registrarListenersFrame(frame: Frame, cycle: number): void {
 }
 
 function registrarListenersPage(page: Page, cycle: number): void {
-  // Navega frames já existentes
   try {
     for (const frame of page.frames()) {
       registrarListenersFrame(frame, cycle);
     }
   } catch { /* ignora */ }
 
-  // FIX: monitora iframes novos que forem anexados à página
   page.on('frameattached', (frame) => {
     registrarListenersFrame(frame, cycle);
   });
 
-  // FIX: monitora navegação dentro de qualquer frame (inclui cross-origin)
   page.on('framenavigated', (frame) => {
     const url = frame.url();
     const provider = detectKycProvider(url);
@@ -846,8 +819,6 @@ function registrarListenersPage(page: Page, cycle: number): void {
     if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
   });
 
-  // FIX: page.on('request') captura TODAS as requests da page, incluindo
-  // sub-recursos de iframes cross-origin — esta é a camada mais confiável
   page.on('request', (req) => {
     const url = req.url();
     const provider = detectKycProvider(url);
@@ -881,8 +852,6 @@ async function criarContextoIsolado(
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
 
-  // FIX: context.route intercepta TODAS as requests do contexto, incluindo
-  // iframes cross-origin — camada de rede, independente de JS no browser
   await context.route('**/*', (route) => {
     const url = route.request().url();
     const provider = detectKycProvider(url);
@@ -1053,8 +1022,6 @@ export class MockPlaywrightFlow {
       await dispensarWhatsApp(p, cycle);
       await clicarFotoPerfil(p, cycle, context);
 
-      // FIX: o log de conclusão agora é determinado DENTRO de clicarFotoPerfil.
-      // Aqui só marcamos o processo como finalizado após retorno da função.
       const aindaAberta = contextosPorCiclo.has(cycle);
       if (aindaAberta) {
         globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
