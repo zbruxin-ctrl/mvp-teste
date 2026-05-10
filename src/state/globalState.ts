@@ -21,6 +21,9 @@ export interface KycProviderState {
   signals: KycSignal[];
 }
 
+/** Mapa por ciclo: cycle → provider → KycProviderState */
+export type KycByCycle = Record<number, Record<string, KycProviderState>>;
+
 function kycLevel(score: number): KycProviderState['level'] {
   if (score >= 8) return 'CONFIRMED';
   if (score >= 4) return 'LIKELY';
@@ -54,18 +57,25 @@ class GlobalState {
   private currentCycle = 0;
   private executor: CycleExecutor | null = null;
 
-  // KYC
-  private kycProviders: Record<string, KycProviderState> = {};
+  // KYC isolado por ciclo: cycle → provider → KycProviderState
+  private kycByCycle: KycByCycle = {};
 
   // ─── KYC API ────────────────────────────────────────────────────────────────
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
-    if (!this.kycProviders[provider]) {
-      this.kycProviders[provider] = { score: 0, level: 'WEAK', signals: [] };
+    // Garante entrada para este ciclo
+    if (!this.kycByCycle[cycle]) {
+      this.kycByCycle[cycle] = {};
     }
-    const p = this.kycProviders[provider]!;
+    const cycleMap = this.kycByCycle[cycle]!;
+
+    if (!cycleMap[provider]) {
+      cycleMap[provider] = { score: 0, level: 'WEAK', signals: [] };
+    }
+    const p = cycleMap[provider]!;
     p.score += weight;
     p.level = kycLevel(p.score);
+
     const signal: KycSignal = {
       provider,
       source,
@@ -85,22 +95,24 @@ class GlobalState {
     );
   }
 
+  /** Retorna sinais do provider para um ciclo específico */
   getKycSignals(cycle: number): KycSignal[] {
+    const cycleMap = this.kycByCycle[cycle];
+    if (!cycleMap) return [];
     const result: KycSignal[] = [];
-    for (const state of Object.values(this.kycProviders)) {
-      for (const signal of state.signals) {
-        if (signal.cycle === cycle) result.push(signal);
-      }
+    for (const state of Object.values(cycleMap)) {
+      result.push(...state.signals);
     }
     return result;
   }
 
-  getKycState(): Record<string, KycProviderState> {
-    return { ...this.kycProviders };
+  /** Retorna o estado KYC completo por ciclo para o frontend */
+  getKycState(): { byCycle: KycByCycle } {
+    return { byCycle: this.kycByCycle };
   }
 
   clearKycState(): void {
-    this.kycProviders = {};
+    this.kycByCycle = {};
   }
 
   // ─── Core API ────────────────────────────────────────────────────────────────

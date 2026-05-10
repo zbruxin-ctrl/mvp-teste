@@ -64,8 +64,21 @@
     .badge-veriff  { background: #ede9fe; color: #6d28d9; }
     .badge-unknown { background: #f3f4f6; color: #374151; }
 
-    /* ── KYC Panel ── */
-    .kyc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+    /* ── KYC por ciclo ── */
+    .kyc-cycle-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+    .kyc-tab {
+      padding: 5px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: 2px solid #e5e7eb; background: #f9fafb; color: #6b7280;
+      transition: all .15s;
+    }
+    .kyc-tab:hover { border-color: #4f46e5; color: #4f46e5; }
+    .kyc-tab.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+    .kyc-tab.confirmed { border-color: #10b981; }
+    .kyc-tab.confirmed.active { background: #10b981; border-color: #10b981; }
+    .kyc-tab.likely { border-color: #f59e0b; }
+    .kyc-tab.likely.active { background: #f59e0b; border-color: #f59e0b; }
+
+    .kyc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     .kyc-card { border-radius: 10px; padding: 16px; border: 2px solid #e5e7eb; transition: border-color .3s; }
     .kyc-card.weak      { border-color: #e5e7eb; background: #f9fafb; }
     .kyc-card.likely    { border-color: #f59e0b; background: #fffbeb; }
@@ -137,9 +150,10 @@
       <div class="logs" id="logs"></div>
     </div>
 
-    <!-- KYC Detector -->
+    <!-- KYC Detector por ciclo -->
     <div class="panel full">
-      <h2>🔍 KYC Detector — Socure / Veriff</h2>
+      <h2>🔍 KYC Detector — por Ciclo</h2>
+      <div id="kyc-tabs" class="kyc-cycle-tabs"></div>
       <div id="kyc-panel">
         <div class="kyc-none">Nenhum sinal KYC detectado ainda. Inicie um ciclo para monitorar.</div>
       </div>
@@ -161,21 +175,23 @@
     const KYC_COLORS = { WEAK: 'weak', LIKELY: 'likely', CONFIRMED: 'confirmed' };
     const BADGE_COLORS = { WEAK: 'badge-weak', LIKELY: 'badge-likely', CONFIRMED: 'badge-confirmed' };
 
+    // Ciclo selecionado na aba KYC
+    var _selectedCycle = null;
+    // Último estado KYC para re-render ao trocar aba
+    var _lastKycState = {};
+
     // ── Flag: evita sobrescrever campos enquanto o usuário está digitando ──────
-    // Cada campo tem seu próprio timer de "está digitando"
     var _dirtyFields = {};
     var _dirtyTimers = {};
 
     function markDirty(fieldId) {
       _dirtyFields[fieldId] = true;
       clearTimeout(_dirtyTimers[fieldId]);
-      // Considera o campo "limpo" 5 segundos após o último keystroke
       _dirtyTimers[fieldId] = setTimeout(function() {
         _dirtyFields[fieldId] = false;
       }, 5000);
     }
 
-    // Registra listener de "digitando" em todos os campos de config
     var CONFIG_FIELDS = ['cadastroUrl','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','headless'];
     CONFIG_FIELDS.forEach(function(id) {
       var el = document.getElementById(id);
@@ -205,7 +221,6 @@
 
     function applyConfig(cfg) {
       if (!cfg) return;
-      // Só atualiza campos que o usuário NÃO está editando no momento
       function setIfClean(id, val) {
         if (!_dirtyFields[id]) {
           var el = document.getElementById(id);
@@ -223,7 +238,6 @@
     }
 
     async function saveConfig() {
-      // Ao salvar, limpa todos os flags de dirty imediatamente
       CONFIG_FIELDS.forEach(function(id) {
         _dirtyFields[id] = false;
         clearTimeout(_dirtyTimers[id]);
@@ -238,25 +252,38 @@
     async function startOnce()   { await api('/start-once', 'POST', { config: getConfig() }); }
     async function stopBot()     { await api('/stop',       'POST'); }
     async function clearLogs()   { await api('/logs/clear', 'POST'); }
-    async function clearKyc()    { await api('/kyc/clear',  'POST'); renderKyc({}); }
+    async function clearKyc()    {
+      await api('/kyc/clear', 'POST');
+      _selectedCycle = null;
+      _lastKycState = {};
+      renderKyc({ byCycle: {} });
+    }
 
-    // ── KYC render ──────────────────────────────────────────────────────────
-    function renderKyc(kycState) {
-      var panel = document.getElementById('kyc-panel');
-      var providers = ['Socure', 'Veriff'];
-      var hasAny = providers.some(function(p) { return !!kycState[p]; });
+    // ── Calcula o "melhor level" de um ciclo (max entre providers) ──────────
+    function cycleTopLevel(cycleMap) {
+      var levels = ['WEAK', 'LIKELY', 'CONFIRMED'];
+      var best = 0;
+      Object.values(cycleMap).forEach(function(p) {
+        var idx = levels.indexOf(p.level);
+        if (idx > best) best = idx;
+      });
+      return levels[best];
+    }
 
-      if (!hasAny) {
-        panel.innerHTML = '<div class="kyc-none">Nenhum sinal KYC detectado ainda. Inicie um ciclo para monitorar.</div>';
-        return;
+    // ── Renderiza cards do ciclo selecionado ─────────────────────────────────
+    function renderCycleCards(cycleMap) {
+      if (!cycleMap) {
+        return '<div class="kyc-none">Nenhum sinal neste ciclo.</div>';
       }
-
+      var providers = ['Socure', 'Veriff'];
       var html = '<div class="kyc-grid">';
       for (var i = 0; i < providers.length; i++) {
         var name = providers[i];
-        var data = kycState[name];
+        var data = cycleMap[name];
         if (!data) {
-          html += '<div class="kyc-card inactive"><div class="kyc-name">' + (KYC_ICONS[name] || '🔍') + ' ' + name + ' <span class="kyc-badge badge-weak">NÃO DETECTADO</span></div><div style="color:#9ca3af;font-size:13px;margin-top:8px">Nenhum sinal capturado</div></div>';
+          html += '<div class="kyc-card inactive"><div class="kyc-name">' + (KYC_ICONS[name] || '🔍') + ' ' + name +
+            ' <span class="kyc-badge badge-weak">NÃO DETECTADO</span></div>' +
+            '<div style="color:#9ca3af;font-size:13px;margin-top:8px">Nenhum sinal capturado</div></div>';
           continue;
         }
         var level    = data.level || 'WEAK';
@@ -268,13 +295,54 @@
             (s.url ? '<br><span style="color:#6b7280">' + s.url.substring(0, 80) + '</span>' : '') + '</div>';
         }).join('');
         html += '<div class="kyc-card ' + cardCls + '">' +
-          '<div class="kyc-name">' + (KYC_ICONS[name] || '🔍') + ' ' + name + ' <span class="kyc-badge ' + badgeCls + '">' + level + '</span></div>' +
+          '<div class="kyc-name">' + (KYC_ICONS[name] || '🔍') + ' ' + name +
+          ' <span class="kyc-badge ' + badgeCls + '">' + level + '</span></div>' +
           '<div class="kyc-score">' + data.score + ' <small>pts</small></div>' +
           '<div class="kyc-signals">' + sigHtml + '</div>' +
           '</div>';
       }
       html += '</div>';
-      panel.innerHTML = html;
+      return html;
+    }
+
+    // ── KYC render principal ─────────────────────────────────────────────────
+    function renderKyc(kycState) {
+      _lastKycState = kycState;
+      var byCycle = (kycState && kycState.byCycle) ? kycState.byCycle : {};
+      var cycles  = Object.keys(byCycle).map(Number).sort(function(a, b) { return b - a; }); // desc
+
+      var tabsEl  = document.getElementById('kyc-tabs');
+      var panelEl = document.getElementById('kyc-panel');
+
+      if (cycles.length === 0) {
+        tabsEl.innerHTML  = '';
+        panelEl.innerHTML = '<div class="kyc-none">Nenhum sinal KYC detectado ainda. Inicie um ciclo para monitorar.</div>';
+        _selectedCycle = null;
+        return;
+      }
+
+      // Seleciona o ciclo mais recente automaticamente se nenhum estiver selecionado
+      if (_selectedCycle === null || !byCycle[_selectedCycle]) {
+        _selectedCycle = cycles[0];
+      }
+
+      // Renderiza tabs
+      var tabsHtml = cycles.map(function(c) {
+        var topLevel = cycleTopLevel(byCycle[c]).toLowerCase();
+        var isActive = c === _selectedCycle;
+        return '<button class="kyc-tab ' + topLevel + (isActive ? ' active' : '') +
+          '" onclick="selectCycle(' + c + ')">#' + c + ' <span style="font-size:11px;opacity:.8">' +
+          topLevel.toUpperCase() + '</span></button>';
+      }).join('');
+      tabsEl.innerHTML = tabsHtml;
+
+      // Renderiza cards do ciclo selecionado
+      panelEl.innerHTML = renderCycleCards(byCycle[_selectedCycle]);
+    }
+
+    function selectCycle(cycle) {
+      _selectedCycle = cycle;
+      renderKyc(_lastKycState);
     }
 
     // ── Log render com destaque KYC ─────────────────────────────────────────
@@ -296,7 +364,6 @@
         return '<div class="log-entry log-' + l.level + '">[' + time + '] ' + cycle + msg + '</div>';
       }).join('');
       logsEl.innerHTML = html;
-      // Auto-scroll para o fim
       logsEl.scrollTop = logsEl.scrollHeight;
     }
 
@@ -322,7 +389,6 @@
         document.getElementById('cyclesTotal').textContent     = String(state.cyclesTotal     || 0);
         document.getElementById('activeParallel').textContent  = String(state.activeParallel  || 0);
 
-        // Só aplica config do servidor se o usuário não estiver digitando
         applyConfig(state.config);
 
         var active = ['RUNNING', 'STARTING', 'WAITING_OTP'].includes(state.status);
