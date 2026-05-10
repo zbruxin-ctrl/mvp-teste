@@ -30,34 +30,6 @@ const SOBRENOMES = [
   'Morais', 'Nunes', 'Cardoso',
 ];
 
-const CIDADES_BR = [
-  'São Paulo, SP, Brasil',
-  'Rio de Janeiro, RJ, Brasil',
-  'Belo Horizonte, MG, Brasil',
-  'Curitiba, PR, Brasil',
-  'Porto Alegre, RS, Brasil',
-  'Salvador, BA, Brasil',
-  'Fortaleza, CE, Brasil',
-  'Recife, PE, Brasil',
-  'Manaus, AM, Brasil',
-  'Belém, PA, Brasil',
-  'Goiânia, GO, Brasil',
-  'Campinas, SP, Brasil',
-  'São Luís, MA, Brasil',
-  'Maceió, AL, Brasil',
-  'Natal, RN, Brasil',
-  'Teresina, PI, Brasil',
-  'Campo Grande, MS, Brasil',
-  'João Pessoa, PB, Brasil',
-  'Aracaju, SE, Brasil',
-  'Cuiabá, MT, Brasil',
-  'Itajubá, MG, Brasil',
-  'Uberlândia, MG, Brasil',
-  'Ribeirão Preto, SP, Brasil',
-  'Sorocaba, SP, Brasil',
-  'Florianópolis, SC, Brasil',
-];
-
 // DDDs válidos do Brasil (ANATEL)
 const DDDS = [
   '11', '12', '13', '14', '15', '16', '17', '18', '19',
@@ -73,6 +45,8 @@ const DDDS = [
   '81', '82', '83', '84', '85', '86', '87', '88', '89',
   '91', '92', '93', '94', '95', '96', '97', '98', '99',
 ];
+
+const CIDADE_FIXA = 'Itajubá, MG, Brasil';
 
 const rand = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 
@@ -126,7 +100,6 @@ export function gerarPayloadCompleto(
   inviteCode?: string
 ): RegistrationPayload {
   const { mes, dia, ano } = gerarDataNascimento();
-  const cidade = rand(CIDADES_BR);
   return {
     email: emailAccount?.email ?? `test${Math.floor(Math.random() * 10000)}@tempmail.lol`,
     telefone: gerarTelefone(),
@@ -136,8 +109,8 @@ export function gerarPayloadCompleto(
     mes,
     dia,
     ano,
-    cidade,
-    localizacao: cidade,
+    cidade: CIDADE_FIXA,
+    localizacao: CIDADE_FIXA,
     codigoIndicacao: inviteCode ?? '',
   };
 }
