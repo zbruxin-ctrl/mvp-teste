@@ -215,6 +215,35 @@ async function pageStable(
   globalState.addLog('info', `⏱️ pageStable${tag} timeout — prosseguindo`, cycle);
 }
 
+// ─── aguardarSeletorComTimeout ────────────────────────────────────────────────────────
+// Polling puro de seletor DOM com deadline absoluto. NUNCA lança — retorna true/false.
+async function aguardarSeletorComTimeout(
+  p: Page,
+  selector: string,
+  timeoutMs: number,
+  cycle: number,
+  label = ''
+): Promise<boolean> {
+  const tag = label || selector;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await Promise.race([
+        p.evaluate('1'),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 800)),
+      ]);
+      const visivel = await p.locator(selector).first().isVisible({ timeout: 600 }).catch(() => false);
+      if (visivel) {
+        globalState.addLog('info', `✅ "${tag}" visível`, cycle);
+        return true;
+      }
+    } catch { /* página navegando */ }
+    await new Promise<void>((r) => setTimeout(r, 500));
+  }
+  globalState.addLog('warn', `⚠️ "${tag}" não apareceu após ${timeoutMs / 1000}s — prosseguindo`, cycle);
+  return false;
+}
+
 // ─── humanClickForwardButton ──────────────────────────────────────────────────────────
 // FIX: pós-clique usa APENAS setTimeout puro — zero p.evaluate no polling de confirmação.
 // Isso evita que o Promise.race fique pendurado durante a navegação (quando p.evaluate
@@ -1398,7 +1427,10 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(400, 700));
       await humanClickForwardButton(p, cycle);
 
-      await humanPause(randInt(800, 1400));
+      // FIX: aguarda #FIRST_NAME aparecer (até 20s) em vez de 2s fixos + humanType que travava
+      globalState.addLog('info', '⏳ Aguardando tela de nome (#FIRST_NAME)...', cycle);
+      await aguardarSeletorComTimeout(p, '#FIRST_NAME', 20_000, cycle, '#FIRST_NAME');
+
       await dispensarCookies(p);
 
       globalState.addLog('info', '📝 Preenchendo nome...', cycle);
@@ -1439,7 +1471,6 @@ export class MockPlaywrightFlow {
 
       await aguardarTelaOTP(p, cycle, 20_000);
 
-      // FIX: passa emailAccount.email (string) em vez do objeto EmailAccount
       const otp = await aguardarOTPComRetry(p, client, emailAccount.email, config.otpTimeout, cycle);
       await preencherOTP(p, otp, cycle);
       await humanPause(randInt(500, 900));
