@@ -1236,30 +1236,37 @@ export class MockPlaywrightFlow {
       try {
         await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').scrollIntoViewIfNeeded({ timeout: 3000 });
       } catch { /* ignora */ }
-      // Remove possíveis overlays transparentes que bloqueiam o elementFromPoint
+
+      // ─── Remove overlays que bloqueiam pointer-events no campo de email ───────────
       await p.evaluate(`
         (function() {
           var input = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
           if (!input) return;
           var rect = input.getBoundingClientRect();
           var cx = rect.left + rect.width / 2;
-          var cy = rect.top + rect.height / 2;
-          var top = document.elementFromPoint(cx, cy);
-          if (top && top !== input && !input.contains(top)) {
+          var cy = rect.top  + rect.height / 2;
+          // Remove pointerEvents de todos os elementos na pilha, exceto o próprio input
+          var maxDepth = 10;
+          for (var i = 0; i < maxDepth; i++) {
+            var top = document.elementFromPoint(cx, cy);
+            if (!top || top === input || input.contains(top)) break;
             top.style.pointerEvents = 'none';
           }
         })()
       `).catch(() => {});
-      await humanPause(randInt(300, 600));
+      await humanPause(randInt(300, 500));
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
-      await humanType(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
+      // ─── USA humanTypeForce: bypassa waitForElementInteractable que travava com overlay ───
+      globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
+      await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
+      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
+
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
       // ─── aguarda OTP e preenche com estratégia robusta ───
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
