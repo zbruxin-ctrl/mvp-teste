@@ -7,7 +7,6 @@ export class OTPParser {
     const clean = text.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
 
     // Padrao 1: "Código de confirmação: 1935" ou com quebra de linha entre eles
-    // Captura o numero que vem DEPOIS de palavras-chave, mesmo com multiplos espacos/newlines
     const primary = clean.match(
       /(?:c[oó]digo|code|otp|verif[a-z]*|confirma[a-z]*)[^0-9]{0,40}([0-9]{4,8})/i
     );
@@ -16,8 +15,10 @@ export class OTPParser {
       return primary[1]!;
     }
 
-    // Padrao 2: numero isolado em linha propria (ex: "\n1935\n")
-    const isolated = clean.match(/(?:^|\s)([0-9]{4,8})(?:\s|$)/);
+    // FIX: adicionada flag /m (multiline) para que ^ e $ batam em cada linha
+    // do texto, não apenas no início/fim da string inteira.
+    // Sem /m, o padrão falhava silenciosamente em todos os emails com múltiplas linhas.
+    const isolated = clean.match(/(?:^|\s)([0-9]{4,8})(?:\s|$)/m);
     if (isolated) {
       globalState.addLog('info', `🔢 OTP extraído (isolated): ${isolated[1]}`);
       return isolated[1]!;

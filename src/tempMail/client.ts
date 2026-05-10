@@ -100,6 +100,7 @@ export class TempMailClient implements IEmailClient {
               if (otp) { globalState.addLog('success', `🎉 OTP encontrado: ${otp}`); return otp; }
             } catch { /* ignora erro individual */ }
           }
+          // FIX: atualiza contador mesmo quando nenhum OTP foi encontrado nas mensagens novas
           lastMessageCount = messages.length;
         }
       } catch (e) {
@@ -217,16 +218,25 @@ export class MailTmClient implements IEmailClient {
     return resp['hydra:member'] ?? [];
   }
 
+  // FIX: API mail.tm retorna 'intro' em emails curtos (OTPs) em vez de 'text'.
+  // Adicionado fallback: intro → text, para garantir que o OTP seja capturado.
   private async getFullMessage(id: string): Promise<{ text: string; html: string }> {
-    const resp = await this.request<{ text: string; html: string }>(`/messages/${id}`, 'GET', undefined, true);
-    return { text: resp.text ?? '', html: resp.html ?? '' };
+    const resp = await this.request<{ text?: string; html?: string; intro?: string }>(
+      `/messages/${id}`,
+      'GET',
+      undefined,
+      true
+    );
+    return {
+      text: resp.text ?? resp.intro ?? '',
+      html: resp.html ?? '',
+    };
   }
 
   async waitForOTP(email: string, timeoutMs = 60000): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
-    const POLL_INTERVAL_MS = 8_000; // mail.tm é free, sem custo por request
-    // Aumentado de 10s para 20s: o Uber pode demorar 15-30s para enviar o email
+    const POLL_INTERVAL_MS = 8_000;
     const INITIAL_WAIT_MS  = 20_000;
 
     globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`);
@@ -262,6 +272,8 @@ export class MailTmClient implements IEmailClient {
               if (otp) { globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`); return otp; }
             } catch { /* ignora erro individual */ }
           }
+          // FIX: atualiza contador mesmo quando nenhum OTP foi encontrado nas mensagens novas,
+          // evitando reprocessamento infinito das mesmas mensagens nas próximas iterações.
           lastMessageCount = messages.length;
         }
       } catch (e) {
