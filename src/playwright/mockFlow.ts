@@ -23,7 +23,7 @@ const MOBILE_HEIGHT = MOBILE_DEVICE.viewport?.height ?? 844;
 const MOBILE_DPR    = MOBILE_DEVICE.deviceScaleFactor ?? 3;
 const MOBILE_UA     = MOBILE_DEVICE.userAgent ?? '';
 
-// ─── Helpers humanos ───────────────────────────────────────────────────────────────────
+// ─── Helpers humanos ──────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -49,59 +49,8 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   }
 }
 
-async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 8000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const box = await p.locator(selector).boundingBox();
-      if (!box) { await humanPause(300); continue; }
-      const cx = box.x + box.width / 2;
-      const cy = box.y + box.height / 2;
-      const isTarget = await p.evaluate(
-        `(function(){
-          var top = document.elementFromPoint(${cx}, ${cy});
-          var target = document.querySelector(${JSON.stringify(selector)});
-          if (!target || !top) return false;
-          return target === top || target.contains(top);
-        })()`
-      ) as boolean;
-      if (isTarget) return;
-    } catch { /* ignora e repete */ }
-    await humanPause(400);
-  }
-  try {
-    await p.locator(selector).scrollIntoViewIfNeeded({ timeout: 3000 });
-  } catch { /* ignora */ }
-}
-
-async function robustClick(p: Page, selector: string): Promise<void> {
-  try {
-    await p.locator(selector).scrollIntoViewIfNeeded({ timeout: 5000 });
-  } catch { /* ignora */ }
-  await humanPause(randInt(80, 150));
-  try {
-    await p.click(selector, { timeout: 4000 });
-    return;
-  } catch { /* tenta force */ }
-  try {
-    await p.click(selector, { force: true, timeout: 4000 });
-    return;
-  } catch { /* tenta dispatchEvent */ }
-  await p.evaluate(
-    `(function(sel){
-      var el = document.querySelector(sel);
-      if (!el) return;
-      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
-      if (typeof el.focus === 'function') el.focus();
-    })(${JSON.stringify(selector)})`
-  );
-}
-
 async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  await waitForElementInteractable(p, selector, 8000);
   const box = await p.locator(selector).boundingBox();
   if (box) {
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
@@ -109,7 +58,7 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(50, 100));
   }
-  await robustClick(p, selector);
+  await p.click(selector);
   await p.fill(selector, '');
   await humanPause(randInt(60, 150));
   for (let i = 0; i < value.length; i++) {
@@ -139,7 +88,7 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(50, 100));
   }
-  await robustClick(p, selector);
+  await p.click(selector, { force: true });
   await p.fill(selector, '');
   await humanPause(randInt(60, 150));
   for (let i = 0; i < value.length; i++) {
@@ -162,323 +111,15 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
 
 async function humanClick(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  await waitForElementInteractable(p, selector, 8000);
   const box = await p.locator(selector).boundingBox();
   if (box) {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(40, 100));
-    try {
-      await p.mouse.click(tx, ty);
-    } catch {
-      await robustClick(p, selector);
-    }
+    await p.mouse.click(tx, ty);
   } else {
-    await robustClick(p, selector);
-  }
-}
-
-// ─── pageStable ────────────────────────────────────────────────────────────────────────
-// Polling puro: tenta p.evaluate('1') em loop com timeout individual de 1s por iteração.
-// Nunca usa waitForLoadState — ele nunca rejeita e pode ficar pendurado para sempre.
-// Retorna quando a página consegue responder N vezes seguidas (estável) ou ao atingir timeout.
-// NUNCA lança — sempre retorna, deixando o fluxo continuar.
-async function pageStable(
-  p: Page,
-  timeoutMs: number,
-  cycle: number,
-  label = ''
-): Promise<void> {
-  const tag = label ? ` [${label}]` : '';
-  const deadline = Date.now() + timeoutMs;
-  let okStreak = 0;
-  const STREAK_NEEDED = 2;
-  const POLL_MS = 300;
-
-  while (Date.now() < deadline) {
-    try {
-      await Promise.race([
-        p.evaluate('1'),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 900)),
-      ]);
-      okStreak++;
-      if (okStreak >= STREAK_NEEDED) {
-        globalState.addLog('info', `✅ pageStable${tag} (${okStreak} polls OK)`, cycle);
-        return;
-      }
-    } catch {
-      okStreak = 0;
-    }
-    await new Promise<void>((r) => setTimeout(r, POLL_MS));
-  }
-  globalState.addLog('info', `⏱️ pageStable${tag} timeout — prosseguindo`, cycle);
-}
-
-// ─── aguardarSeletorComTimeout ────────────────────────────────────────────────────────
-// Polling puro de seletor DOM com deadline absoluto. NUNCA lança — retorna true/false.
-async function aguardarSeletorComTimeout(
-  p: Page,
-  selector: string,
-  timeoutMs: number,
-  cycle: number,
-  label = ''
-): Promise<boolean> {
-  const tag = label || selector;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await Promise.race([
-        p.evaluate('1'),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 800)),
-      ]);
-      const visivel = await p.locator(selector).first().isVisible({ timeout: 600 }).catch(() => false);
-      if (visivel) {
-        globalState.addLog('info', `✅ "${tag}" visível`, cycle);
-        return true;
-      }
-    } catch { /* página navegando */ }
-    await new Promise<void>((r) => setTimeout(r, 500));
-  }
-  globalState.addLog('warn', `⚠️ "${tag}" não apareceu após ${timeoutMs / 1000}s — prosseguindo`, cycle);
-  return false;
-}
-
-// ─── humanClickForwardButton ──────────────────────────────────────────────────────────
-// PARTE 1 FIX: após o clique, aguarda a página realmente mudar de estado usando polling
-// puro de seletores conhecidos da próxima tela. Só então retorna ao flow principal.
-// Isso substitui o setTimeout fixo de 2s que não era suficiente quando o servidor demorava.
-async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
-  globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
-
-  const inicio = Date.now();
-  let habilitado = false;
-  while (Date.now() - inicio < timeoutMs) {
-    try {
-      const disabled = await Promise.race([
-        p.evaluate(() => {
-          const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
-          if (!btn) return true;
-          return btn.disabled
-            || btn.getAttribute('aria-disabled') === 'true'
-            || btn.classList.contains('disabled');
-        }),
-        new Promise<true>((_, rej) => setTimeout(() => rej(new Error('t')), 1500)),
-      ]);
-      if (!disabled) { habilitado = true; break; }
-    } catch { /* ignora — página navegando ou timeout */ }
-    await humanPause(300);
-  }
-
-  if (!habilitado) {
-    globalState.addLog('warn', '⚠️ #forward-button não habilitou — tentando click force mesmo assim', cycle);
-  } else {
-    globalState.addLog('info', '✅ #forward-button habilitado — clicando', cycle);
-  }
-
-  // Remove overlays que possam bloquear o clique
-  await Promise.race([
-    p.evaluate(`
-      (function() {
-        var btn = document.querySelector('#forward-button');
-        if (!btn) return;
-        var rect = btn.getBoundingClientRect();
-        var cx = rect.left + rect.width / 2;
-        var cy = rect.top  + rect.height / 2;
-        for (var i = 0; i < 10; i++) {
-          var top = document.elementFromPoint(cx, cy);
-          if (!top || top === btn || btn.contains(top)) break;
-          top.style.pointerEvents = 'none';
-        }
-      })()
-    `),
-    new Promise<void>((r) => setTimeout(r, 1500)),
-  ]).catch(() => {});
-
-  await humanPause(randInt(200, 400));
-
-  // Executa o clique
-  const box = await p.locator('#forward-button').boundingBox().catch(() => null);
-  if (box) {
-    const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
-    const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
-    await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(60, 130));
-    try {
-      await p.mouse.click(tx, ty);
-    } catch {
-      try {
-        await p.click('#forward-button', { force: true, timeout: 5000 });
-      } catch {
-        await p.evaluate(`
-          (function() {
-            var btn = document.querySelector('#forward-button');
-            if (!btn) return;
-            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-            btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
-            btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
-          })()
-        `).catch(() => {});
-      }
-    }
-  } else {
-    try {
-      await p.click('#forward-button', { force: true, timeout: 5000 });
-    } catch {
-      await p.evaluate(`
-        (function() {
-          var btn = document.querySelector('#forward-button');
-          if (!btn) return;
-          btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-          btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
-          btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
-        })()
-      `).catch(() => {});
-    }
-  }
-
-  // PARTE 1 FIX: aguarda a URL ou o DOM mudar indicando que a navegação começou,
-  // depois aguarda a página estabilizar com polling puro (pageStable).
-  // Isso substitui o setTimeout fixo de 2s que causava travamento.
-  globalState.addLog('info', '⏳ Aguardando mudança de página pós-click...', cycle);
-
-  // Captura URL atual antes da navegação
-  let urlAntes = '';
-  try { urlAntes = p.url(); } catch { /* ignora */ }
-
-  // Aguarda até a URL mudar OU o #forward-button sumir (sinal de nova tela) — máx 8s
-  const deadlineNav = Date.now() + 8_000;
-  let navegou = false;
-  while (Date.now() < deadlineNav) {
-    await new Promise<void>((r) => setTimeout(r, 400));
-    try {
-      const urlAgora = p.url();
-      if (urlAgora !== urlAntes) { navegou = true; break; }
-      // Verifica se o forward-button sumiu (nova tela carregando)
-      const btnSumiu = await p.locator('#forward-button').isVisible({ timeout: 300 }).catch(() => false);
-      if (!btnSumiu) { navegou = true; break; }
-    } catch {
-      // Página navegando — considera como sinal de mudança
-      navegou = true;
-      break;
-    }
-  }
-
-  if (navegou) {
-    globalState.addLog('info', '🔄 Navegação detectada — aguardando estabilizar...', cycle);
-    // Aguarda página estabilizar (polling puro, máx 6s)
-    await pageStable(p, 6_000, cycle, 'pós-forward-click');
-  } else {
-    globalState.addLog('warn', '⚠️ Navegação não detectada em 8s — prosseguindo mesmo assim', cycle);
-    // Fallback: aguarda mínimo de 1.5s para dar chance à página
-    await new Promise<void>((r) => setTimeout(r, 1500));
-  }
-
-  globalState.addLog('info', '✅ Pós-forward-click concluído — prosseguindo', cycle);
-}
-
-// ─── Aguarda botão #forward-button ficar habilitado ───────────────────────────────────
-async function aguardarForwardHabilitado(p: Page, timeoutMs = 12000, cycle: number): Promise<boolean> {
-  const inicio = Date.now();
-  while (Date.now() - inicio < timeoutMs) {
-    try {
-      const disabled = await Promise.race([
-        p.evaluate(() => {
-          const btn = document.querySelector('#forward-button') as HTMLButtonElement | null;
-          if (!btn) return true;
-          return btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
-        }),
-        new Promise<true>((_, rej) => setTimeout(() => rej(new Error('t')), 1500)),
-      ]);
-      if (!disabled) return true;
-    } catch { /* ignora */ }
-    await humanPause(300);
-  }
-  return false;
-}
-
-// ─── Preencher OTP ────────────────────────────────────────────────────────────────────
-async function preencherOTP(p: Page, otp: string, cycle: number): Promise<void> {
-  const digits = otp.replace(/\D/g, '').split('');
-  globalState.addLog('info', `⌨️ Preenchendo OTP: ${otp} (${digits.length} dígitos)`, cycle);
-
-  const idPadrao = await p.locator('#EMAIL_OTP_CODE-0').isVisible({ timeout: 10000 }).catch(() => false);
-  if (idPadrao) {
-    globalState.addLog('info', '🔑 OTP: usando seletor #EMAIL_OTP_CODE-{i}', cycle);
-    for (let i = 0; i < digits.length; i++) {
-      await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-      await humanPause(randInt(50, 120));
-    }
-    return;
-  }
-
-  const inputsUnitarios = p.locator('input[maxlength="1"]');
-  const countUnitarios = await inputsUnitarios.count().catch(() => 0);
-  if (countUnitarios >= digits.length) {
-    globalState.addLog('info', `🔑 OTP: usando ${countUnitarios}x input[maxlength=1]`, cycle);
-    for (let i = 0; i < digits.length; i++) {
-      const el = inputsUnitarios.nth(i);
-      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-      if (!visivel) continue;
-      const box = await el.boundingBox().catch(() => null);
-      if (box) {
-        await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-        await humanPause(randInt(40, 80));
-      }
-      await el.click({ force: true });
-      await humanPause(randInt(30, 60));
-      await el.fill('');
-      await p.keyboard.type(digits[i]!, { delay: randInt(40, 80) });
-      await humanPause(randInt(60, 130));
-    }
-    return;
-  }
-
-  const inputsNum = p.locator('input[type="number"], input[type="tel"]');
-  const countNum = await inputsNum.count().catch(() => 0);
-  if (countNum >= digits.length) {
-    globalState.addLog('info', `🔑 OTP: usando ${countNum}x input[type=number/tel]`, cycle);
-    for (let i = 0; i < digits.length; i++) {
-      const el = inputsNum.nth(i);
-      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-      if (!visivel) continue;
-      await el.click({ force: true });
-      await humanPause(randInt(30, 70));
-      await el.fill('');
-      await p.keyboard.type(digits[i]!, { delay: randInt(40, 80) });
-      await humanPause(randInt(60, 130));
-    }
-    return;
-  }
-
-  const camposOtp = [
-    'input[autocomplete="one-time-code"]',
-    'input[name*="otp"]',
-    'input[name*="code"]',
-    'input[id*="otp"]',
-    'input[id*="code"]',
-    'input[placeholder*="código"]',
-    'input[placeholder*="code"]',
-  ];
-  for (const sel of camposOtp) {
-    const visivel = await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false);
-    if (visivel) {
-      globalState.addLog('info', `🔑 OTP: campo único (${sel})`, cycle);
-      await humanType(p, sel, otp.replace(/\D/g, ''));
-      return;
-    }
-  }
-
-  globalState.addLog('warn', '⚠️ OTP: nenhum seletor específico — fallback teclado', cycle);
-  const primeiroInput = p.locator('input').first();
-  const primeiroVisivel = await primeiroInput.isVisible({ timeout: 3000 }).catch(() => false);
-  if (primeiroVisivel) {
-    await primeiroInput.click({ force: true });
-    await humanPause(randInt(100, 200));
-  }
-  for (const d of digits) {
-    await p.keyboard.type(d, { delay: randInt(60, 120) });
-    await humanPause(randInt(50, 120));
+    await p.click(selector);
   }
 }
 
@@ -551,9 +192,11 @@ async function aceitarTermos(p: Page): Promise<void> {
   for (const tentativa of candidatos) {
     try { await tentativa(); aceitou = true; break; } catch { /* tenta próximo */ }
   }
-  if (!aceitou) throw new Error('Não foi possível aceitar os termos');
+  if (!aceitou) throw new Error('Não foi possível aceitar os termos — nenhum seletor funcionou');
   globalState.addLog('info', '☑️ Termos aceitos');
 }
+
+// ─── Seleciona cidade ─────────────────────────────────────────────────────────
 
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
@@ -652,6 +295,8 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await humanPause(randInt(400, 700));
 }
 
+// ─── JS helpers ───────────────────────────────────────────────────────────────
+
 const JS_NAO_ATIVAR = `
   (function() {
     var normalize = function(s) {
@@ -681,6 +326,8 @@ const JS_FALLBACK_SUBMIT = `
     return null;
   })()
 `;
+
+// ─── KYC init script ──────────────────────────────────────────────────────────
 
 const KYC_INIT_SCRIPT = `
   (function() {
@@ -781,6 +428,8 @@ const KYC_INIT_SCRIPT = `
   })();
 `;
 
+// ─── WhatsApp ─────────────────────────────────────────────────────────────────
+
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   try {
     await humanPause(randInt(2000, 3500));
@@ -865,6 +514,8 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   }
 }
 
+// ─── KYC: resolve provider dominante por score ────────────────────────────────
+
 function resolverProviderDominante(
   cycle: number,
   scoreMinimo = 4
@@ -885,59 +536,8 @@ function resolverProviderDominante(
   return melhor;
 }
 
-// ─── aguardarTelaOTP ─────────────────────────────────────────────────────────────────
-// Polling puro de seletores DOM — sem waitForLoadState, sem pageStable de alto timeout.
-// Se a página não responder num poll, aguarda brevemente e tenta de novo.
-// Nunca trava: o loop externo tem deadline absoluto e sempre retorna.
-async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Promise<boolean> {
-  const SELETORES_OTP = [
-    '#EMAIL_OTP_CODE-0',
-    'input[maxlength="1"]',
-    'input[autocomplete="one-time-code"]',
-    'input[name*="otp"]',
-    'input[name*="code"]',
-    'input[id*="otp"]',
-    'input[id*="code"]',
-  ];
+// ─── OTP: polling com retentativas e re-envio ─────────────────────────────────
 
-  globalState.addLog('info', '⏳ Aguardando tela de OTP aparecer...', cycle);
-  const inicio = Date.now();
-
-  while (Date.now() - inicio < timeoutMs) {
-    // Testa se a página está responsiva com timeout individual curto
-    let paginaOk = false;
-    try {
-      await Promise.race([
-        p.evaluate('1'),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('t')), 800)),
-      ]);
-      paginaOk = true;
-    } catch {
-      // Página navegando — espera curta e tenta de novo (sem chamar pageStable longo)
-      await new Promise<void>((r) => setTimeout(r, 500));
-      continue;
-    }
-
-    if (paginaOk) {
-      for (const sel of SELETORES_OTP) {
-        try {
-          const visivel = await p.locator(sel).first().isVisible({ timeout: 600 }).catch(() => false);
-          if (visivel) {
-            globalState.addLog('info', `✅ Tela de OTP detectada (${sel})`, cycle);
-            return true;
-          }
-        } catch { /* tenta próximo */ }
-      }
-    }
-
-    await new Promise<void>((r) => setTimeout(r, 700));
-  }
-
-  globalState.addLog('warn', `⚠️ Tela de OTP não detectada após ${timeoutMs / 1000}s — prosseguindo mesmo assim`, cycle);
-  return false;
-}
-
-// ─── OTP: polling com retentativas e re-envio ─────────────────────────────────────────
 async function aguardarOTPComRetry(
   p: Page,
   client: IEmailClient,
@@ -946,7 +546,8 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  const JANELA_MS = Math.max(60_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
+  const POLL_INTERVAL  = 5_000;
+  const JANELA_MS = Math.max(20_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
     'button:has-text("Reenviar")',
@@ -965,19 +566,24 @@ async function aguardarOTPComRetry(
       cycle
     );
 
-    try {
-      const otp = await client.waitForOTP(email, JANELA_MS, cycle);
-      if (otp) {
-        globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
-        return otp;
+    const fimJanela = Date.now() + JANELA_MS;
+    while (Date.now() < fimJanela) {
+      try {
+        const otp = await client.waitForOTP(email, POLL_INTERVAL, cycle);
+        if (otp) {
+          globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
+          return otp;
+        }
+      } catch {
+        // waitForOTP lançou timeout parcial — continua polling
       }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('Parado')) throw err;
-      globalState.addLog('warn', `⚠️ OTP tentativa ${tentativa} falhou: ${err instanceof Error ? err.message : err}`, cycle);
+      if (Date.now() >= fimJanela) break;
+      await humanPause(POLL_INTERVAL);
     }
 
     if (tentativa < MAX_TENTATIVAS) {
-      globalState.addLog('warn', `⚠️ OTP não chegou — tentando reenviar...`, cycle);
+      globalState.addLog('warn', `⚠️ OTP não chegou em ${JANELA_MS / 1000}s — tentando reenviar...`, cycle);
+
       let reenvioClicado = false;
       for (const sel of SELETORES_REENVIO) {
         try {
@@ -990,21 +596,25 @@ async function aguardarOTPComRetry(
               await humanPause(randInt(200, 400));
             }
             await el.click({ timeout: 5000 });
-            globalState.addLog('info', `🔄 Código reenviado (${sel})`, cycle);
+            globalState.addLog('info', `🔄 Código reenviado (${sel}) — aguardando nova mensagem...`, cycle);
             reenvioClicado = true;
             break;
           }
-        } catch { /* tenta próximo */ }
+        } catch { /* tenta próximo seletor */ }
       }
+
       if (!reenvioClicado) {
-        globalState.addLog('warn', '⚠️ Botão de reenvio não encontrado — aguardando mesma caixa...', cycle);
+        globalState.addLog('warn', '⚠️ Botão de reenvio não encontrado — aguardando mesma caixa de entrada...', cycle);
       }
+
       await humanPause(randInt(2000, 4000));
     }
   }
 
-  throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas`);
+  throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas (${(JANELA_MS * MAX_TENTATIVAS) / 1000}s total)`);
 }
+
+// ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
@@ -1100,12 +710,12 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
-      globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba`, cycle);
+      globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
       await humanPause(randInt(500, 1000));
       await context.close().catch(() => {});
       contextosPorCiclo.delete(cycle);
     } else {
-      globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida`, cycle);
+      globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida aberta`, cycle);
     }
   };
 
@@ -1125,6 +735,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   try {
     await p.evaluate('window.scrollTo(0, 0)');
     await humanPause(randInt(500, 1000));
+
     for (const sel of SELETORES_ITEM) {
       try {
         const el = p.locator(sel).first();
@@ -1137,6 +748,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       } catch { /* ignora */ }
     }
     await humanPause(randInt(1500, 2500));
+
     for (const sel of SELETORES_TIRAR) {
       try {
         const el = p.locator(sel).first();
@@ -1148,6 +760,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
         }
       } catch { /* ignora */ }
     }
+
     const fimKyc2 = Date.now() + 20_000;
     while (Date.now() < fimKyc2) {
       const dominante = resolverProviderDominante(cycle, 4);
@@ -1164,6 +777,8 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
 }
+
+// ─── Stealth script ───────────────────────────────────────────────────────────
 
 const stealthScript = `
   (function() {
@@ -1214,6 +829,8 @@ const stealthScript = `
   })();
 `;
 
+// ─── KYC patterns ─────────────────────────────────────────────────────────────
+
 const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
   { pattern: /socure/i,              provider: 'Socure'  },
   { pattern: /devicer\.io/i,         provider: 'Socure'  },
@@ -1242,6 +859,8 @@ function detectKycProvider(url: string): string | null {
   return null;
 }
 
+// ─── Registra listeners ───────────────────────────────────────────────────────
+
 function registrarListenersFrame(frame: Frame, cycle: number): void {
   try {
     const url = frame.url();
@@ -1257,7 +876,9 @@ function registrarListenersPage(page: Page, cycle: number): void {
     }
   } catch { /* ignora */ }
 
-  page.on('frameattached', (frame) => { registrarListenersFrame(frame, cycle); });
+  page.on('frameattached', (frame) => {
+    registrarListenersFrame(frame, cycle);
+  });
 
   page.on('framenavigated', (frame) => {
     const url = frame.url();
@@ -1282,32 +903,11 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
-async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<void> {
-  try {
-    await page.setViewportSize({ width: MOBILE_WIDTH, height: MOBILE_HEIGHT });
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      mobile: true,
-      width: MOBILE_WIDTH,
-      height: MOBILE_HEIGHT,
-      deviceScaleFactor: MOBILE_DPR,
-      screenOrientation: { angle: 0, type: 'portraitPrimary' },
-    });
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-    await cdp.send('Emulation.setUserAgentOverride', {
-      userAgent: MOBILE_UA,
-      acceptLanguage: 'pt-BR,pt;q=0.9',
-      platform: 'iPhone',
-    });
-    await cdp.send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' }).catch(() => {});
-    const tag = label ? ` [${label}]` : '';
-    globalState.addLog('info', `📱 CDP mobile aplicado${tag} (${MOBILE_WIDTH}x${MOBILE_HEIGHT} @${MOBILE_DPR}x, iPhone 14 UA)`, cycle);
-  } catch (e) {
-    globalState.addLog('warn', `⚠️ CDP mobile falhou${label ? ` [${label}]` : ''}: ${e}`, cycle);
-  }
-}
+// ─── Cria contexto isolado ────────────────────────────────────────────────────
 
-async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserContext; page: Page }> {
+async function criarContextoIsolado(
+  cycle: number
+): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
   const context = await browser!.newContext({
@@ -1316,7 +916,9 @@ async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserCo
     timezoneId: 'America/Sao_Paulo',
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
-    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
+    extraHTTPHeaders: {
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    },
     ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
@@ -1331,33 +933,52 @@ async function criarContextoIsolado(cycle: number): Promise<{ context: BrowserCo
   });
 
   const page = await context.newPage();
-  await aplicarCDPMobile(page, cycle, 'página principal');
+
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      mobile: true,
+      width: MOBILE_DEVICE.viewport?.width ?? 390,
+      height: MOBILE_DEVICE.viewport?.height ?? 844,
+      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
+      screenOrientation: { angle: 0, type: 'portraitPrimary' },
+    });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: MOBILE_DEVICE.userAgent ?? '',
+      acceptLanguage: 'pt-BR,pt;q=0.9',
+      platform: 'iPhone',
+    });
+    globalState.addLog(
+      'info',
+      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})${proxy ? ` | Proxy: ${proxy.server}` : ''}`,
+      cycle
+    );
+  } catch (e) {
+    globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
+  }
+
   registrarListenersPage(page, cycle);
 
-  context.on('page', async (novaPage) => {
-    const url = novaPage.url() || '(carregando...)';
-    globalState.addLog('info', `📌 Nova aba/popup: ${url} — aplicando mobile...`, cycle);
-    await aplicarCDPMobile(novaPage, cycle, `popup:${url.slice(0, 40)}`);
+  context.on('page', (novaPage) => {
+    globalState.addLog('info', `📌 Nova aba/popup aberta: ${novaPage.url() || '(carregando...)'}`, cycle);
     registrarListenersPage(novaPage, cycle);
-    novaPage.once('domcontentloaded', async () => {
-      await aplicarCDPMobile(novaPage, cycle, `popup-dce:${novaPage.url().slice(0, 40)}`).catch(() => {});
-    });
   });
-
-  if (proxy) globalState.addLog('info', `🔁 Proxy ativo: ${proxy.server}`, cycle);
 
   contextosPorCiclo.set(cycle, context);
   return { context, page };
 }
 
+// ─── Flow principal ───────────────────────────────────────────────────────────
+
 export class MockPlaywrightFlow {
   static async init(headless = false): Promise<void> {
     if (browser) {
-      globalState.addLog('info', '🧁 Browser já está rodando — próximo ciclo abrirá nova aba');
+      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
       return;
     }
     if (browserLaunching) {
-      globalState.addLog('info', '⏳ Aguardando browser iniciar...');
+      globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
       const deadline = Date.now() + 30_000;
       while (!browser && Date.now() < deadline) {
         await new Promise<void>((r) => setTimeout(r, 200));
@@ -1367,7 +988,7 @@ export class MockPlaywrightFlow {
     }
     browserLaunching = true;
     try {
-      globalState.addLog('info', '🧁 Iniciando Brave...');
+      globalState.addLog('info', '🦁 Iniciando Brave...');
       browser = await chromiumExtra.launch({
         headless,
         executablePath: BRAVE_PATH,
@@ -1382,23 +1003,9 @@ export class MockPlaywrightFlow {
           '--no-default-browser-check',
         ],
       }) as unknown as Browser;
-      globalState.addLog('info', '✅ Browser pronto');
+      globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
     } finally {
       browserLaunching = false;
-    }
-  }
-
-  static async cleanup(): Promise<void> {
-    if (!browser) return;
-    globalState.addLog('info', '🛑 Fechando browser (cleanup)...');
-    try {
-      for (const [cycle, ctx] of contextosPorCiclo.entries()) {
-        await ctx.close().catch(() => {});
-        contextosPorCiclo.delete(cycle);
-      }
-      await browser.close();
-    } catch { /* ignora */ } finally {
-      browser = null;
     }
   }
 
@@ -1422,114 +1029,101 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await humanPause(randInt(800, 1600));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
-
-      // ── 1. EMAIL ──────────────────────────────────────────────────────────────
-      globalState.addLog('info', '⏳ Aguardando campo de email ficar visível...', cycle);
-      await p.waitForSelector('#PHONE_NUMBER_or_EMAIL_ADDRESS', { state: 'visible', timeout: 30000 });
-      globalState.addLog('info', '✅ Campo de email visível — prosseguindo', cycle);
-
-      await humanPause(randInt(1800, 2800));
-      try {
-        await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').scrollIntoViewIfNeeded({ timeout: 3000 });
-      } catch { /* ignora */ }
-
-      await p.evaluate(`
-        (function() {
-          var input = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
-          if (!input) return;
-          var rect = input.getBoundingClientRect();
-          var cx = rect.left + rect.width / 2;
-          var cy = rect.top  + rect.height / 2;
-          for (var i = 0; i < 10; i++) {
-            var top = document.elementFromPoint(cx, cy);
-            if (!top || top === input || input.contains(top)) break;
-            top.style.pointerEvents = 'none';
-          }
-        })()
-      `).catch(() => {});
-      await humanPause(randInt(300, 500));
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
+      // ── 1. EMAIL ──────────────────────────────────────────────────────────────
       globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-      await humanPause(randInt(400, 700));
-      await humanClickForwardButton(p, cycle);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
       // ── 2. OTP ────────────────────────────────────────────────────────────────
-      await aguardarTelaOTP(p, cycle, 20_000);
-      const otp = await aguardarOTPComRetry(p, client, emailAccount.email, config.otpTimeout, cycle);
-      await preencherOTP(p, otp, cycle);
-      await humanPause(randInt(500, 900));
-      await humanClickForwardButton(p, cycle);
+      const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
       await humanPause(randInt(800, 1400));
+      const digits = otp.replace(/\D/g, '').split('');
+      for (let i = 0; i < digits.length; i++) {
+        await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
+        await humanPause(randInt(50, 120));
+      }
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
       // ── 3. TELEFONE ───────────────────────────────────────────────────────────
-      globalState.addLog('info', '📱 Aguardando campo de telefone...', cycle);
-      await aguardarSeletorComTimeout(p, '#PHONE_NUMBER', 20_000, cycle, '#PHONE_NUMBER');
-      await dispensarCookies(p);
-      await humanPause(randInt(600, 1000));
-      globalState.addLog('info', '📱 Preenchendo telefone...', cycle);
+      await humanPause(randInt(400, 900));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
-      await humanPause(randInt(400, 700));
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(800, 1400));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
       // ── 4. SENHA ──────────────────────────────────────────────────────────────
-      globalState.addLog('info', '🔒 Aguardando campo de senha...', cycle);
-      await aguardarSeletorComTimeout(p, '#PASSWORD', 20_000, cycle, '#PASSWORD');
-      await humanPause(randInt(600, 1000));
-      globalState.addLog('info', '🔒 Preenchendo senha...', cycle);
+      await humanPause(randInt(400, 900));
       await humanType(p, '#PASSWORD', payload.senha);
-      await humanPause(randInt(400, 700));
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(800, 1400));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
       // ── 5. NOME ───────────────────────────────────────────────────────────────
-      globalState.addLog('info', '⏳ Aguardando tela de nome (#FIRST_NAME)...', cycle);
-      await aguardarSeletorComTimeout(p, '#FIRST_NAME', 30_000, cycle, '#FIRST_NAME');
-      await dispensarCookies(p);
-      await humanPause(randInt(600, 1000));
-      globalState.addLog('info', '📝 Preenchendo nome...', cycle);
+      await humanPause(randInt(400, 900));
       await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(400, 700));
+      await humanPause(randInt(200, 400));
       await humanType(p, '#LAST_NAME', payload.sobrenome);
-      await humanPause(randInt(400, 700));
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(800, 1400));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
       // ── 6. TERMOS ─────────────────────────────────────────────────────────────
-      globalState.addLog('info', '☑️ Aceitando termos...', cycle);
       await aceitarTermos(p);
-      await humanPause(randInt(400, 700));
-      await humanClickForwardButton(p, cycle);
-      await humanPause(randInt(800, 1400));
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await humanClick(p, '#forward-button');
 
       // ── Pós-cadastro ──────────────────────────────────────────────────────────
-      await dispensarWhatsApp(p, cycle);
-      await humanPause(randInt(1000, 2000));
+      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
+      await humanPause(randInt(700, 1400));
+      globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
 
+      await dispensarCookies(p);
+      await selecionarCidade(p, payload.localizacao, cycle);
+      await dispensarCookies(p);
+
+      await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await dispensarCookies(p);
+      await humanClick(p, '[data-testid="submit-button"]');
+      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
+
+      await dispensarWhatsApp(p, cycle);
       await clicarFotoPerfil(p, cycle, context);
 
-      if (config.extraDelay > 0) {
-        globalState.addLog('info', `⏳ Extra delay: ${config.extraDelay}ms`, cycle);
-        await humanPause(config.extraDelay);
+      const aindaAberta = contextosPorCiclo.has(cycle);
+      if (aindaAberta) {
+        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
+      } else {
+        globalState.addLog('info', `✅ Ciclo #${cycle} concluído!`, cycle);
       }
 
-      globalState.addLog('success', `✅ Ciclo #${cycle} concluído`, cycle);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      globalState.addLog('error', `❌ Ciclo #${cycle} erro: ${msg}`, cycle);
-      throw err;
-    } finally {
-      const ctx = contextosPorCiclo.get(cycle);
-      if (ctx) {
-        await ctx.close().catch(() => {});
-        contextosPorCiclo.delete(cycle);
-      }
+    } catch (error) {
+      await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
+      await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
+      throw error;
     }
+  }
+
+  static async cleanup(): Promise<void> {
+    for (const [cycle, ctx] of contextosPorCiclo.entries()) {
+      await ctx.close().catch(() => {});
+      globalState.addLog('info', `🗑️ Aba do ciclo #${cycle} fechada`);
+    }
+    contextosPorCiclo.clear();
+    await browser?.close().catch(() => {});
+    browser = null;
+    globalState.addLog('info', '🧹 Browser fechado');
   }
 }
