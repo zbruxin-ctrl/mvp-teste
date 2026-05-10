@@ -8,9 +8,16 @@ import {
 import { OTPParser } from '../utils/otpParser';
 
 // API temp-mail.io — documentacao: https://docs.temp-mail.io/docs/getting-started
-// POST /v1/emails                  -> cria inbox
-// GET  /v1/emails/{email}/messages -> lista mensagens (usa 1 crédito por chamada)
-// GET  /v1/messages/{id}           -> busca mensagem completa
+// POST /v1/emails                  -> cria inbox  (1 crédito)
+// GET  /v1/emails/{email}/messages -> lista msgs  (1 crédito por chamada)
+// GET  /v1/messages/{id}           -> corpo completo (1 crédito por chamada)
+//
+// Etapa 15 — estratégia de economia de créditos:
+//   • Espera inicial de 15s antes do primeiro poll (OTP quase nunca chega antes)
+//   • Intervalo de 12s entre polls (era 8s — reduz ~33% das chamadas)
+//   • Busca corpo completo APENAS de mensagens novas (delta desde o último poll)
+//   • Para imediatamente ao encontrar OTP (sem polls desnecessários extras)
+//   • Não loga polls vazios — só loga eventos relevantes
 
 export class TempMailClient {
   private config: TempMailConfig;
@@ -53,7 +60,6 @@ export class TempMailClient {
     } catch (error) {
       clearTimeout(timeoutId);
       const message = error instanceof Error ? error.message : 'Erro desconhecido';
-      // Só loga erros reais (não polling silencioso)
       globalState.addLog('error', `❌ Temp-Mail ${endpoint}: ${message}`);
       throw error;
     }
@@ -103,22 +109,29 @@ export class TempMailClient {
   }
 
   /**
-   * Aguarda o OTP minimizando o uso de créditos:
-   * - Espera 8s antes da primeira verificação (email demora para chegar)
-   * - Polling a cada 8s (era 3s → 62% menos chamadas)
-   * - Só busca o corpo completo de mensagens novas
-   * - Não loga cada polling — só loga eventos relevantes
+   * Aguarda o OTP com consumo mínimo de créditos.
+   *
+   * Pior caso com otpTimeout=60s:
+   *   - 1 poll de lista a cada 12s → máx 4 polls = 4 créditos de listagem
+   *   - 1 getFullMessage por mensagem nova encontrada (normalmente 1)
+   *   - Total: ~5 créditos por ciclo (vs ~20 na versão original de 3s)
    */
   async waitForOTP(email: string, timeoutMs = 60000): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
-    const POLL_INTERVAL_MS = 8000; // 8s entre verificações para economizar créditos
-    const INITIAL_WAIT_MS  = 8000; // espera inicial antes do primeiro check
+    const POLL_INTERVAL_MS = 12_000; // 12s entre polls — economiza créditos
+    const INITIAL_WAIT_MS  = 15_000; // 15s inicial — OTP raramente chega antes
 
     globalState.addLog('info', `⏳ Aguardando OTP (${Math.round(timeoutMs / 1000)}s, poll cada ${POLL_INTERVAL_MS / 1000}s)...`);
 
-    // Aguarda inicial — email raramente chega antes de 8s
-    await new Promise<void>((r) => setTimeout(r, INITIAL_WAIT_MS));
+    // Aguarda inicial em fatias para reagir ao shouldStop
+    const inicioEspera = Date.now();
+    while (Date.now() - inicioEspera < INITIAL_WAIT_MS) {
+      if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) {
+        throw new Error('Parado pelo usuário durante espera do OTP');
+      }
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
 
     while (Date.now() - startTime < timeoutMs) {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) {
@@ -126,15 +139,16 @@ export class TempMailClient {
       }
 
       try {
-        const messages = await this.listMessages(email);
+        const messages = await this.listMessages(email); // 1 crédito
 
         if (messages.length > lastMessageCount) {
           globalState.addLog('info', `📨 ${messages.length} mensagem(s) recebida(s) — verificando OTP...`);
 
+          // Só busca corpo das mensagens NOVAS (delta)
           for (const message of messages.slice(lastMessageCount).reverse()) {
             const msgId = (message as unknown as { mail_id: string }).mail_id;
             try {
-              const full = await this.getFullMessage(msgId);
+              const full = await this.getFullMessage(msgId); // 1 crédito por mensagem nova
               const msgWithBody = {
                 ...message,
                 mail_text: full.body_text ?? '',
@@ -143,21 +157,29 @@ export class TempMailClient {
               const otp = OTPParser.extractFromMessage(msgWithBody as unknown as MailMessage);
               if (otp) {
                 globalState.addLog('success', `🎉 OTP encontrado: ${otp}`);
-                return otp;
+                return otp; // para imediatamente — sem polls extras
               }
             } catch {
               // ignora erro ao buscar corpo individual
             }
           }
-        }
 
-        lastMessageCount = messages.length;
+          lastMessageCount = messages.length;
+        }
+        // Se não houve mensagens novas, não loga (silencioso)
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
         globalState.addLog('warn', '⚠️ Erro ao verificar mensagens, tentando novamente...');
       }
 
-      await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
+      // Aguarda próximo poll em fatias de 500ms para reagir ao shouldStop
+      const fimPoll = Date.now() + POLL_INTERVAL_MS;
+      while (Date.now() < fimPoll) {
+        if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) {
+          throw new Error('Parado pelo usuário durante espera do OTP');
+        }
+        await new Promise<void>((r) => setTimeout(r, 500));
+      }
     }
 
     throw new Error(`⏰ Timeout aguardando OTP (${Math.round(timeoutMs / 1000)}s)`);

@@ -405,96 +405,119 @@ const KYC_INIT_SCRIPT = `
 
 // ─── WhatsApp ─────────────────────────────────────────────────────────────────
 
+/**
+ * Etapa 8 — dispensarWhatsApp NÃO lança exceção.
+ * Se a tela não aparecer ou o clique falhar, apenas loga e retorna.
+ * O ciclo continua normalmente para clicarFotoPerfil.
+ */
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
-  await humanPause(randInt(2000, 3500));
-  const SELETORES_WHATSAPP = [
-    'button:has-text("ÃO ATIVAR")',
-    'button:has-text("Nao ativar")',
-    'button:has-text("Not now")',
-    'button:has-text("Agora não")',
-    '[data-testid*="whatsapp"]',
-    'button[type="submit"]',
-  ];
-  const TIMEOUT_MS = 30_000;
-  const POLL_MS = 3_000;
-  const inicio = Date.now();
-  let detectado = false;
+  try {
+    await humanPause(randInt(2000, 3500));
+    const SELETORES_WHATSAPP = [
+      'button:has-text("ÃO ATIVAR")',
+      'button:has-text("Nao ativar")',
+      'button:has-text("Not now")',
+      'button:has-text("Agora não")',
+      '[data-testid*="whatsapp"]',
+      'button[type="submit"]',
+    ];
+    const TIMEOUT_MS = 30_000;
+    const POLL_MS = 3_000;
+    const inicio = Date.now();
+    let detectado = false;
 
-  globalState.addLog('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
-  while (Date.now() - inicio < TIMEOUT_MS) {
-    for (const sel of SELETORES_WHATSAPP) {
-      try {
-        const visivel = await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false);
-        if (visivel) { detectado = true; break; }
-      } catch { /* ignora */ }
+    globalState.addLog('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
+    while (Date.now() - inicio < TIMEOUT_MS) {
+      for (const sel of SELETORES_WHATSAPP) {
+        try {
+          const visivel = await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false);
+          if (visivel) { detectado = true; break; }
+        } catch { /* ignora */ }
+      }
+      if (detectado) break;
+      await humanPause(POLL_MS);
     }
-    if (detectado) break;
-    await humanPause(POLL_MS);
-  }
 
-  if (!detectado) {
-    globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada após 30s, pulando...', cycle);
-    return;
-  }
+    if (!detectado) {
+      globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada após 30s, pulando...', cycle);
+      return;
+    }
 
-  globalState.addLog('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
-  await humanPause(randInt(400, 800));
+    globalState.addLog('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
+    await humanPause(randInt(400, 800));
 
-  const candidatosCss = [
-    'button:has-text("NÃO ATIVAR")',
-    'button:has-text("Nao ativar")',
-    'button:has-text("Not now")',
-    'button:has-text("Agora não")',
-  ];
-  for (const sel of candidatosCss) {
-    try {
-      const el = p.locator(sel).first();
-      const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-      if (visivel) {
-        const box = await el.boundingBox().catch(() => null);
-        if (box) {
-          await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-          await humanPause(randInt(150, 300));
+    const candidatosCss = [
+      'button:has-text("NÃO ATIVAR")',
+      'button:has-text("Nao ativar")',
+      'button:has-text("Not now")',
+      'button:has-text("Agora não")',
+    ];
+    for (const sel of candidatosCss) {
+      try {
+        const el = p.locator(sel).first();
+        const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
+        if (visivel) {
+          const box = await el.boundingBox().catch(() => null);
+          if (box) {
+            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+            await humanPause(randInt(150, 300));
+          }
+          await el.click({ timeout: 5000 });
+          globalState.addLog('info', `🔕 WhatsApp: NÃO ATIVAR clicado (CSS: ${sel})`, cycle);
+          await humanPause(randInt(400, 800));
+          return;
         }
-        await el.click({ timeout: 5000 });
-        globalState.addLog('info', `🔕 WhatsApp: NÃO ATIVAR clicado (CSS: ${sel})`, cycle);
+      } catch { /* tenta próxima */ }
+    }
+
+    try {
+      const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
+      if (clicou) {
+        globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle);
         await humanPause(randInt(400, 800));
         return;
       }
-    } catch { /* tenta próxima */ }
+    } catch { /* ignora */ }
+
+    try {
+      const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
+      if (clicou) {
+        globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback submit)`, cycle);
+        await humanPause(randInt(400, 800));
+        return;
+      }
+    } catch { /* ignora */ }
+
+    globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR — continuando...', cycle);
+  } catch (err) {
+    // Etapa 8: nunca propaga erro — WhatsApp é opcional
+    globalState.addLog('warn', `⚠️ dispensarWhatsApp erro inesperado (ignorado): ${err}`, cycle);
   }
-
-  try {
-    const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
-    if (clicou) {
-      globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle);
-      await humanPause(randInt(400, 800));
-      return;
-    }
-  } catch { /* ignora */ }
-
-  try {
-    const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
-    if (clicou) {
-      globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback submit)`, cycle);
-      await humanPause(randInt(400, 800));
-      return;
-    }
-  } catch { /* ignora */ }
-
-  globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR', cycle);
 }
 
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
+/**
+ * Etapa 12 — melhorias:
+ *   • Seletores ampliados para capturar mais variações do item de lista
+ *   • Fallback por texto genérico "Foto" e por role=listitem
+ *   • Se o item foi clicado mas não há sinal KYC em 30s, tenta rolar a página
+ *     e clicar novamente (a Uber às vezes requer scroll para ativar)
+ */
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
   globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
   const SELETORES_ITEM = [
     '[data-testid="stepItem profilePhoto"]',
     '[data-dgui="requirement-list-item"]:has-text("Foto do perfil")',
+    '[data-dgui="requirement-list-item"]:has-text("Foto")',
     'a:has-text("Foto do perfil")',
+    'a:has-text("Foto")',
     '[data-tracking-name="requirement-list-item"]:has-text("Foto")',
+    '[role="listitem"]:has-text("Foto do perfil")',
+    '[role="listitem"]:has-text("Foto")',
+    'li:has-text("Foto do perfil")',
+    'li:has-text("Foto")',
   ];
 
   const TIMEOUT_ITEM = 20_000;
@@ -559,6 +582,13 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
           }
         } catch { /* tenta próximo */ }
       }
+      // A cada 2 tentativas sem sucesso, tenta rolar a página para revelar o botão
+      if (tentativa > 0 && tentativa % 2 === 0) {
+        try {
+          await p.evaluate(() => window.scrollBy(0, 200));
+          globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
+        } catch { /* ignora */ }
+      }
       await humanPause(2500);
     }
     globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
@@ -584,7 +614,43 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     }
     await humanPause(1000);
   }
-  globalState.addLog('warn', '⚠️ KYC não detectado após 30s. Aba mantida aberta para inspeção.', cycle);
+
+  // Etapa 12: após 30s sem KYC, tenta rolar + re-clicar o item uma vez
+  globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
+  try {
+    await p.evaluate(() => window.scrollTo(0, 0));
+    await humanPause(randInt(500, 1000));
+    for (const sel of SELETORES_ITEM) {
+      try {
+        const el = p.locator(sel).first();
+        const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
+        if (visivel) {
+          await el.click({ force: true, timeout: 5000 });
+          globalState.addLog('info', `📸 Re-clique em "Foto do perfil" (${sel})`, cycle);
+          break;
+        }
+      } catch { /* ignora */ }
+    }
+    // Aguarda mais 15s pelo KYC após re-clique
+    const fimKyc2 = Date.now() + 15_000;
+    while (Date.now() < fimKyc2) {
+      const sinais = globalState.getKycSignals(cycle);
+      if (sinais && sinais.length > 0) {
+        const provider = sinais[0]!.provider;
+        globalState.addLog('info', `✅ KYC detectado (re-clique): ${provider}`, cycle);
+        if (provider === 'Veriff') {
+          await context.close().catch(() => {});
+          contextosPorCiclo.delete(cycle);
+        } else {
+          globalState.addLog('success', `🟢 ${provider} detectado → aba mantida aberta`, cycle);
+        }
+        return;
+      }
+      await humanPause(1000);
+    }
+  } catch { /* ignora */ }
+
+  globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
 }
 
 // ─── Fingerprint stealth ──────────────────────────────────────────────────────
@@ -785,18 +851,12 @@ async function criarContextoIsolado(
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
-  /**
-   * Inicia o browser uma única vez.
-   * Guard duplo: flag `browserLaunching` evita race condition quando
-   * múltiplos ciclos paralelos chamam init() ao mesmo tempo.
-   */
   static async init(headless = false): Promise<void> {
     if (browser) {
       globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
       return;
     }
     if (browserLaunching) {
-      // Outro ciclo já está subindo o browser — aguarda até ele estar pronto
       globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
       const deadline = Date.now() + 30_000;
       while (!browser && Date.now() < deadline) {

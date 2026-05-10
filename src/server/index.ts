@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { globalState } from '../state/globalState';
 import { MockPlaywrightFlow } from '../playwright/mockFlow';
@@ -6,6 +6,9 @@ import { Config } from '../types';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ─── Senha hardcoded ──────────────────────────────────────────────────────────
+const ADMIN_PASSWORD = 'connect@10';
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../../src/frontend')));
@@ -24,6 +27,17 @@ globalState.setExecutor(async (config, cycle) => {
     cycle
   );
 });
+
+// ─── Middleware de autenticação ───────────────────────────────────────────────
+
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const auth = req.headers['x-admin-password'];
+  if (!auth || auth !== ADMIN_PASSWORD) {
+    res.status(401).json({ ok: false, error: 'Não autorizado' });
+    return;
+  }
+  next();
+}
 
 // ─── Validação de config ───────────────────────────────────────────────────────
 
@@ -64,7 +78,7 @@ function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config
   return { ok: true, data: body };
 }
 
-// ─── Rotas API ────────────────────────────────────────────────────────────────
+// ─── Rotas públicas ───────────────────────────────────────────────────────────
 
 app.get('/api/status', (_req, res) => {
   res.json(globalState.getState());
@@ -74,19 +88,25 @@ app.get('/api/logs', (_req, res) => {
   res.json(globalState.getLogs());
 });
 
-app.post('/api/logs/clear', (_req, res) => {
+app.get('/api/kyc', (_req, res) => {
+  res.json(globalState.getKycState());
+});
+
+// ─── Rotas protegidas ─────────────────────────────────────────────────────────
+
+app.post('/api/logs/clear', requireAuth, (_req, res) => {
   globalState.clearLogs();
   res.json({ ok: true });
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', requireAuth, (req, res) => {
   const result = validateConfig(req.body);
   if (!result.ok) { res.status(400).json({ ok: false, error: result.error }); return; }
   globalState.updateConfig(result.data);
   res.json({ ok: true });
 });
 
-app.post('/api/start', (req, res) => {
+app.post('/api/start', requireAuth, (req, res) => {
   if (req.body?.config) {
     const result = validateConfig(req.body.config);
     if (!result.ok) { res.status(400).json({ ok: false, error: result.error }); return; }
@@ -96,7 +116,7 @@ app.post('/api/start', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/start-once', (req, res) => {
+app.post('/api/start-once', requireAuth, (req, res) => {
   if (req.body?.config) {
     const result = validateConfig(req.body.config);
     if (!result.ok) { res.status(400).json({ ok: false, error: result.error }); return; }
@@ -106,18 +126,12 @@ app.post('/api/start-once', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/stop', (_req, res) => {
+app.post('/api/stop', requireAuth, (_req, res) => {
   globalState.stop();
   res.json({ ok: true });
 });
 
-// ─── Rota KYC ─────────────────────────────────────────────────────────────────
-
-app.get('/api/kyc', (_req, res) => {
-  res.json(globalState.getKycState());
-});
-
-app.post('/api/kyc/clear', (_req, res) => {
+app.post('/api/kyc/clear', requireAuth, (_req, res) => {
   globalState.clearKycState();
   res.json({ ok: true });
 });

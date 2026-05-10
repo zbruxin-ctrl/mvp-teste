@@ -106,10 +106,6 @@ class GlobalState {
 
   // ─── Proxy API ────────────────────────────────────────────────────────────
 
-  /**
-   * Retorna o proxy a usar para o ciclo dado, em rotação round-robin.
-   * Se não houver proxies configurados, retorna undefined (sem proxy).
-   */
   getProxyForCycle(cycle: number): ProxyConfig | undefined {
     const proxies = this.state.config.proxies;
     if (!proxies || proxies.length === 0) return undefined;
@@ -194,7 +190,7 @@ class GlobalState {
 
   addLog(level: LogEntry['level'], message: string, cycle?: number): void {
     this.logs.unshift({ timestamp: new Date().toISOString(), level, message, cycle });
-    if (this.logs.length > 200) this.logs = this.logs.slice(0, 200);
+    // Etapa 9: logs crescem livremente (sem limite), não afeta o processo
   }
 
   stop(): void {
@@ -273,11 +269,24 @@ class GlobalState {
     let lastError = 'Erro desconhecido';
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      if (this.state.shouldStop) break;
+      // Etapa 10: verifica shouldStop ANTES do backoff para parar imediatamente
+      if (this.state.shouldStop) {
+        this.addLog('info', `🛑 Ciclo #${cycle} interrompido (shouldStop)`, cycle);
+        return;
+      }
+
       const backoff = BACKOFF[attempt - 1] ?? 15000;
       if (backoff > 0) {
         this.addLog('warn', `⏳ Retry #${attempt} em ${backoff / 1000}s...`, cycle);
-        await sleep(backoff);
+        // Espera o backoff em fatias de 500ms para reagir ao shouldStop
+        const end = Date.now() + backoff;
+        while (Date.now() < end) {
+          if (this.state.shouldStop) {
+            this.addLog('info', `🛑 Ciclo #${cycle} interrompido durante backoff`, cycle);
+            return;
+          }
+          await sleep(Math.min(500, end - Date.now()));
+        }
       }
 
       try {
@@ -295,6 +304,11 @@ class GlobalState {
         return;
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'Erro desconhecido';
+        // Se foi parado pelo usuário, não tenta novamente
+        if (this.state.shouldStop || lastError.includes('Parado pelo usuário')) {
+          this.addLog('info', `🛑 Ciclo #${cycle} encerrado pelo usuário`, cycle);
+          return;
+        }
         this.addLog('error', `❌ Tentativa ${attempt}/${MAX_RETRIES} falhou: ${lastError}`, cycle);
         await sleep(2000);
       }
