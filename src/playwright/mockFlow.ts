@@ -18,11 +18,6 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-const MOBILE_WIDTH  = MOBILE_DEVICE.viewport?.width  ?? 390;
-const MOBILE_HEIGHT = MOBILE_DEVICE.viewport?.height ?? 844;
-const MOBILE_DPR    = MOBILE_DEVICE.deviceScaleFactor ?? 3;
-const MOBILE_UA     = MOBILE_DEVICE.userAgent ?? '';
-
 // ─── Helpers humanos ──────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
@@ -536,84 +531,6 @@ function resolverProviderDominante(
   return melhor;
 }
 
-// ─── OTP: polling com retentativas e re-envio ─────────────────────────────────
-
-async function aguardarOTPComRetry(
-  p: Page,
-  client: IEmailClient,
-  email: string,
-  otpTimeout: number,
-  cycle: number
-): Promise<string> {
-  const MAX_TENTATIVAS = 3;
-  const POLL_INTERVAL  = 5_000;
-  const JANELA_MS = Math.max(20_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
-
-  const SELETORES_REENVIO = [
-    'button:has-text("Reenviar")',
-    'button:has-text("Resend")',
-    'button:has-text("Reenviar código")',
-    'a:has-text("Reenviar")',
-    'a:has-text("Resend")',
-    '[data-testid*="resend"]',
-    'span:has-text("Reenviar")',
-  ];
-
-  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
-    globalState.addLog(
-      'info',
-      `🔑 OTP tentativa ${tentativa}/${MAX_TENTATIVAS} — aguardando até ${JANELA_MS / 1000}s...`,
-      cycle
-    );
-
-    const fimJanela = Date.now() + JANELA_MS;
-    while (Date.now() < fimJanela) {
-      try {
-        const otp = await client.waitForOTP(email, POLL_INTERVAL, cycle);
-        if (otp) {
-          globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
-          return otp;
-        }
-      } catch {
-        // waitForOTP lançou timeout parcial — continua polling
-      }
-      if (Date.now() >= fimJanela) break;
-      await humanPause(POLL_INTERVAL);
-    }
-
-    if (tentativa < MAX_TENTATIVAS) {
-      globalState.addLog('warn', `⚠️ OTP não chegou em ${JANELA_MS / 1000}s — tentando reenviar...`, cycle);
-
-      let reenvioClicado = false;
-      for (const sel of SELETORES_REENVIO) {
-        try {
-          const el = p.locator(sel).first();
-          const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-          if (visivel) {
-            const box = await el.boundingBox().catch(() => null);
-            if (box) {
-              await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-              await humanPause(randInt(200, 400));
-            }
-            await el.click({ timeout: 5000 });
-            globalState.addLog('info', `🔄 Código reenviado (${sel}) — aguardando nova mensagem...`, cycle);
-            reenvioClicado = true;
-            break;
-          }
-        } catch { /* tenta próximo seletor */ }
-      }
-
-      if (!reenvioClicado) {
-        globalState.addLog('warn', '⚠️ Botão de reenvio não encontrado — aguardando mesma caixa de entrada...', cycle);
-      }
-
-      await humanPause(randInt(2000, 4000));
-    }
-  }
-
-  throw new Error(`OTP não recebido após ${MAX_TENTATIVAS} tentativas (${(JANELA_MS * MAX_TENTATIVAS) / 1000}s total)`);
-}
-
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
@@ -1044,8 +961,11 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // ── 2. OTP ────────────────────────────────────────────────────────────────
-      const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
+      // ── 2. OTP — deixa o client gerenciar polling e timeout completo ──────────
+      globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
+      const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
+      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
+
       await humanPause(randInt(800, 1400));
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
