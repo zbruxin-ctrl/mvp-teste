@@ -49,11 +49,6 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   }
 }
 
-/**
- * Espera até que não haja nenhum elemento cobrindo o seletor alvo.
- * Usa string literal no p.evaluate para evitar que o TypeScript do Node
- * tente checar referências a `document` / `Node` (TS2584).
- */
 async function waitForElementInteractable(p: Page, selector: string, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -62,8 +57,6 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
       if (!box) { await humanPause(300); continue; }
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
-
-      // String literal → TypeScript não faz type-check do conteúdo (roda só no browser)
       const isTarget = await p.evaluate(
         `(function(){ \
           var top = document.elementFromPoint(${cx}, ${cy}); \
@@ -72,40 +65,25 @@ async function waitForElementInteractable(p: Page, selector: string, timeoutMs =
           return target === top || target.contains(top); \
         })()`
       ) as boolean;
-
       if (isTarget) return;
     } catch { /* ignora e repete */ }
     await humanPause(400);
   }
-  // Timeout expirou — tenta mesmo assim (pior caso: force click)
 }
 
-/**
- * Clica no elemento via três estratégias em cascata:
- * 1. page.click normal
- * 2. page.click com force: true
- * 3. dispatchEvent via JS (contorna qualquer overlay/pointer-events)
- */
 async function robustClick(p: Page, selector: string): Promise<void> {
-  // Garante que o elemento está visível e tenta scrollar para ele
   try {
     await p.locator(selector).scrollIntoViewIfNeeded({ timeout: 5000 });
   } catch { /* ignora */ }
   await humanPause(randInt(80, 150));
-
-  // Estratégia 1: clique normal
   try {
     await p.click(selector, { timeout: 4000 });
     return;
   } catch { /* tenta force */ }
-
-  // Estratégia 2: force click
   try {
     await p.click(selector, { force: true, timeout: 4000 });
     return;
   } catch { /* tenta dispatchEvent */ }
-
-  // Estratégia 3: dispatchEvent via JS — imune a overlays e pointer-events:none
   await p.evaluate(
     `(function(sel){
       var el = document.querySelector(sel);
@@ -1094,6 +1072,22 @@ export class MockPlaywrightFlow {
     }
   }
 
+  /** Fecha o browser graciosamente — chamado no SIGINT/SIGTERM */
+  static async cleanup(): Promise<void> {
+    if (!browser) return;
+    globalState.addLog('info', '🛑 Fechando browser (cleanup)...');
+    try {
+      // Fecha todos os contextos abertos antes de fechar o browser
+      for (const [cycle, ctx] of contextosPorCiclo.entries()) {
+        await ctx.close().catch(() => {});
+        contextosPorCiclo.delete(cycle);
+      }
+      await browser.close();
+    } catch { /* ignora erros no shutdown */ } finally {
+      browser = null;
+    }
+  }
+
   static async execute(
     cadastroUrl: string,
     config: {
@@ -1114,7 +1108,6 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      // Aguarda estabilizar — networkidle com fallback para não travar em páginas com polling
       await p.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
       await humanPause(randInt(1200, 2000));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);

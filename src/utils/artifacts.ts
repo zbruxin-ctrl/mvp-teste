@@ -52,4 +52,11 @@ export class ArtifactsManager {
       return '';
     }
   }
+
+  /** Salva screenshot + HTML de erro para um ciclo — atalho usado no catch do mockFlow */
+  async saveErrorArtifacts(page: PageLike, cycle: number): Promise<void> {
+    ArtifactsManager.init();
+    await ArtifactsManager.saveScreenshot(page, cycle, 'error');
+    await ArtifactsManager.saveHTML(page, cycle, 'error');
+  }
 }
