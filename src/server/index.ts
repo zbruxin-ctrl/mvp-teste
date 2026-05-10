@@ -1,5 +1,3 @@
-// Arquivo gerado para adicionar rota /kyc — lê o server existente e adiciona a rota
-// Se já tiver um src/server/index.ts, esse arquivo substituirá apenas a parte da rota KYC
 import express from 'express';
 import path from 'path';
 import { globalState } from '../state/globalState';
@@ -11,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../../src/frontend')));
 
-// Registra o executor do Playwright
+// Registra o executor do Playwright — suporta parallelCycles
 globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.init(config.headless);
   await MockPlaywrightFlow.execute(
