@@ -34,5 +34,5 @@ export interface TempMailError {
 /** Interface comum para qualquer provider de email temporário */
 export interface IEmailClient {
   createRandomEmail(): Promise<EmailAccount>;
-  waitForOTP(email: string, timeoutMs?: number): Promise<string>;
+  waitForOTP(email: string, timeoutMs?: number, cycle?: number): Promise<string>;
 }
