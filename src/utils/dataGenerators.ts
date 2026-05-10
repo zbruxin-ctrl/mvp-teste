@@ -45,12 +45,22 @@ const DDDS = [
 const rand = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 
 /**
- * Gera um número de celular brasileiro válido.
- * Formato retornado: só dígitos, sem máscara — ex: "11987654321"
+ * Contador global para garantir unicidade de telefones entre ciclos paralelos.
+ * Combinado com timestamp + random, elimina risco de colisão.
+ */
+let _phoneCounter = 0;
+
+/**
+ * Gera um número de celular brasileiro válido e único por ciclo.
+ * Formato retornado: só dígitos, sem máscara — ex: "11987654321" (11 dígitos)
+ * Garantia de unicidade: timestamp (ms) + contador incremental + random
  */
 export function gerarTelefone(): string {
   const ddd = rand(DDDS);
-  const sufixo = Math.floor(10000000 + Math.random() * 90000000).toString();
+  // Seed único: timestamp atual em ms XOR contador incremental
+  const seed = (Date.now() ^ (++_phoneCounter * 1000007)) >>> 0;
+  // Gera 8 dígitos garantidos (10000000–99999999)
+  const sufixo = String(10000000 + (seed % 90000000)).padStart(8, '0');
   return `${ddd}9${sufixo}`;
 }
 

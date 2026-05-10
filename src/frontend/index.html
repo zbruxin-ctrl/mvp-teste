@@ -13,8 +13,9 @@
     h1 { color: #333; margin-bottom: 16px; font-size: 22px; }
     h2 { color: #555; margin-bottom: 14px; font-size: 17px; }
     label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; }
-    input, select { width: 100%; padding: 10px 12px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 14px; margin-bottom: 14px; transition: border-color .2s; }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
+    input, select, textarea { width: 100%; padding: 10px 12px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 14px; margin-bottom: 14px; transition: border-color .2s; font-family: inherit; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #4f46e5; }
+    textarea { resize: vertical; min-height: 80px; font-family: monospace; font-size: 12px; }
     button { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .2s; margin-bottom: 10px; }
     .btn-primary   { background: #4f46e5; color: #fff; }
     .btn-primary:hover:not(:disabled)   { background: #3730a3; }
@@ -36,6 +37,8 @@
     .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
     .save-toast { display: none; font-size: 12px; color: #15803d; font-weight: 600; margin-top: -10px; margin-bottom: 10px; text-align: center; }
     .save-toast.show { display: block; }
+    .proxy-hint { font-size: 11px; color: #9ca3af; margin-top: -10px; margin-bottom: 14px; line-height: 1.5; }
+    .proxy-count { font-size: 12px; font-weight: 600; color: #4f46e5; margin-bottom: 8px; }
 
     /* ── Logs ── */
     .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.6; }
@@ -111,18 +114,25 @@
       <label for="inviteCode">Código de Indicação</label>
       <input id="inviteCode" placeholder="ex: gkd2n7c" />
       <label for="otpTimeout">Timeout OTP (ms)</label>
-      <input id="otpTimeout" type="number" value="30000" />
+      <input id="otpTimeout" type="number" value="60000" />
       <label for="cycleInterval">Intervalo entre ciclos (ms)</label>
       <input id="cycleInterval" type="number" value="60000" />
       <label for="extraDelay">Delay extra entre ações (ms)</label>
       <input id="extraDelay" type="number" value="2000" />
       <label for="parallelCycles">Ciclos simultâneos</label>
-      <input id="parallelCycles" type="number" value="1" min="1" max="10" />
+      <input id="parallelCycles" type="number" value="1" min="1" max="20" />
       <label for="headless">Modo Headless</label>
       <select id="headless">
         <option value="true">Sim (oculto)</option>
         <option value="false">Não (visível)</option>
       </select>
+
+      <!-- Proxies -->
+      <label for="proxiesInput">🌐 Proxies (um por linha)</label>
+      <div id="proxyCount" class="proxy-count" style="display:none"></div>
+      <textarea id="proxiesInput" placeholder="177.10.20.30:8080&#10;177.10.20.31:8080:usuario:senha&#10;http://user:pass@1.2.3.4:3128&#10;socks5://user:pass@1.2.3.4:1080"></textarea>
+      <p class="proxy-hint">Formatos aceitos: <code>host:porta</code> · <code>host:porta:user:senha</code> · URL completa http/socks5<br>Se vazio, usa seu IP local. Rotação automática por ciclo.</p>
+
       <button class="btn-secondary" onclick="saveConfig()">💾 Salvar Config</button>
       <div class="save-toast" id="saveToast">✅ Configurações salvas!</div>
     </div>
@@ -175,236 +185,45 @@
     const KYC_COLORS = { WEAK: 'weak', LIKELY: 'likely', CONFIRMED: 'confirmed' };
     const BADGE_COLORS = { WEAK: 'badge-weak', LIKELY: 'badge-likely', CONFIRMED: 'badge-confirmed' };
 
-    // Ciclo selecionado na aba KYC
     var _selectedCycle = null;
-    // Último estado KYC para re-render ao trocar aba
     var _lastKycState = {};
-
-    // ── Flag: evita sobrescrever campos enquanto o usuário está digitando ──────
     var _dirtyFields = {};
     var _dirtyTimers = {};
 
     function markDirty(fieldId) {
       _dirtyFields[fieldId] = true;
       clearTimeout(_dirtyTimers[fieldId]);
-      _dirtyTimers[fieldId] = setTimeout(function() {
-        _dirtyFields[fieldId] = false;
-      }, 5000);
+      _dirtyTimers[fieldId] = setTimeout(function() { _dirtyFields[fieldId] = false; }, 5000);
     }
 
-    var CONFIG_FIELDS = ['cadastroUrl','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','headless'];
+    var CONFIG_FIELDS = ['cadastroUrl','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','headless','proxiesInput'];
     CONFIG_FIELDS.forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('input', function() { markDirty(id); });
     });
 
-    async function api(path, method, body) {
-      var opts = { method: method || 'GET' };
-      if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
-      var res = await fetch('/api' + path, opts);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.json();
-    }
+    // Atualiza contador de proxies ao digitar
+    document.getElementById('proxiesInput').addEventListener('input', function() {
+      updateProxyCount(this.value);
+    });
 
-    function getConfig() {
-      return {
-        cadastroUrl:    document.getElementById('cadastroUrl').value,
-        tempMailApiKey: document.getElementById('tempMailApiKey').value,
-        inviteCode:     document.getElementById('inviteCode').value,
-        otpTimeout:     parseInt(document.getElementById('otpTimeout').value, 10),
-        cycleInterval:  parseInt(document.getElementById('cycleInterval').value, 10),
-        extraDelay:     parseInt(document.getElementById('extraDelay').value, 10),
-        parallelCycles: parseInt(document.getElementById('parallelCycles').value, 10) || 1,
-        headless:       document.getElementById('headless').value === 'true',
-      };
-    }
-
-    function applyConfig(cfg) {
-      if (!cfg) return;
-      function setIfClean(id, val) {
-        if (!_dirtyFields[id]) {
-          var el = document.getElementById(id);
-          if (el && el.value !== String(val ?? '')) el.value = val ?? '';
-        }
-      }
-      setIfClean('cadastroUrl',    cfg.cadastroUrl    || '');
-      setIfClean('tempMailApiKey', cfg.tempMailApiKey || '');
-      setIfClean('inviteCode',     cfg.inviteCode     || '');
-      setIfClean('otpTimeout',     cfg.otpTimeout     || 30000);
-      setIfClean('cycleInterval',  cfg.cycleInterval  || 60000);
-      setIfClean('extraDelay',     cfg.extraDelay     || 2000);
-      setIfClean('parallelCycles', cfg.parallelCycles || 1);
-      setIfClean('headless',       String(!!cfg.headless));
-    }
-
-    async function saveConfig() {
-      CONFIG_FIELDS.forEach(function(id) {
-        _dirtyFields[id] = false;
-        clearTimeout(_dirtyTimers[id]);
-      });
-      await api('/config', 'POST', getConfig());
-      var toast = document.getElementById('saveToast');
-      toast.classList.add('show');
-      setTimeout(function() { toast.classList.remove('show'); }, 2500);
-    }
-
-    async function startLoop()   { await api('/start',      'POST', { config: getConfig() }); }
-    async function startOnce()   { await api('/start-once', 'POST', { config: getConfig() }); }
-    async function stopBot()     { await api('/stop',       'POST'); }
-    async function clearLogs()   { await api('/logs/clear', 'POST'); }
-    async function clearKyc()    {
-      await api('/kyc/clear', 'POST');
-      _selectedCycle = null;
-      _lastKycState = {};
-      renderKyc({ byCycle: {} });
-    }
-
-    // ── Calcula o "melhor level" de um ciclo (max entre providers) ──────────
-    function cycleTopLevel(cycleMap) {
-      var levels = ['WEAK', 'LIKELY', 'CONFIRMED'];
-      var best = 0;
-      Object.values(cycleMap).forEach(function(p) {
-        var idx = levels.indexOf(p.level);
-        if (idx > best) best = idx;
-      });
-      return levels[best];
-    }
-
-    // ── Renderiza cards do ciclo selecionado ─────────────────────────────────
-    function renderCycleCards(cycleMap) {
-      if (!cycleMap) {
-        return '<div class="kyc-none">Nenhum sinal neste ciclo.</div>';
-      }
-      var providers = ['Socure', 'Veriff'];
-      var html = '<div class="kyc-grid">';
-      for (var i = 0; i < providers.length; i++) {
-        var name = providers[i];
-        var data = cycleMap[name];
-        if (!data) {
-          html += '<div class="kyc-card inactive"><div class="kyc-name">' + (KYC_ICONS[name] || '🔍') + ' ' + name +
-            ' <span class="kyc-badge badge-weak">NÃO DETECTADO</span></div>' +
-            '<div style="color:#9ca3af;font-size:13px;margin-top:8px">Nenhum sinal capturado</div></div>';
-          continue;
-        }
-        var level    = data.level || 'WEAK';
-        var cardCls  = KYC_COLORS[level]  || 'weak';
-        var badgeCls = BADGE_COLORS[level] || 'badge-weak';
-        var signals  = (data.signals || []).slice(0, 5);
-        var sigHtml  = signals.map(function(s) {
-          return '<div class="kyc-signal-row">⚡ ' + s.time + ' — ' + s.source + ' (+' + s.weight + ')' +
-            (s.url ? '<br><span style="color:#6b7280">' + s.url.substring(0, 80) + '</span>' : '') + '</div>';
-        }).join('');
-        html += '<div class="kyc-card ' + cardCls + '">' +
-          '<div class="kyc-name">' + (KYC_ICONS[name] || '🔍') + ' ' + name +
-          ' <span class="kyc-badge ' + badgeCls + '">' + level + '</span></div>' +
-          '<div class="kyc-score">' + data.score + ' <small>pts</small></div>' +
-          '<div class="kyc-signals">' + sigHtml + '</div>' +
-          '</div>';
-      }
-      html += '</div>';
-      return html;
-    }
-
-    // ── KYC render principal ─────────────────────────────────────────────────
-    function renderKyc(kycState) {
-      _lastKycState = kycState;
-      var byCycle = (kycState && kycState.byCycle) ? kycState.byCycle : {};
-      var cycles  = Object.keys(byCycle).map(Number).sort(function(a, b) { return b - a; }); // desc
-
-      var tabsEl  = document.getElementById('kyc-tabs');
-      var panelEl = document.getElementById('kyc-panel');
-
-      if (cycles.length === 0) {
-        tabsEl.innerHTML  = '';
-        panelEl.innerHTML = '<div class="kyc-none">Nenhum sinal KYC detectado ainda. Inicie um ciclo para monitorar.</div>';
-        _selectedCycle = null;
-        return;
-      }
-
-      // Seleciona o ciclo mais recente automaticamente se nenhum estiver selecionado
-      if (_selectedCycle === null || !byCycle[_selectedCycle]) {
-        _selectedCycle = cycles[0];
-      }
-
-      // Renderiza tabs
-      var tabsHtml = cycles.map(function(c) {
-        var topLevel = cycleTopLevel(byCycle[c]).toLowerCase();
-        var isActive = c === _selectedCycle;
-        return '<button class="kyc-tab ' + topLevel + (isActive ? ' active' : '') +
-          '" onclick="selectCycle(' + c + ')">#' + c + ' <span style="font-size:11px;opacity:.8">' +
-          topLevel.toUpperCase() + '</span></button>';
-      }).join('');
-      tabsEl.innerHTML = tabsHtml;
-
-      // Renderiza cards do ciclo selecionado
-      panelEl.innerHTML = renderCycleCards(byCycle[_selectedCycle]);
-    }
-
-    function selectCycle(cycle) {
-      _selectedCycle = cycle;
-      renderKyc(_lastKycState);
-    }
-
-    // ── Log render com destaque KYC ─────────────────────────────────────────
-    function renderLogs(logs) {
-      var logsEl = document.getElementById('logs');
-      var html = logs.map(function(l) {
-        var time   = new Date(l.timestamp).toLocaleTimeString();
-        var cycle  = l.cycle ? '#' + l.cycle + ' ' : '';
-        var msg    = l.message;
-
-        if (l.level === 'kyc') {
-          var providerMatch = msg.match(/^\[([A-Za-z]+)\]/);
-          var provider = providerMatch ? providerMatch[1] : 'KYC';
-          var badgeCls = provider === 'Socure' ? 'badge-socure' : provider === 'Veriff' ? 'badge-veriff' : 'badge-unknown';
-          return '<div class="log-entry log-kyc">[' + time + '] ' + cycle +
-            '<span class="log-kyc-badge ' + badgeCls + '">' + provider + '</span>' + msg + '</div>';
-        }
-
-        return '<div class="log-entry log-' + l.level + '">[' + time + '] ' + cycle + msg + '</div>';
-      }).join('');
-      logsEl.innerHTML = html;
-      logsEl.scrollTop = logsEl.scrollHeight;
-    }
-
-    // ── Main update loop ─────────────────────────────────────────────────────
-    async function updateUI() {
-      try {
-        var results = await Promise.all([
-          api('/status'),
-          api('/logs'),
-          api('/kyc'),
-        ]);
-        var state    = results[0];
-        var logs     = results[1];
-        var kycState = results[2];
-
-        var info     = STATUS_MAP[state.status] || STATUS_MAP.STOPPED;
-        var statusEl = document.getElementById('status');
-        statusEl.className   = 'status ' + info.color;
-        statusEl.textContent = info.emoji + ' ' + info.text;
-
-        document.getElementById('statusText').textContent      = state.status || '-';
-        document.getElementById('cyclesCompleted').textContent = String(state.cyclesCompleted || 0);
-        document.getElementById('cyclesTotal').textContent     = String(state.cyclesTotal     || 0);
-        document.getElementById('activeParallel').textContent  = String(state.activeParallel  || 0);
-
-        applyConfig(state.config);
-
-        var active = ['RUNNING', 'STARTING', 'WAITING_OTP'].includes(state.status);
-        document.getElementById('startBtn').disabled     = active;
-        document.getElementById('startOnceBtn').disabled = active;
-        document.getElementById('stopBtn').disabled      = !active && state.status !== 'STOPPING';
-
-        renderLogs(logs);
-        renderKyc(kycState);
-      } catch (e) {
-        console.error('updateUI:', e);
+    function updateProxyCount(raw) {
+      var lines = (raw || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+      var countEl = document.getElementById('proxyCount');
+      if (lines.length > 0) {
+        countEl.style.display = 'block';
+        countEl.textContent = '🌐 ' + lines.length + ' proxy(s) configurado(s)';
+      } else {
+        countEl.style.display = 'none';
       }
     }
 
-    setInterval(updateUI, 1000);
-    updateUI();
-  </script>
-</body>
-</html>
+    /**
+     * Parseia string de proxy no frontend (mesmo formato do backend).
+     * Retorna null se inválido.
+     */
+    function parseProxyString(raw) {
+      raw = raw.trim();
+      if (!raw) return null;
+      // URL completa
+      

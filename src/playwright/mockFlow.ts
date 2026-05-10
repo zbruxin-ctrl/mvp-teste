@@ -9,6 +9,7 @@ import { ArtifactsManager } from '../utils/artifacts';
 chromiumExtra.use(StealthPlugin());
 
 let browser: Browser | null = null;
+let browserLaunching = false; // guard contra race condition paralela
 const contextosPorCiclo = new Map<number, BrowserContext>();
 
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
@@ -716,7 +717,6 @@ function registrarListenersPage(page: Page, cycle: number): void {
 
 /**
  * Cria contexto mobile isolado com proxy (se configurado) e emulação CDP.
- * Equivalente ao Ctrl+Shift+M do DevTools.
  */
 async function criarContextoIsolado(
   cycle: number
@@ -732,7 +732,6 @@ async function criarContextoIsolado(
     extraHTTPHeaders: {
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
     },
-    // Proxy nativo do Playwright — roteia TODO o tráfego da aba pelo proxy
     ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
@@ -748,7 +747,6 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  // ── Emulação mobile via CDP (Ctrl+Shift+M) ────────────────────────────────
   try {
     const cdp = await context.newCDPSession(page);
     await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -787,28 +785,47 @@ async function criarContextoIsolado(
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
+  /**
+   * Inicia o browser uma única vez.
+   * Guard duplo: flag `browserLaunching` evita race condition quando
+   * múltiplos ciclos paralelos chamam init() ao mesmo tempo.
+   */
   static async init(headless = false): Promise<void> {
     if (browser) {
       globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
       return;
     }
-    globalState.addLog('info', '🦁 Iniciando Brave...');
-    browser = await chromiumExtra.launch({
-      headless,
-      executablePath: BRAVE_PATH,
-      slowMo: 0,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-infobars',
-        '--disable-dev-shm-usage',
-        '--no-first-run',
-        '--no-default-browser-check',
-        // Sem --window-size: o CDP controla o viewport por aba individualmente
-      ],
-    }) as unknown as Browser;
-    globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
+    if (browserLaunching) {
+      // Outro ciclo já está subindo o browser — aguarda até ele estar pronto
+      globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
+      const deadline = Date.now() + 30_000;
+      while (!browser && Date.now() < deadline) {
+        await new Promise<void>((r) => setTimeout(r, 200));
+      }
+      if (!browser) throw new Error('Timeout aguardando browser iniciar');
+      return;
+    }
+    browserLaunching = true;
+    try {
+      globalState.addLog('info', '🦁 Iniciando Brave...');
+      browser = await chromiumExtra.launch({
+        headless,
+        executablePath: BRAVE_PATH,
+        slowMo: 0,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-infobars',
+          '--disable-dev-shm-usage',
+          '--no-first-run',
+          '--no-default-browser-check',
+        ],
+      }) as unknown as Browser;
+      globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
+    } finally {
+      browserLaunching = false;
+    }
   }
 
   static async execute(
@@ -829,9 +846,7 @@ export class MockPlaywrightFlow {
     const client = new TempMailClient(config.tempMailApiKey);
 
     try {
-      // goto com timeout 60s e domcontentloaded (mais tolerante a rede lenta via proxy)
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      // Aguarda estabilização adicional da rede (até 10s extras, sem lançar erro)
       await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await humanPause(randInt(800, 1600));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
@@ -840,13 +855,11 @@ export class MockPlaywrightFlow {
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
-      // Etapa 1 — email
       await humanType(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // Etapa 2 — OTP
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
@@ -860,21 +873,18 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
-      // Etapa 3 — telefone
       await humanPause(randInt(400, 900));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
-      // Etapa 4 — senha
       await humanPause(randInt(400, 900));
       await humanType(p, '#PASSWORD', payload.senha);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
-      // Etapa 5 — nome e sobrenome
       await humanPause(randInt(400, 900));
       await humanType(p, '#FIRST_NAME', payload.nome);
       await humanPause(randInt(200, 400));
@@ -883,12 +893,10 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
-      // Etapa 6 — termos
       await aceitarTermos(p);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
 
-      // FASE 2: bonjour.uber.com — timeout 40s
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(700, 1400));
       globalState.addLog('info', '🔄 Redirecionado para bonjo', cycle);

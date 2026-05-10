@@ -8,11 +8,9 @@ import {
 import { OTPParser } from '../utils/otpParser';
 
 // API temp-mail.io — documentacao: https://docs.temp-mail.io/docs/getting-started
-// Base URL : https://api.temp-mail.io
-// POST /v1/emails                          -> cria inbox, retorna { email, ttl }
-// GET  /v1/emails/{email}/messages         -> lista mensagens
-// GET  /v1/messages/{id}                   -> busca mensagem completa (body_text, body_html)
-// Auth: header X-API-Key
+// POST /v1/emails                  -> cria inbox
+// GET  /v1/emails/{email}/messages -> lista mensagens (usa 1 crédito por chamada)
+// GET  /v1/messages/{id}           -> busca mensagem completa
 
 export class TempMailClient {
   private config: TempMailConfig;
@@ -38,8 +36,6 @@ export class TempMailClient {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      globalState.addLog('info', `📧 Temp-Mail: ${method} ${endpoint}`);
-
       const response = await fetch(url, {
         method,
         headers,
@@ -53,27 +49,25 @@ export class TempMailClient {
         throw new Error(`Temp-Mail ${response.status}: ${text}`);
       }
 
-      const data = await response.json() as T;
-      globalState.addLog('success', `✅ Temp-Mail OK: ${endpoint}`);
-      return data;
+      return await response.json() as T;
     } catch (error) {
       clearTimeout(timeoutId);
       const message = error instanceof Error ? error.message : 'Erro desconhecido';
+      // Só loga erros reais (não polling silencioso)
       globalState.addLog('error', `❌ Temp-Mail ${endpoint}: ${message}`);
       throw error;
     }
   }
 
   async createRandomEmail(): Promise<EmailAccount> {
-    // POST /v1/emails -> { email: string, ttl: number }
+    globalState.addLog('info', '📧 Criando email temporário...');
     const data = await this.request<{ email: string; ttl: number }>(
       '/v1/emails',
       'POST'
     );
-    // Adapta para o formato EmailAccount esperado pelo resto do codigo
     return {
       email: data.email,
-      md5: data.email, // usamos o proprio email como identificador
+      md5: data.email,
       quota: 0,
       used: 0,
       created_at: new Date().toISOString(),
@@ -81,7 +75,6 @@ export class TempMailClient {
   }
 
   async listMessages(email: string): Promise<MailMessage[]> {
-    // GET /v1/emails/{email}/messages -> { messages: [...] }
     const data = await this.request<{ messages: Array<{
       id: string;
       from: string;
@@ -101,7 +94,6 @@ export class TempMailClient {
   }
 
   async getFullMessage(messageId: string): Promise<{ body_text: string; body_html: string }> {
-    // GET /v1/messages/{id} -> mensagem completa com body_text e body_html
     return this.request<{ body_text: string; body_html: string }>(`/v1/messages/${messageId}`);
   }
 
@@ -110,11 +102,23 @@ export class TempMailClient {
     return data.domains ?? [];
   }
 
-  async waitForOTP(email: string, timeoutMs = 30000): Promise<string> {
+  /**
+   * Aguarda o OTP minimizando o uso de créditos:
+   * - Espera 8s antes da primeira verificação (email demora para chegar)
+   * - Polling a cada 8s (era 3s → 62% menos chamadas)
+   * - Só busca o corpo completo de mensagens novas
+   * - Não loga cada polling — só loga eventos relevantes
+   */
+  async waitForOTP(email: string, timeoutMs = 60000): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
+    const POLL_INTERVAL_MS = 8000; // 8s entre verificações para economizar créditos
+    const INITIAL_WAIT_MS  = 8000; // espera inicial antes do primeiro check
 
-    globalState.addLog('info', `⏳ Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`);
+    globalState.addLog('info', `⏳ Aguardando OTP (${Math.round(timeoutMs / 1000)}s, poll cada ${POLL_INTERVAL_MS / 1000}s)...`);
+
+    // Aguarda inicial — email raramente chega antes de 8s
+    await new Promise<void>((r) => setTimeout(r, INITIAL_WAIT_MS));
 
     while (Date.now() - startTime < timeoutMs) {
       if ((globalState.getState() as { shouldStop?: boolean }).shouldStop) {
@@ -125,9 +129,8 @@ export class TempMailClient {
         const messages = await this.listMessages(email);
 
         if (messages.length > lastMessageCount) {
-          globalState.addLog('info', `📨 ${messages.length} mensagem(s) recebida(s)`);
+          globalState.addLog('info', `📨 ${messages.length} mensagem(s) recebida(s) — verificando OTP...`);
 
-          // Busca o body completo de cada nova mensagem para extrair OTP
           for (const message of messages.slice(lastMessageCount).reverse()) {
             const msgId = (message as unknown as { mail_id: string }).mail_id;
             try {
@@ -143,7 +146,7 @@ export class TempMailClient {
                 return otp;
               }
             } catch {
-              // ignora erro ao buscar corpo individual, tenta proxima
+              // ignora erro ao buscar corpo individual
             }
           }
         }
@@ -154,14 +157,14 @@ export class TempMailClient {
         globalState.addLog('warn', '⚠️ Erro ao verificar mensagens, tentando novamente...');
       }
 
-      await new Promise<void>((r) => setTimeout(r, 3000));
+      await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
 
     throw new Error(`⏰ Timeout aguardando OTP (${Math.round(timeoutMs / 1000)}s)`);
   }
 
   async createEmailAndWaitOTP(
-    timeoutMs = 30000
+    timeoutMs = 60000
   ): Promise<{ email: string; md5: string; otp: string }> {
     const emailAccount = await this.createRandomEmail();
     globalState.addLog('info', `📧 Email criado: ${emailAccount.email}`);
