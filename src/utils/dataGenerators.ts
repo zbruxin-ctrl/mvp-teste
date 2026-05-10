@@ -6,6 +6,10 @@ export interface RegistrationPayload {
   senha: string;
   nome: string;
   sobrenome: string;
+  mes: string;
+  dia: string;
+  ano: string;
+  cidade: string;
   localizacao: string;
   codigoIndicacao: string;
 }
@@ -24,6 +28,34 @@ const SOBRENOMES = [
   'Almeida', 'Lopes', 'Sousa', 'Fernandes', 'Gonçalves', 'Vieira',
   'Campos', 'Marques', 'Mendes', 'Barbosa', 'Rocha', 'Dias', 'Jorge',
   'Morais', 'Nunes', 'Cardoso',
+];
+
+const CIDADES_BR = [
+  'São Paulo, SP, Brasil',
+  'Rio de Janeiro, RJ, Brasil',
+  'Belo Horizonte, MG, Brasil',
+  'Curitiba, PR, Brasil',
+  'Porto Alegre, RS, Brasil',
+  'Salvador, BA, Brasil',
+  'Fortaleza, CE, Brasil',
+  'Recife, PE, Brasil',
+  'Manaus, AM, Brasil',
+  'Belém, PA, Brasil',
+  'Goiânia, GO, Brasil',
+  'Campinas, SP, Brasil',
+  'São Luís, MA, Brasil',
+  'Maceió, AL, Brasil',
+  'Natal, RN, Brasil',
+  'Teresina, PI, Brasil',
+  'Campo Grande, MS, Brasil',
+  'João Pessoa, PB, Brasil',
+  'Aracaju, SE, Brasil',
+  'Cuiabá, MT, Brasil',
+  'Itajubá, MG, Brasil',
+  'Uberlândia, MG, Brasil',
+  'Ribeirão Preto, SP, Brasil',
+  'Sorocaba, SP, Brasil',
+  'Florianópolis, SC, Brasil',
 ];
 
 // DDDs válidos do Brasil (ANATEL)
@@ -46,20 +78,12 @@ const rand = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 
 /**
  * Contador global para garantir unicidade de telefones entre ciclos paralelos.
- * Combinado com timestamp + random, elimina risco de colisão.
  */
 let _phoneCounter = 0;
 
-/**
- * Gera um número de celular brasileiro válido e único por ciclo.
- * Formato retornado: só dígitos, sem máscara — ex: "11987654321" (11 dígitos)
- * Garantia de unicidade: timestamp (ms) + contador incremental + random
- */
 export function gerarTelefone(): string {
   const ddd = rand(DDDS);
-  // Seed único: timestamp atual em ms XOR contador incremental
   const seed = (Date.now() ^ (++_phoneCounter * 1000007)) >>> 0;
-  // Gera 8 dígitos garantidos (10000000–99999999)
   const sufixo = String(10000000 + (seed % 90000000)).padStart(8, '0');
   return `${ddd}9${sufixo}`;
 }
@@ -79,21 +103,41 @@ export function gerarNome(): string { return rand(NOMES_MASCULINOS); }
 export function gerarSobrenome(): string { return rand(SOBRENOMES); }
 
 /**
- * Gera o payload completo para um ciclo de cadastro.
- * @param emailAccount - conta de email temporário criada
- * @param inviteCode   - código de indicação vindo da config do painel
+ * Gera data de nascimento aleatória entre 18 e 40 anos atrás.
+ * Retorna { mes, dia, ano } como strings sem zero à esquerda.
  */
+function gerarDataNascimento(): { mes: string; dia: string; ano: string } {
+  const hoje = new Date();
+  const anoMin = hoje.getFullYear() - 40;
+  const anoMax = hoje.getFullYear() - 18;
+  const ano = anoMin + Math.floor(Math.random() * (anoMax - anoMin + 1));
+  const mes = 1 + Math.floor(Math.random() * 12);
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+  const dia = 1 + Math.floor(Math.random() * diasNoMes);
+  return {
+    mes: String(mes),
+    dia: String(dia),
+    ano: String(ano),
+  };
+}
+
 export function gerarPayloadCompleto(
   emailAccount?: EmailAccount,
   inviteCode?: string
 ): RegistrationPayload {
+  const { mes, dia, ano } = gerarDataNascimento();
+  const cidade = rand(CIDADES_BR);
   return {
     email: emailAccount?.email ?? `test${Math.floor(Math.random() * 10000)}@tempmail.lol`,
     telefone: gerarTelefone(),
     senha: 'connect@10',
     nome: gerarNome(),
     sobrenome: gerarSobrenome(),
-    localizacao: 'Itajubá, MG, Brasil',
+    mes,
+    dia,
+    ano,
+    cidade,
+    localizacao: cidade,
     codigoIndicacao: inviteCode ?? '',
   };
 }
