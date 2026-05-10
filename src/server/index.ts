@@ -7,28 +7,25 @@ import { Config } from '../types';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── Senha hardcoded ──────────────────────────────────────────────────────────
 const ADMIN_PASSWORD = 'connect@10';
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../../src/frontend')));
 
-// Registra o executor do Playwright
 globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.init(config.headless);
   await MockPlaywrightFlow.execute(
     config.cadastroUrl,
     {
-      tempMailApiKey: config.tempMailApiKey,
-      otpTimeout: config.otpTimeout,
-      extraDelay: config.extraDelay,
-      inviteCode: config.inviteCode,
+      emailProvider:  config.emailProvider  ?? 'temp-mail.io',
+      tempMailApiKey: config.tempMailApiKey ?? '',
+      otpTimeout:     config.otpTimeout,
+      extraDelay:     config.extraDelay,
+      inviteCode:     config.inviteCode,
     },
     cycle
   );
 });
-
-// ─── Middleware de autenticação ───────────────────────────────────────────────
 
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const auth = req.headers['x-admin-password'];
@@ -39,11 +36,14 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-// ─── Validação de config ───────────────────────────────────────────────────────
-
 function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config> } | { ok: false; error: string } {
   const errors: string[] = [];
 
+  if ('emailProvider' in body) {
+    if (body.emailProvider !== 'temp-mail.io' && body.emailProvider !== 'mail.tm') {
+      errors.push('emailProvider deve ser "temp-mail.io" ou "mail.tm"');
+    }
+  }
   if ('otpTimeout' in body) {
     const v = Number(body.otpTimeout);
     if (isNaN(v) || v < 5000) errors.push('otpTimeout deve ser número >= 5000');
@@ -78,21 +78,9 @@ function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config
   return { ok: true, data: body };
 }
 
-// ─── Rotas públicas ───────────────────────────────────────────────────────────
-
-app.get('/api/status', (_req, res) => {
-  res.json(globalState.getState());
-});
-
-app.get('/api/logs', (_req, res) => {
-  res.json(globalState.getLogs());
-});
-
-app.get('/api/kyc', (_req, res) => {
-  res.json(globalState.getKycState());
-});
-
-// ─── Rotas protegidas ─────────────────────────────────────────────────────────
+app.get('/api/status', (_req, res) => { res.json(globalState.getState()); });
+app.get('/api/logs',   (_req, res) => { res.json(globalState.getLogs()); });
+app.get('/api/kyc',    (_req, res) => { res.json(globalState.getKycState()); });
 
 app.post('/api/logs/clear', requireAuth, (_req, res) => {
   globalState.clearLogs();
@@ -135,8 +123,6 @@ app.post('/api/kyc/clear', requireAuth, (_req, res) => {
   globalState.clearKycState();
   res.json({ ok: true });
 });
-
-// ─── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`🚀 Server rodando em http://localhost:${PORT}`);

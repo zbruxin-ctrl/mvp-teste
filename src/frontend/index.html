@@ -39,6 +39,16 @@
     .save-toast.show { display: block; }
     .proxy-hint { font-size: 11px; color: #9ca3af; margin-top: -10px; margin-bottom: 14px; line-height: 1.5; }
     .proxy-count { font-size: 12px; font-weight: 600; color: #4f46e5; margin-bottom: 8px; }
+    /* Email provider card */
+    .provider-card { border: 1.5px solid #e0e0e0; border-radius: 10px; padding: 14px; margin-bottom: 14px; background: #fafafa; }
+    .provider-card .provider-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .provider-card .provider-name { font-weight: 700; font-size: 14px; color: #333; }
+    .provider-card .provider-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+    .badge-free { background: #d1fae5; color: #065f46; }
+    .badge-key  { background: #fef3c7; color: #92400e; }
+    .provider-card select { margin-bottom: 10px; }
+    .provider-card input  { margin-bottom: 0; }
+    .provider-hint { font-size: 11px; color: #9ca3af; margin-top: 6px; line-height: 1.5; }
     /* Logs */
     .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.6; }
     .log-entry { margin-bottom: 2px; padding: 1px 4px; border-radius: 4px; }
@@ -88,8 +98,29 @@
       <label for="cadastroUrl">URL de Cadastro</label>
       <input id="cadastroUrl" placeholder="https://example.com/cadastro" value="https://bonjour.uber.com/" />
 
-      <label for="tempMailApiKey">Temp-Mail API Key</label>
-      <input id="tempMailApiKey" type="password" placeholder="sua-api-key" value="amr6V6AnadfeRcdMiwaO" />
+      <!-- ── Email Provider ─────────────────────────────────────── -->
+      <div class="provider-card">
+        <div class="provider-header">
+          <span class="provider-name">📧 Serviço de Email Temporário</span>
+          <span id="providerBadge" class="provider-badge badge-key">API Key</span>
+        </div>
+
+        <label for="emailProvider" style="margin-bottom:4px">Provedor</label>
+        <select id="emailProvider" onchange="onProviderChange()">
+          <option value="temp-mail.io">temp-mail.io (requer API key)</option>
+          <option value="mail.tm">mail.tm (gratuito, sem API key)</option>
+        </select>
+
+        <div id="apiKeyWrapper">
+          <label for="tempMailApiKey">API Key</label>
+          <input id="tempMailApiKey" type="password" placeholder="sua-api-key" value="amr6V6AnadfeRcdMiwaO" />
+        </div>
+
+        <p id="providerHint" class="provider-hint">
+          temp-mail.io: requer conta paga. Cada poll consome 1 crédito.
+        </p>
+      </div>
+      <!-- ──────────────────────────────────────────────────────── -->
 
       <label for="inviteCode">Código de Indicação</label>
       <input id="inviteCode" placeholder="ex: gkd2n7c" />
@@ -164,22 +195,51 @@
     var KYC_COLORS = { WEAK: 'weak', LIKELY: 'likely', CONFIRMED: 'confirmed' };
     var BADGE_COLORS = { WEAK: 'badge-weak', LIKELY: 'badge-likely', CONFIRMED: 'badge-confirmed' };
 
+    var PROVIDER_HINTS = {
+      'temp-mail.io': 'temp-mail.io: requer conta paga. Cada poll consome 1 crédito.',
+      'mail.tm': 'mail.tm: completamente gratuito, sem API key. Cria conta automática a cada ciclo.',
+    };
+
     var _selectedCycle = null;
     var _lastKycState  = {};
     var _dirtyFields   = {};
     var _dirtyTimers   = {};
 
+    // ─── Provider UI ─────────────────────────────────────────────────────────
+    function onProviderChange() {
+      var provider = document.getElementById('emailProvider').value;
+      var wrapper  = document.getElementById('apiKeyWrapper');
+      var badge    = document.getElementById('providerBadge');
+      var hint     = document.getElementById('providerHint');
+
+      if (provider === 'mail.tm') {
+        wrapper.style.display = 'none';
+        badge.textContent = 'Gratuito';
+        badge.className = 'provider-badge badge-free';
+      } else {
+        wrapper.style.display = 'block';
+        badge.textContent = 'API Key';
+        badge.className = 'provider-badge badge-key';
+      }
+      hint.textContent = PROVIDER_HINTS[provider] || '';
+    }
+
+    // Aplica estado inicial
+    onProviderChange();
+
+    // ─── Dirty fields ─────────────────────────────────────────────────────────
     function markDirty(fieldId) {
       _dirtyFields[fieldId] = true;
       clearTimeout(_dirtyTimers[fieldId]);
       _dirtyTimers[fieldId] = setTimeout(function() { _dirtyFields[fieldId] = false; }, 5000);
     }
 
-    var CONFIG_FIELDS = ['cadastroUrl','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput'];
+    var CONFIG_FIELDS = ['cadastroUrl','emailProvider','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput'];
     CONFIG_FIELDS.forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('input', function() { markDirty(id); });
     });
+    document.getElementById('emailProvider').addEventListener('change', function() { markDirty('emailProvider'); });
 
     document.getElementById('proxiesInput').addEventListener('input', function() {
       updateProxyCount(this.value);
@@ -226,9 +286,13 @@
         .map(function(l) { return parseProxyString(l); })
         .filter(Boolean);
 
+      var provider = document.getElementById('emailProvider').value;
+      var apiKey   = document.getElementById('tempMailApiKey').value.trim();
+
       return {
         cadastroUrl:    document.getElementById('cadastroUrl').value.trim(),
-        tempMailApiKey: document.getElementById('tempMailApiKey').value.trim(),
+        emailProvider:  provider,
+        tempMailApiKey: provider === 'temp-mail.io' ? apiKey : '',
         inviteCode:     document.getElementById('inviteCode').value.trim(),
         otpTimeout:     Number(document.getElementById('otpTimeout').value) || 60000,
         cycleInterval:  Number(document.getElementById('cycleInterval').value) || 60000,

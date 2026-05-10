@@ -1,12 +1,17 @@
+export type EmailProvider = 'temp-mail.io' | 'mail.tm';
+
 export interface TempMailConfig {
   apiKey: string;
   baseUrl: string;
 }
 
-// Resposta real do endpoint GET /generate/v2 da Temp-Mail LOL
+export interface MailTmConfig {
+  baseUrl: string;
+}
+
 export interface EmailAccount {
   email: string;
-  token: string;  // usado para checar inbox (era 'md5' na versão antiga)
+  token: string;
 }
 
 export interface MailMessage {
@@ -24,4 +29,10 @@ export interface MailMessage {
 export interface TempMailError {
   code: number;
   message: string;
+}
+
+/** Interface comum para qualquer provider de email temporário */
+export interface IEmailClient {
+  createRandomEmail(): Promise<EmailAccount>;
+  waitForOTP(email: string, timeoutMs?: number): Promise<string>;
 }
