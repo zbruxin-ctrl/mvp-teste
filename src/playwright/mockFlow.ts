@@ -13,8 +13,8 @@ const contextosPorCiclo = new Map<number, BrowserContext>();
 
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
 
-// Emula iPhone 12 — garante que a Uber sirva o fluxo mobile com botão "Tirar foto"
-const MOBILE_DEVICE = devices['iPhone 12'];
+// Emula iPhone 14 — garante que a Uber sirva o fluxo mobile com botão "Tirar foto"
+const MOBILE_DEVICE = devices['iPhone 14'];
 
 // ─── Helpers humanos ───────────────────────────────────────────────────────────
 
@@ -547,10 +547,14 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
+  // ── Aguarda a tela de foto carregar completamente antes de tentar clicar ──
+  await humanPause(randInt(1500, 2500));
+
   // ── Tenta clicar no botão de foto em fire-and-forget (não bloqueia o KYC listener) ──
   const SELETORES_TIRAR = [
     '[data-dgui="button"]:has-text("Tirar foto")',
     'button:has-text("Tirar foto")',
+    'button:has-text("Usar meu telefone")',
     'button:has-text("Enviar foto")',
     'button:has-text("Escolher foto")',
     '[data-testid="step-bottom-navigation"] button',
@@ -558,11 +562,11 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   ];
 
   void (async () => {
-    for (let tentativa = 0; tentativa < 5; tentativa++) {
+    for (let tentativa = 0; tentativa < 6; tentativa++) {
       for (const sel of SELETORES_TIRAR) {
         try {
           const el = p.locator(sel).first();
-          const visivel = await el.isVisible({ timeout: 1000 }).catch(() => false);
+          const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
           if (visivel) {
             const box = await el.boundingBox().catch(() => null);
             if (box) {
@@ -575,15 +579,15 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
           }
         } catch { /* tenta próximo */ }
       }
-      await humanPause(2000);
+      await humanPause(2500);
     }
-    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 5 tentativas (KYC listener ainda ativo)', cycle);
+    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas (KYC listener ainda ativo)', cycle);
   })();
 
   // ── Aguarda sinal KYC independente do botão ──────────────────────────────────
-  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 25s)...', cycle);
+  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
 
-  const TIMEOUT_KYC = 25_000;
+  const TIMEOUT_KYC = 30_000;
   const fimKyc = Date.now() + TIMEOUT_KYC;
 
   while (Date.now() < fimKyc) {
@@ -605,7 +609,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     await humanPause(1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após 25s. Aba mantida aberta para inspeção.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após 30s. Aba mantida aberta para inspeção.', cycle);
 }
 
 // ─── Fingerprint stealth ──────────────────────────────────────────────────────────
@@ -752,6 +756,10 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
+/**
+ * Cria contexto mobile isolado e aplica emulação de dispositivo via CDP.
+ * Equivalente ao Ctrl+Shift+M do DevTools — garante viewport, UA e touch corretos.
+ */
 async function criarContextoIsolado(
   cycle: number
 ): Promise<{ context: BrowserContext; page: Page }> {
@@ -777,6 +785,28 @@ async function criarContextoIsolado(
   });
 
   const page = await context.newPage();
+
+  // ── Emulação mobile via CDP (equivalente ao Ctrl+Shift+M do DevTools) ──────
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      mobile: true,
+      width: MOBILE_DEVICE.viewport?.width ?? 390,
+      height: MOBILE_DEVICE.viewport?.height ?? 844,
+      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
+      screenOrientation: { angle: 0, type: 'portraitPrimary' },
+    });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: MOBILE_DEVICE.userAgent ?? '',
+      acceptLanguage: 'pt-BR,pt;q=0.9',
+      platform: 'iPhone',
+    });
+    globalState.addLog('info', `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})`, cycle);
+  } catch (e) {
+    globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
+  }
+
   registrarListenersPage(page, cycle);
 
   context.on('page', (novaPage) => {
@@ -811,11 +841,11 @@ export class MockPlaywrightFlow {
         '--disable-dev-shm-usage',
         '--no-first-run',
         '--no-default-browser-check',
-        '--window-size=430,932',
+        // Sem --window-size: o CDP controla o viewport por aba individualmente
       ],
     }) as unknown as Browser;
 
-    globalState.addLog('info', '✅ Browser pronto (modo mobile iPhone 12) — cada ciclo abrirá uma aba nova');
+    globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
   }
 
   static async execute(
@@ -830,18 +860,18 @@ export class MockPlaywrightFlow {
   ): Promise<void> {
     if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
 
-    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile)`, cycle);
+    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
     const { context, page: p } = await criarContextoIsolado(cycle);
 
     const client = new TempMailClient(config.tempMailApiKey);
 
     try {
-      await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // Timeout generoso: 45s, networkidle para garantir que a página estabilizou
+      await p.goto(cadastroUrl, { waitUntil: 'networkidle', timeout: 45000 });
       await humanPause(randInt(800, 1600));
       globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
-      // inviteCode vem da config do painel — não mais hardcoded
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
@@ -855,7 +885,7 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '⏳ Aguardando OTP...', cycle);
       const otp = await client.waitForOTP(emailAccount.email, config.otpTimeout);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
-      await humanPause(randInt(600, 1200));
+      await humanPause(randInt(800, 1400));
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
         await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
@@ -893,8 +923,8 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
 
-      // FASE 2: bonjour.uber.com
-      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 20000 });
+      // FASE 2: bonjour.uber.com — timeout aumentado para 40s
+      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(700, 1400));
       globalState.addLog('info', '🔄 Redirecionado para bonjo', cycle);
 
