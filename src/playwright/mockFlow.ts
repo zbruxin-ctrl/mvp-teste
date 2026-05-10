@@ -16,6 +16,12 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 
 const MOBILE_DEVICE = devices['iPhone 14'];
 
+// Dimensões fixas do iPhone 14 — usadas em todos os contextos CDP
+const MOBILE_WIDTH  = MOBILE_DEVICE.viewport?.width  ?? 390;
+const MOBILE_HEIGHT = MOBILE_DEVICE.viewport?.height ?? 844;
+const MOBILE_DPR    = MOBILE_DEVICE.deviceScaleFactor ?? 3;
+const MOBILE_UA     = MOBILE_DEVICE.userAgent ?? '';
+
 // ─── Helpers humanos ──────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
@@ -530,13 +536,6 @@ function resolverProviderDominante(
 }
 
 // ─── OTP: polling com retentativas e re-envio ─────────────────────────────────
-//
-// Estratégia:
-//   - Divide o otpTimeout em até MAX_TENTATIVAS janelas de polling
-//   - Cada janela tenta a cada POLL_INTERVAL até o tempo da janela acabar
-//   - Se a janela expirar sem OTP → clica em "reenviar" e abre nova janela
-//   - Se não houver botão de reenvio ou todas as tentativas falharem → lança erro
-//
 async function aguardarOTPComRetry(
   p: Page,
   client: TempMailClient,
@@ -545,8 +544,7 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  const POLL_INTERVAL  = 5_000; // verifica a cada 5s
-  // Cada tentativa tem no máximo (otpTimeout / MAX_TENTATIVAS), mínimo 20s
+  const POLL_INTERVAL  = 5_000;
   const JANELA_MS = Math.max(20_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
@@ -574,18 +572,13 @@ async function aguardarOTPComRetry(
           globalState.addLog('info', `🔑 OTP recebido na tentativa ${tentativa}: ${otp}`, cycle);
           return otp;
         }
-      } catch {
-        // waitForOTP lançou timeout parcial — continua polling
-      }
-      // Verifica se ainda tem tempo na janela antes de fazer novo poll
+      } catch { /* continua polling */ }
       if (Date.now() >= fimJanela) break;
       await humanPause(POLL_INTERVAL);
     }
 
-    // Janela expirou sem OTP
     if (tentativa < MAX_TENTATIVAS) {
       globalState.addLog('warn', `⚠️ OTP não chegou em ${JANELA_MS / 1000}s — tentando reenviar...`, cycle);
-
       let reenvioClicado = false;
       for (const sel of SELETORES_REENVIO) {
         try {
@@ -598,18 +591,15 @@ async function aguardarOTPComRetry(
               await humanPause(randInt(200, 400));
             }
             await el.click({ timeout: 5000 });
-            globalState.addLog('info', `🔄 Código reenviado (${sel}) — aguardando nova mensagem...`, cycle);
+            globalState.addLog('info', `🔄 Código reenviado (${sel})`, cycle);
             reenvioClicado = true;
             break;
           }
-        } catch { /* tenta próximo seletor */ }
+        } catch { /* tenta próximo */ }
       }
-
       if (!reenvioClicado) {
-        globalState.addLog('warn', '⚠️ Botão de reenvio não encontrado — aguardando mesma caixa de entrada...', cycle);
+        globalState.addLog('warn', '⚠️ Botão de reenvio não encontrado — aguardando mesma caixa...', cycle);
       }
-
-      // Pausa humana antes de iniciar a próxima janela
       await humanPause(randInt(2000, 4000));
     }
   }
@@ -738,7 +728,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   try {
     await p.evaluate('window.scrollTo(0, 0)');
     await humanPause(randInt(500, 1000));
-
     for (const sel of SELETORES_ITEM) {
       try {
         const el = p.locator(sel).first();
@@ -751,7 +740,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       } catch { /* ignora */ }
     }
     await humanPause(randInt(1500, 2500));
-
     for (const sel of SELETORES_TIRAR) {
       try {
         const el = p.locator(sel).first();
@@ -763,7 +751,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
         }
       } catch { /* ignora */ }
     }
-
     const fimKyc2 = Date.now() + 20_000;
     while (Date.now() < fimKyc2) {
       const dominante = resolverProviderDominante(cycle, 4);
@@ -906,6 +893,42 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
+// ─── Aplica CDP mobile em uma página ──────────────────────────────────────────────
+//
+// Garante que TODA página/popup no contexto (inclusive novas abas abertas
+// por window.open ou links target=_blank) seja emulada como iPhone 14.
+// Sem isso, abas secundárias abrem com viewport de desktop.
+//
+async function aplicarCDPMobile(page: Page, cycle: number, label = ''): Promise<void> {
+  try {
+    // setViewportSize é a camada Playwright — garante que .viewport() retorne certo
+    await page.setViewportSize({ width: MOBILE_WIDTH, height: MOBILE_HEIGHT });
+
+    // CDP: sobrescreve métricas de device na camada Blink
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      mobile: true,
+      width: MOBILE_WIDTH,
+      height: MOBILE_HEIGHT,
+      deviceScaleFactor: MOBILE_DPR,
+      screenOrientation: { angle: 0, type: 'portraitPrimary' },
+    });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: MOBILE_UA,
+      acceptLanguage: 'pt-BR,pt;q=0.9',
+      platform: 'iPhone',
+    });
+    // Garante que a CSS media query (hover:none / pointer:coarse) seja correta
+    await cdp.send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' }).catch(() => {});
+
+    const tag = label ? ` [${label}]` : '';
+    globalState.addLog('info', `📱 CDP mobile aplicado${tag} (${MOBILE_WIDTH}x${MOBILE_HEIGHT} @${MOBILE_DPR}x, iPhone 14 UA)`, cycle);
+  } catch (e) {
+    globalState.addLog('warn', `⚠️ CDP mobile falhou${label ? ` [${label}]` : ''}: ${e}`, cycle);
+  }
+}
+
 // ─── Cria contexto isolado ────────────────────────────────────────────────────
 
 async function criarContextoIsolado(
@@ -913,6 +936,9 @@ async function criarContextoIsolado(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
+  // O spread de MOBILE_DEVICE já define userAgent, viewport e deviceScaleFactor
+  // no contexto. O CDP abaixo complementa com mobile:true e touch emulation,
+  // garantindo que o Blink também saiba que é mobile (essencial para media queries).
   const context = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -937,36 +963,33 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  try {
-    const cdp = await context.newCDPSession(page);
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      mobile: true,
-      width: MOBILE_DEVICE.viewport?.width ?? 390,
-      height: MOBILE_DEVICE.viewport?.height ?? 844,
-      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
-      screenOrientation: { angle: 0, type: 'portraitPrimary' },
-    });
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-    await cdp.send('Emulation.setUserAgentOverride', {
-      userAgent: MOBILE_DEVICE.userAgent ?? '',
-      acceptLanguage: 'pt-BR,pt;q=0.9',
-      platform: 'iPhone',
-    });
-    globalState.addLog(
-      'info',
-      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})${proxy ? ` | Proxy: ${proxy.server}` : ''}`,
-      cycle
-    );
-  } catch (e) {
-    globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
-  }
+  // Aplica CDP mobile na página principal
+  await aplicarCDPMobile(page, cycle, 'página principal');
 
   registrarListenersPage(page, cycle);
 
-  context.on('page', (novaPage) => {
-    globalState.addLog('info', `📌 Nova aba/popup aberta: ${novaPage.url() || '(carregando...)'}`, cycle);
+  // ⚠️ CORREÇÃO PRINCIPAL:
+  // Qualquer nova aba ou popup aberto pelo site (window.open, target="_blank",
+  // links internos etc.) recebe CDP mobile imediatamente antes de navegar.
+  // Sem isso, novas abas abrem com configuração de desktop.
+  context.on('page', async (novaPage) => {
+    const url = novaPage.url() || '(carregando...)';
+    globalState.addLog('info', `📌 Nova aba/popup: ${url} — aplicando mobile...`, cycle);
+
+    // Aplica CDP mobile ANTES da página começar a carregar
+    await aplicarCDPMobile(novaPage, cycle, `popup:${url.slice(0, 40)}`);
     registrarListenersPage(novaPage, cycle);
+
+    // Aguarda a aba começar a carregar e aplica novamente após navegação
+    // (some popups ignoram o CDP do evento 'page' se ainda não tm target)
+    novaPage.once('domcontentloaded', async () => {
+      await aplicarCDPMobile(novaPage, cycle, `popup-dce:${novaPage.url().slice(0, 40)}`).catch(() => {});
+    });
   });
+
+  if (proxy) {
+    globalState.addLog('info', `🔁 Proxy ativo: ${proxy.server}`, cycle);
+  }
 
   contextosPorCiclo.set(cycle, context);
   return { context, page };
@@ -1044,7 +1067,6 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // ── OTP com retry e reenvio automático ──────────────────────────────────
       const otp = await aguardarOTPComRetry(p, client, payload.email, config.otpTimeout, cycle);
       await humanPause(randInt(800, 1400));
       const digits = otp.replace(/\D/g, '').split('');
