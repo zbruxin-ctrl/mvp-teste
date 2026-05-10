@@ -211,23 +211,25 @@ export class MailTmClient implements IEmailClient {
   }
 
   private async getFullMessage(id: string): Promise<{ text: string; html: string }> {
-    // A API do mail.tm retorna html como string[] e text como string[]
-    // — precisamos normalizar para string antes de passar ao OTPParser
     const resp = await this.request<{
       text?: string | string[];
       html?: string | string[];
       intro?: string;
     }>(`/messages/${id}`, 'GET', undefined, true);
 
-    const normalizeField = (field: string | string[] | undefined): string => {
+    // FIX: ao joinear o array de html, usa '' (sem quebra) para não fragmentar tags HTML
+    // que o mail.tm às vezes parte em múltiplos itens do array.
+    const normalizeField = (field: string | string[] | undefined, sep = ' '): string => {
       if (!field) return '';
-      if (Array.isArray(field)) return field.join('\n');
+      if (Array.isArray(field)) return field.join(sep);
       return field;
     };
 
     return {
-      text: normalizeField(resp.text) || resp.intro || '',
-      html: normalizeField(resp.html),
+      // HTML: join sem quebra de linha — evita tags partidas que enganam o replace(/<[^>]+>/g)
+      html: normalizeField(resp.html, ''),
+      // text: join com espaço é OK pois não tem tags
+      text: normalizeField(resp.text, ' ') || resp.intro || '',
     };
   }
 
@@ -265,7 +267,9 @@ export class MailTmClient implements IEmailClient {
             globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`);
             try {
               const full = await this.getFullMessage(msg.id);
-              globalState.addLog('info', `📄 [mail.tm] text(100): ${full.text.slice(0, 100)}`);
+              // Log dos primeiros 200 chars de cada fonte para debug
+              globalState.addLog('info', `📄 [mail.tm] html(200): ${full.html.slice(0, 200)}`);
+              globalState.addLog('info', `📄 [mail.tm] text(200): ${full.text.slice(0, 200)}`);
               const mailMsg: MailMessage = {
                 mail_id: msg.id,
                 mail_from: msg.from.address,
