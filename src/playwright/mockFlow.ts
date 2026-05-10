@@ -183,8 +183,8 @@ async function humanClick(p: Page, selector: string): Promise<void> {
 }
 
 // ─── humanClickForwardButton: aguarda #forward-button enabled, remove overlays e clica com force ──
-// Usado especificamente após preencher o email, onde o botão fica disabled até validação client-side
-// e overlays de loading cobrem o elemento bloqueando pointer-events normais.
+// Após o clique, aguarda domcontentloaded para detectar a navegação que a página dispara,
+// evitando que chamadas seguintes na page fiquem penduradas silenciosamente.
 
 async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000): Promise<void> {
   globalState.addLog('info', '⏳ Aguardando #forward-button habilitar...', cycle);
@@ -237,25 +237,44 @@ async function humanClickForwardButton(p: Page, cycle: number, timeoutMs = 15000
     await humanPause(randInt(60, 130));
     try {
       await p.mouse.click(tx, ty);
-      return;
-    } catch { /* tenta force */ }
+    } catch {
+      // tenta force
+      try {
+        await p.click('#forward-button', { force: true, timeout: 5000 });
+      } catch {
+        await p.evaluate(`
+          (function() {
+            var btn = document.querySelector('#forward-button');
+            if (!btn) return;
+            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
+            btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
+          })()
+        `);
+      }
+    }
+  } else {
+    // Fallback: force click direto
+    try {
+      await p.click('#forward-button', { force: true, timeout: 5000 });
+    } catch {
+      await p.evaluate(`
+        (function() {
+          var btn = document.querySelector('#forward-button');
+          if (!btn) return;
+          btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
+          btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
+        })()
+      `);
+    }
   }
 
-  // Fallback: force click direto
-  try {
-    await p.click('#forward-button', { force: true, timeout: 5000 });
-    return;
-  } catch { /* tenta dispatchEvent */ }
-
-  await p.evaluate(`
-    (function() {
-      var btn = document.querySelector('#forward-button');
-      if (!btn) return;
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true }));
-      btn.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true }));
-    })()
-  `);
+  // FIX: aguarda a navegação que o clique dispara antes de qualquer interação seguinte.
+  // Se não houver navegação em 4s, simplesmente continua (SPA que faz transição interna).
+  globalState.addLog('info', '⏳ Aguardando navegação pós-clique (domcontentloaded, até 4s)...', cycle);
+  await p.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => {});
+  globalState.addLog('info', '✅ Pós-clique estabilizado', cycle);
 }
 
 // ─── Aguarda botão #forward-button ficar habilitado (não disabled) ─────────────────────────────
@@ -787,8 +806,8 @@ function resolverProviderDominante(
 
 // ─── aguardarTelaOTP: bloqueia até a tela do OTP estar visível (ou timeout) ─────────────────
 // Detecta a presença de qualquer input de OTP antes de iniciar o polling de email.
-// Isso evita que o waitForOTP seja chamado enquanto a página ainda está navegando/carregando
-// após o clique no forward-button, o que causava o flow travar silenciosamente.
+// Quando a página não responde (navegando), aguarda waitForLoadState('domcontentloaded')
+// explicitamente antes de tentar interagir novamente.
 
 async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Promise<boolean> {
   const SELETORES_OTP = [
@@ -809,8 +828,10 @@ async function aguardarTelaOTP(p: Page, cycle: number, timeoutMs = 20_000): Prom
     try {
       await p.evaluate('1 + 1');
     } catch {
-      globalState.addLog('warn', '⚠️ Página não responde — possível navegação em curso, aguardando...', cycle);
-      await humanPause(1500);
+      // Página não responde — está navegando. Aguarda load estabilizar antes de continuar.
+      globalState.addLog('warn', '⚠️ Página navegando — aguardando domcontentloaded...', cycle);
+      await p.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+      await humanPause(500);
       continue;
     }
 
@@ -841,7 +862,8 @@ async function aguardarOTPComRetry(
   cycle: number
 ): Promise<string> {
   const MAX_TENTATIVAS = 3;
-  // Aumentado de 45s para 60s: garante janela suficiente mesmo com otpTimeout menor
+  // Com otpTimeout=90000: JANELA_MS = max(60000, 90000/3) = max(60000, 30000) = 60000
+  // Com otpTimeout=180000: JANELA_MS = 60000 — sem mudança por enquanto
   const JANELA_MS = Math.max(60_000, Math.floor(otpTimeout / MAX_TENTATIVAS));
 
   const SELETORES_REENVIO = [
@@ -1389,11 +1411,11 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
 
       // ─── humanClickForwardButton: aguarda enabled + remove overlays + force click ───
+      // Já inclui waitForLoadState('domcontentloaded') após o clique para detectar navegação.
       await humanClickForwardButton(p, cycle, 15000);
 
-      // ─── FIX: aguarda a tela de OTP aparecer antes de iniciar o polling de email ───
-      // Sem isso, o waitForOTP era chamado imediatamente após o clique, enquanto
-      // a página ainda estava navegando/carregando, causando o flow travar silenciosamente.
+      // ─── aguarda a tela de OTP aparecer antes de iniciar o polling de email ───
+      // Se a página não responde (navegando), aguarda waitForLoadState explicitamente.
       await aguardarTelaOTP(p, cycle, 20_000);
 
       // ─── aguarda OTP e preenche com estratégia robusta ───

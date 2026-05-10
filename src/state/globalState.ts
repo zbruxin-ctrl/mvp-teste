@@ -88,7 +88,7 @@ class GlobalState {
       tempMailApiKey: '',
       emailProvider: 'mail.tm',
       inviteCode: '',
-      otpTimeout: 30000,
+      otpTimeout: 90000,
       cycleInterval: 60000,
       extraDelay: 2000,
       parallelCycles: 1,
