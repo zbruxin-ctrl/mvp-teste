@@ -57,6 +57,7 @@
     .toggle-slider:before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; }
     .toggle-switch input:checked + .toggle-slider { background: #f59e0b; }
     .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
+    .toggle-headless input:checked + .toggle-slider { background: #6366f1; }
     .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.6; }
     .log-entry { margin-bottom: 2px; padding: 1px 4px; border-radius: 4px; }
     .log-info    { color: #0369a1; }
@@ -153,6 +154,17 @@
         </div>
         <label class="toggle-switch">
           <input type="checkbox" id="speedMode" onchange="markDirty('speedMode')" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="speed-toggle-row">
+        <div>
+          <div class="speed-toggle-label">🖥️ Modo Headless</div>
+          <div class="speed-toggle-hint">Roda o browser em segundo plano (sem janela visível)</div>
+        </div>
+        <label class="toggle-switch toggle-headless">
+          <input type="checkbox" id="headlessMode" onchange="markDirty('headlessMode')" />
           <span class="toggle-slider"></span>
         </label>
       </div>
@@ -290,7 +302,7 @@
       _dirtyTimers[fieldId] = setTimeout(function() { _dirtyFields[fieldId] = false; }, 5000);
     }
 
-    var CONFIG_FIELDS = ['cadastroUrl','emailProvider','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput','speedMode'];
+    var CONFIG_FIELDS = ['cadastroUrl','emailProvider','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput','speedMode','headlessMode'];
     CONFIG_FIELDS.forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('input', function() { markDirty(id); });
@@ -340,7 +352,7 @@
         cycleInterval:  Number(document.getElementById('cycleInterval').value) || 60000,
         extraDelay:     Number(document.getElementById('extraDelay').value) || 2000,
         parallelCycles: Number(document.getElementById('parallelCycles').value) || 1,
-        headless:       false,
+        headless:       document.getElementById('headlessMode').checked,
         speedMode:      document.getElementById('speedMode').checked,
         proxies:        proxies,
       };
@@ -367,8 +379,6 @@
     }
 
     // ─── Gera o script de injeção de cookies ───────────────────────────────
-    // O script gerado inclui bloco de metadata do Tampermonkey para evitar
-    // o erro eslint: userscripts/no-invalid-metadata ao colar no Tampermonkey.
     function buildCookieScript(cookies, redirectUrl) {
       var arr = cookies.map(function(c) {
         var expiresMs = c.expires > 0 ? Math.round(c.expires * 1000) : -1;
@@ -379,7 +389,6 @@
 
       var targetUrl = redirectUrl || 'https://drivers.uber.com/';
 
-      // Bloco de redirect — não redireciona se já estiver no destino (evita fechar abas Socure)
       var redirectBlock;
       if (redirectUrl) {
         redirectBlock = 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href=' + JSON.stringify(redirectUrl) + ';},800);}';
@@ -420,7 +429,6 @@
       return meta + body;
     }
 
-    // ─── Botão: copiar script de cookies (redireciona para drivers.uber.com) ──
     function copyScriptLogin(acc, btnEl, feedbackEl) {
       if (!acc.cookies || acc.cookies.length === 0) {
         feedbackEl.className = 'acc-feedback err';
@@ -435,7 +443,6 @@
       setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
     }
 
-    // ─── Botão: copiar script que redireciona para account.uber.com/security ──
     function copyScriptSecurity(acc, btnEl, feedbackEl) {
       if (!acc.cookies || acc.cookies.length === 0) {
         feedbackEl.className = 'acc-feedback err';
