@@ -1,3 +1,5 @@
+import type { Cookie } from 'playwright';
+
 export interface Account {
   id: string;
   cycle: number;
@@ -9,6 +11,6 @@ export interface Account {
   senha: string;
   localizacao: string;
   codigoIndicacao: string;
-  cookies: Record<string, unknown>[];
+  cookies: Cookie[];
   createdAt: string;
 }
