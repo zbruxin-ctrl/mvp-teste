@@ -698,7 +698,11 @@
 <script>
 /* ─── CONFIG ──────────────────────────────────────────── */
 const API = 'https://murky-residual-outlast.ngrok-free.dev';
-const HEADERS = { 'ngrok-skip-browser-warning': 'true', 'Content-Type': 'application/json' };
+const HEADERS = {
+  'ngrok-skip-browser-warning': 'true',
+  'Content-Type': 'application/json',
+  'x-admin-password': 'connect@10'
+};
 
 /* ─── STATE ───────────────────────────────────────────── */
 let theme = 'dark';
@@ -795,7 +799,6 @@ async function fetchLogs() {
 
 /* ─── DASHBOARD UPDATE ────────────────────────────────── */
 function updateDashboard(state) {
-  // Status badge
   const dot    = document.getElementById('banner-dot');
   const label  = document.getElementById('banner-status');
   const detail = document.getElementById('banner-detail');
@@ -809,17 +812,15 @@ function updateDashboard(state) {
     ERROR:       { label: 'Erro',               cls: 'error',    detail: state.lastError || 'Erro desconhecido' },
   };
   const s = statusMap[state.status] || { label: state.status, cls: '', detail: '' };
-  dot.className   = 'status-dot ' + s.cls;
+  dot.className      = 'status-dot ' + s.cls;
   label.textContent  = s.label;
   detail.textContent = s.detail;
 
-  // Botões
   const running = state.isRunning || state.status === 'RUNNING' || state.status === 'WAITING_OTP' || state.status === 'STARTING' || state.status === 'STOPPING';
   document.getElementById('btn-start').disabled = running;
   document.getElementById('btn-once').disabled  = running;
   document.getElementById('btn-stop').disabled  = !running;
 
-  // KPIs — animação de contagem
   animateNum('kpi-ok',    state.cyclesCompleted ?? 0);
   animateNum('kpi-total', state.cyclesTotal      ?? 0);
   const rate = state.cyclesTotal > 0
@@ -828,10 +829,8 @@ function updateDashboard(state) {
   document.getElementById('kpi-rate').textContent = rate;
   document.getElementById('kpi-mode').textContent = state.isLoop ? '🔄 Loop' : state.isRunning ? '1× Único' : '—';
 
-  // Timestamp
   document.getElementById('last-updated').textContent = 'Atualizado ' + new Date().toLocaleTimeString('pt-BR');
 
-  // Histórico de ciclos (registra mudanças)
   if (state.status === 'STOPPED' && state.cyclesTotal > cycleHistory.length) {
     cycleHistory.unshift({
       num: state.cyclesTotal,
@@ -841,7 +840,6 @@ function updateDashboard(state) {
     renderCycleHistory();
   }
 
-  // Preenche form de config se ainda não foi preenchido
   if (!configSnapshot) loadConfigForm(state.config);
 }
 
