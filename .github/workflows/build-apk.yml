@@ -53,6 +53,15 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
 
+      - name: Listar APKs gerados
+        run: |
+          echo "=== Procurando APKs em mobile/ ==="
+          find mobile -name "*.apk" 2>/dev/null || echo "Nenhum APK encontrado em mobile/"
+          echo "=== Procurando APKs em todo o workspace ==="
+          find . -name "*.apk" 2>/dev/null || echo "Nenhum APK encontrado"
+          echo "=== Estrutura de mobile/android/app/build ==="
+          ls -la mobile/android/app/build/outputs/ 2>/dev/null || echo "Pasta outputs nao existe"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
