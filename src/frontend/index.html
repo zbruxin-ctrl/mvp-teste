@@ -49,6 +49,16 @@
     .provider-card select { margin-bottom: 10px; }
     .provider-card input  { margin-bottom: 0; }
     .provider-hint { font-size: 11px; color: #9ca3af; margin-top: 6px; line-height: 1.5; }
+    /* Speed mode toggle */
+    .speed-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border: 1.5px solid #e0e0e0; border-radius: 10px; margin-bottom: 14px; background: #fafafa; }
+    .speed-toggle-label { font-size: 13px; font-weight: 600; color: #333; }
+    .speed-toggle-hint  { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+    .toggle-switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; cursor: pointer; inset: 0; background: #d1d5db; border-radius: 24px; transition: .2s; }
+    .toggle-slider:before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; }
+    .toggle-switch input:checked + .toggle-slider { background: #f59e0b; }
+    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
     /* Logs */
     .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.6; }
     .log-entry { margin-bottom: 2px; padding: 1px 4px; border-radius: 4px; }
@@ -119,6 +129,19 @@
         <p id="providerHint" class="provider-hint">
           temp-mail.io: requer conta paga. Cada poll consome 1 crédito.
         </p>
+      </div>
+      <!-- ──────────────────────────────────────────────────────── -->
+
+      <!-- ── Speed Mode ─────────────────────────────────────────── -->
+      <div class="speed-toggle-row">
+        <div>
+          <div class="speed-toggle-label">⚡ Modo Rápido</div>
+          <div class="speed-toggle-hint">Reduz delays humanos para ~40% — ciclos mais ágeis</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="speedMode" onchange="markDirty('speedMode')" />
+          <span class="toggle-slider"></span>
+        </label>
       </div>
       <!-- ──────────────────────────────────────────────────────── -->
 
@@ -234,7 +257,7 @@
       _dirtyTimers[fieldId] = setTimeout(function() { _dirtyFields[fieldId] = false; }, 5000);
     }
 
-    var CONFIG_FIELDS = ['cadastroUrl','emailProvider','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput'];
+    var CONFIG_FIELDS = ['cadastroUrl','emailProvider','tempMailApiKey','inviteCode','otpTimeout','cycleInterval','extraDelay','parallelCycles','proxiesInput','speedMode'];
     CONFIG_FIELDS.forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('input', function() { markDirty(id); });
@@ -299,6 +322,7 @@
         extraDelay:     Number(document.getElementById('extraDelay').value) || 2000,
         parallelCycles: Number(document.getElementById('parallelCycles').value) || 1,
         headless:       false,
+        speedMode:      document.getElementById('speedMode').checked,
         proxies:        proxies,
       };
     }

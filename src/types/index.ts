@@ -31,6 +31,8 @@ export interface Config {
   extraDelay: number;
   parallelCycles: number;
   headless: boolean;
+  /** Reduz todos os delays humanos para ~40% do valor normal */
+  speedMode?: boolean;
   /** Lista de proxies — cada ciclo usa um em rotação round-robin */
   proxies?: ProxyConfig[];
 }

@@ -19,6 +19,18 @@ const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application
 
 const MOBILE_DEVICE = devices['iPhone 14'];
 
+// ─── Speed helpers ────────────────────────────────────────────────────────────
+
+function isSpeedMode(): boolean {
+  const cfg = globalState.getConfig();
+  return !!(cfg as any)?.speedMode;
+}
+
+/** Retorna valor reduzido quando speedMode ativo (40% do original) */
+function sp(normal: number): number {
+  return isSpeedMode() ? Math.max(30, Math.round(normal * 0.4)) : normal;
+}
+
 // ─── Helpers humanos ──────────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
@@ -26,12 +38,13 @@ function randInt(min: number, max: number): number {
 }
 
 async function humanPause(baseMs: number): Promise<void> {
-  const jitter = randInt(-Math.floor(baseMs * 0.15), Math.floor(baseMs * 0.2));
-  await new Promise<void>((r) => setTimeout(r, Math.max(80, baseMs + jitter)));
+  const effective = sp(baseMs);
+  const jitter = randInt(-Math.floor(effective * 0.15), Math.floor(effective * 0.2));
+  await new Promise<void>((r) => setTimeout(r, Math.max(30, effective + jitter)));
 }
 
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
-  const steps = randInt(5, 10);
+  const steps = isSpeedMode() ? randInt(2, 4) : randInt(5, 10);
   const startX = randInt(50, 300);
   const startY = randInt(100, 400);
   const cpX = startX + (x - startX) * 0.4 + randInt(-20, 20);
@@ -41,7 +54,7 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
     const bx = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * cpX + t * t * x);
     const by = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * cpY + t * t * y);
     await p.mouse.move(bx, by);
-    await humanPause(randInt(5, 12));
+    await humanPause(randInt(3, isSpeedMode() ? 6 : 12));
   }
 }
 
@@ -52,25 +65,29 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
     const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(50, 100));
+    await humanPause(randInt(sp(50), sp(100)));
   }
   await p.click(selector);
   await p.fill(selector, '');
-  await humanPause(randInt(60, 150));
+  await humanPause(randInt(sp(60), sp(150)));
+  const fast = isSpeedMode();
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
-    if (Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) {
+    if (!fast && Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) {
       const typo = String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
       await p.keyboard.type(typo, { delay: randInt(40, 80) });
       await humanPause(randInt(50, 120));
       await p.keyboard.press('Backspace');
       await humanPause(randInt(40, 90));
     }
-    await p.keyboard.type(ch, { delay: randInt(35, 90) });
-    if (ch === ' ' || ch === '@' || ch === '.') {
-      await humanPause(randInt(80, 200));
-    } else if (Math.random() < 0.05) {
-      await humanPause(randInt(100, 300));
+    const charDelay = fast ? randInt(15, 40) : randInt(35, 90);
+    await p.keyboard.type(ch, { delay: charDelay });
+    if (!fast) {
+      if (ch === ' ' || ch === '@' || ch === '.') {
+        await humanPause(randInt(80, 200));
+      } else if (Math.random() < 0.05) {
+        await humanPause(randInt(100, 300));
+      }
     }
   }
 }
@@ -82,25 +99,29 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
     const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
     const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(50, 100));
+    await humanPause(randInt(sp(50), sp(100)));
   }
   await p.click(selector, { force: true });
   await p.fill(selector, '');
-  await humanPause(randInt(60, 150));
+  await humanPause(randInt(sp(60), sp(150)));
+  const fast = isSpeedMode();
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
-    if (Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) {
+    if (!fast && Math.random() < 0.03 && /[a-zA-Z]/.test(ch)) {
       const typo = String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
       await p.keyboard.type(typo, { delay: randInt(40, 80) });
       await humanPause(randInt(50, 120));
       await p.keyboard.press('Backspace');
       await humanPause(randInt(40, 90));
     }
-    await p.keyboard.type(ch, { delay: randInt(35, 90) });
-    if (ch === ' ' || ch === '@' || ch === '.') {
-      await humanPause(randInt(80, 200));
-    } else if (Math.random() < 0.05) {
-      await humanPause(randInt(100, 300));
+    const charDelay = fast ? randInt(15, 40) : randInt(35, 90);
+    await p.keyboard.type(ch, { delay: charDelay });
+    if (!fast) {
+      if (ch === ' ' || ch === '@' || ch === '.') {
+        await humanPause(randInt(80, 200));
+      } else if (Math.random() < 0.05) {
+        await humanPause(randInt(100, 300));
+      }
     }
   }
 }
@@ -112,7 +133,7 @@ async function humanClick(p: Page, selector: string): Promise<void> {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(40, 100));
+    await humanPause(randInt(sp(40), sp(100)));
     await p.mouse.click(tx, ty);
   } else {
     await p.click(selector);
@@ -142,11 +163,11 @@ async function dispensarCookies(p: Page): Promise<void> {
         const box = await el.boundingBox().catch(() => null);
         if (box) {
           await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-          await humanPause(randInt(100, 200));
+          await humanPause(randInt(sp(100), sp(200)));
         }
         await el.click({ timeout: 3000 });
         globalState.addLog('info', `🍪 Banner de cookies dispensado (${seletor})`);
-        await humanPause(randInt(300, 600));
+        await humanPause(randInt(sp(300), sp(600)));
         return;
       }
     } catch { /* ignora */ }
@@ -154,7 +175,7 @@ async function dispensarCookies(p: Page): Promise<void> {
 }
 
 async function aceitarTermos(p: Page): Promise<void> {
-  await humanPause(randInt(500, 900));
+  await humanPause(randInt(sp(500), sp(900)));
   const candidatos = [
     async () => {
       const el = p.locator('input[type="checkbox"]').first();
@@ -162,7 +183,7 @@ async function aceitarTermos(p: Page): Promise<void> {
       const box = await el.boundingBox().catch(() => null);
       if (box) {
         await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-        await humanPause(randInt(80, 160));
+        await humanPause(randInt(sp(80), sp(160)));
       }
       await el.check({ force: true, timeout: 5000 });
     },
@@ -171,7 +192,7 @@ async function aceitarTermos(p: Page): Promise<void> {
       await el.waitFor({ state: 'attached', timeout: 5000 });
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(60, 140));
+      await humanPause(randInt(sp(60), sp(140)));
       await el.click({ force: true, timeout: 5000 });
     },
     async () => {
@@ -179,7 +200,7 @@ async function aceitarTermos(p: Page): Promise<void> {
       await el.waitFor({ state: 'attached', timeout: 5000 });
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(60, 140));
+      await humanPause(randInt(sp(60), sp(140)));
       await el.click({ force: true, timeout: 5000 });
     },
     async () => { await p.click('text=Concordo', { force: true, timeout: 5000 }); },
@@ -213,18 +234,20 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   const box = await p.locator(INPUT_SEL).boundingBox().catch(() => null);
   if (box) {
     await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-    await humanPause(randInt(80, 160));
+    await humanPause(randInt(sp(80), sp(160)));
   }
   await p.click(INPUT_SEL);
   await p.fill(INPUT_SEL, '');
-  await humanPause(randInt(100, 200));
+  await humanPause(randInt(sp(100), sp(200)));
   for (const ch of nomeBusca) {
-    await p.keyboard.type(ch, { delay: randInt(50, 110) });
-    if (Math.random() < 0.08) await humanPause(randInt(80, 200));
+    const charDelay = isSpeedMode() ? randInt(20, 50) : randInt(50, 110);
+    await p.keyboard.type(ch, { delay: charDelay });
+    if (!isSpeedMode() && Math.random() < 0.08) await humanPause(randInt(80, 200));
   }
 
   globalState.addLog('info', '⏳ Aguardando dropdown de cidade...', cycle);
   let itemSel: string | null = null;
+  const pollMs = isSpeedMode() ? 200 : 500;
   const fimDropdown = Date.now() + 8_000;
   while (Date.now() < fimDropdown) {
     for (const sel of DROPDOWN_ITEM_SELS) {
@@ -237,19 +260,19 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
       } catch { /* tenta próximo */ }
     }
     if (itemSel) break;
-    await humanPause(500);
+    await humanPause(pollMs);
   }
 
   if (!itemSel) {
     globalState.addLog('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter', cycle);
-    await humanPause(randInt(300, 600));
+    await humanPause(randInt(sp(300), sp(600)));
     await p.keyboard.press('ArrowDown');
-    await humanPause(randInt(150, 300));
+    await humanPause(randInt(sp(150), sp(300)));
     await p.keyboard.press('Enter');
     return;
   }
 
-  await humanPause(randInt(300, 600));
+  await humanPause(randInt(sp(300), sp(600)));
   const opcoes = p.locator(itemSel);
   const total = await opcoes.count();
   globalState.addLog('info', `📍 Dropdown aberto com ${total} opções`, cycle);
@@ -263,7 +286,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
         const opcaoBox = await opcao.boundingBox().catch(() => null);
         if (opcaoBox) {
           await humanMouseMove(p, opcaoBox.x + opcaoBox.width / 2, opcaoBox.y + opcaoBox.height / 2);
-          await humanPause(randInt(150, 300));
+          await humanPause(randInt(sp(150), sp(300)));
         }
         await opcao.click({ timeout: 5000 });
         globalState.addLog('info', `✅ Cidade selecionada: "${texto.trim()}"`, cycle);
@@ -279,16 +302,16 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
       const primeiraBox = await opcoes.first().boundingBox().catch(() => null);
       if (primeiraBox) {
         await humanMouseMove(p, primeiraBox.x + primeiraBox.width / 2, primeiraBox.y + primeiraBox.height / 2);
-        await humanPause(randInt(150, 300));
+        await humanPause(randInt(sp(150), sp(300)));
       }
       await opcoes.first().click({ timeout: 5000 });
     } catch {
       await p.keyboard.press('ArrowDown');
-      await humanPause(randInt(150, 300));
+      await humanPause(randInt(sp(150), sp(300)));
       await p.keyboard.press('Enter');
     }
   }
-  await humanPause(randInt(400, 700));
+  await humanPause(randInt(sp(400), sp(700)));
 }
 
 // ─── JS helpers ───────────────────────────────────────────────────────────────
@@ -428,7 +451,7 @@ const KYC_INIT_SCRIPT = `
 
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
   try {
-    await humanPause(randInt(2000, 3500));
+    await humanPause(randInt(sp(2000), sp(3500)));
     const SELETORES_WHATSAPP = [
       'button:has-text("ÃO ATIVAR")',
       'button:has-text("Nao ativar")',
@@ -438,7 +461,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
       'button[type="submit"]',
     ];
     const TIMEOUT_MS = 30_000;
-    const POLL_MS = 3_000;
+    const POLL_MS = isSpeedMode() ? 1_000 : 3_000;
     const inicio = Date.now();
     let detectado = false;
 
@@ -460,7 +483,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     }
 
     globalState.addLog('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
-    await humanPause(randInt(400, 800));
+    await humanPause(randInt(sp(400), sp(800)));
 
     const candidatosCss = [
       'button:has-text("NÃO ATIVAR")',
@@ -476,11 +499,11 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
           const box = await el.boundingBox().catch(() => null);
           if (box) {
             await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-            await humanPause(randInt(150, 300));
+            await humanPause(randInt(sp(150), sp(300)));
           }
           await el.click({ timeout: 5000 });
           globalState.addLog('info', `🔕 WhatsApp: NÃO ATIVAR clicado (CSS: ${sel})`, cycle);
-          await humanPause(randInt(400, 800));
+          await humanPause(randInt(sp(400), sp(800)));
           return;
         }
       } catch { /* tenta próxima */ }
@@ -490,7 +513,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
       const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
       if (clicou) {
         globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle);
-        await humanPause(randInt(400, 800));
+        await humanPause(randInt(sp(400), sp(800)));
         return;
       }
     } catch { /* ignora */ }
@@ -499,7 +522,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
       const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
       if (clicou) {
         globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback submit)`, cycle);
-        await humanPause(randInt(400, 800));
+        await humanPause(randInt(sp(400), sp(800)));
         return;
       }
     } catch { /* ignora */ }
@@ -573,7 +596,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
           const box = await el.boundingBox().catch(() => null);
           if (box) {
             await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-            await humanPause(randInt(200, 400));
+            await humanPause(randInt(sp(200), sp(400)));
           }
           await el.click({ force: true, timeout: 5000 });
           globalState.addLog('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
@@ -583,7 +606,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       } catch { /* tenta próximo seletor */ }
     }
     if (clicouItem) break;
-    await humanPause(1500);
+    await humanPause(isSpeedMode() ? 600 : 1500);
   }
 
   if (!clicouItem) {
@@ -591,7 +614,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
-  await humanPause(randInt(1500, 2500));
+  await humanPause(randInt(sp(1500), sp(2500)));
 
   let botaoFotoClicado = false;
   for (let tentativa = 0; tentativa < 6; tentativa++) {
@@ -603,7 +626,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
           const box = await el.boundingBox().catch(() => null);
           if (box) {
             await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-            await humanPause(randInt(300, 600));
+            await humanPause(randInt(sp(300), sp(600)));
           }
           await el.click({ force: true, timeout: 5000 });
           globalState.addLog('info', `📸 Botão foto clicado (${sel})`, cycle);
@@ -619,7 +642,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
         globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
       } catch { /* ignora */ }
     }
-    await humanPause(2500);
+    await humanPause(isSpeedMode() ? 1000 : 2500);
   }
 
   if (!botaoFotoClicado) {
@@ -658,7 +681,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
       globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
-      await humanPause(randInt(500, 1000));
+      await humanPause(randInt(sp(500), sp(1000)));
       await context.close().catch(() => {});
       contextosPorCiclo.delete(cycle);
       globalState.clearPayload(cycle);
@@ -679,13 +702,13 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
       await detectarEFechar(dominante.provider, dominante.score, dominante.url);
       return;
     }
-    await humanPause(1000);
+    await humanPause(isSpeedMode() ? 500 : 1000);
   }
 
   globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
   try {
     await p.evaluate('window.scrollTo(0, 0)');
-    await humanPause(randInt(500, 1000));
+    await humanPause(randInt(sp(500), sp(1000)));
 
     for (const sel of SELETORES_ITEM) {
       try {
@@ -698,7 +721,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
         }
       } catch { /* ignora */ }
     }
-    await humanPause(randInt(1500, 2500));
+    await humanPause(randInt(sp(1500), sp(2500)));
 
     for (const sel of SELETORES_TIRAR) {
       try {
@@ -720,7 +743,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
         await detectarEFechar(dominante.provider, dominante.score, dominante.url);
         return;
       }
-      await humanPause(1000);
+      await humanPause(isSpeedMode() ? 500 : 1000);
     }
   } catch (e) {
     globalState.addLog('warn', `⚠️ Erro no re-clique: ${e}`, cycle);
@@ -808,288 +831,4 @@ function detectKycProvider(url: string): string | null {
     if (pattern.test(url)) return provider;
   }
   return null;
-}
-
-// ─── Registra listeners ───────────────────────────────────────────────────────
-
-function registrarListenersFrame(frame: Frame, cycle: number): void {
-  try {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'frame-url', 5, cycle, url);
-  } catch { /* ignora */ }
-}
-
-function registrarListenersPage(page: Page, cycle: number): void {
-  try {
-    for (const frame of page.frames()) {
-      registrarListenersFrame(frame, cycle);
-    }
-  } catch { /* ignora */ }
-
-  page.on('frameattached', (frame) => {
-    registrarListenersFrame(frame, cycle);
-  });
-
-  page.on('framenavigated', (frame) => {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
-  });
-
-  page.on('websocket', (ws) => {
-    const url = ws.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
-  });
-
-  page.on('request', (req) => {
-    const url = req.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
-  });
-
-  page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
-    globalState.addKycSignal(provider, source, weight, cycle, url);
-  }).catch(() => {});
-}
-
-// ─── Cria contexto isolado ────────────────────────────────────────────────────
-
-async function criarContextoIsolado(
-  cycle: number
-): Promise<{ context: BrowserContext; page: Page }> {
-  const proxy = globalState.getProxyForCycle(cycle);
-
-  const context = await browser!.newContext({
-    ...MOBILE_DEVICE,
-    locale: 'pt-BR',
-    timezoneId: 'America/Sao_Paulo',
-    geolocation: { latitude: -23.5505, longitude: -46.6333 },
-    permissions: ['geolocation'],
-    extraHTTPHeaders: {
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-    },
-    ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
-  });
-
-  await context.addInitScript({ content: stealthScript });
-  await context.addInitScript({ content: KYC_INIT_SCRIPT });
-
-  await context.route('**/*', (route) => {
-    const url = route.request().url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
-    route.continue();
-  });
-
-  const page = await context.newPage();
-
-  try {
-    const cdp = await context.newCDPSession(page);
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      mobile: true,
-      width: MOBILE_DEVICE.viewport?.width ?? 390,
-      height: MOBILE_DEVICE.viewport?.height ?? 844,
-      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
-      screenOrientation: { angle: 0, type: 'portraitPrimary' },
-    });
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-    await cdp.send('Emulation.setUserAgentOverride', {
-      userAgent: MOBILE_DEVICE.userAgent ?? '',
-      acceptLanguage: 'pt-BR,pt;q=0.9',
-      platform: 'iPhone',
-    });
-    globalState.addLog(
-      'info',
-      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})${proxy ? ` | Proxy: ${proxy.server}` : ''}`,
-      cycle
-    );
-  } catch (e) {
-    globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
-  }
-
-  registrarListenersPage(page, cycle);
-
-  context.on('page', (novaPage) => {
-    globalState.addLog('info', `📌 Nova aba/popup aberta: ${novaPage.url() || '(carregando...)'}`, cycle);
-    registrarListenersPage(novaPage, cycle);
-  });
-
-  contextosPorCiclo.set(cycle, context);
-  return { context, page };
-}
-
-// ─── Flow principal ───────────────────────────────────────────────────────────
-
-export class MockPlaywrightFlow {
-  static async init(headless = false): Promise<void> {
-    if (browser) {
-      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
-      return;
-    }
-    if (browserLaunching) {
-      globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
-      const deadline = Date.now() + 30_000;
-      while (!browser && Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 200));
-      }
-      if (!browser) throw new Error('Timeout aguardando browser iniciar');
-      return;
-    }
-    browserLaunching = true;
-    try {
-      globalState.addLog('info', '🦁 Iniciando Brave...');
-      browser = await chromiumExtra.launch({
-        headless,
-        executablePath: BRAVE_PATH,
-        slowMo: 0,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-infobars',
-          '--disable-dev-shm-usage',
-          '--no-first-run',
-          '--no-default-browser-check',
-        ],
-      }) as unknown as Browser;
-      globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
-    } finally {
-      browserLaunching = false;
-    }
-  }
-
-  static async execute(
-    cadastroUrl: string,
-    config: {
-      emailProvider: EmailProvider;
-      tempMailApiKey: string;
-      otpTimeout: number;
-      extraDelay: number;
-      inviteCode: string;
-    },
-    cycle: number
-  ): Promise<void> {
-    if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
-
-    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
-    const { context, page: p } = await criarContextoIsolado(cycle);
-
-    const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
-
-    try {
-      await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-      await humanPause(randInt(800, 1600));
-      globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
-
-      const emailAccount = await client.createRandomEmail();
-      const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
-      globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
-
-      // ── Persiste payload no globalState para uso em clicarFotoPerfil ──────────
-      globalState.setPayload(cycle, {
-        nome: payload.nome,
-        sobrenome: payload.sobrenome,
-        email: payload.email,
-        telefone: payload.telefone,
-        senha: payload.senha,
-        localizacao: payload.localizacao,
-        codigoIndicacao: payload.codigoIndicacao,
-      });
-
-      // ── 1. EMAIL ──────────────────────────────────────────────────────────────
-      globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
-      await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
-
-      // ── 2. OTP — deixa o client gerenciar polling e timeout completo ──────────
-      globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
-      const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
-      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
-
-      await humanPause(randInt(800, 1400));
-      const digits = otp.replace(/\D/g, '').split('');
-      for (let i = 0; i < digits.length; i++) {
-        await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-        await humanPause(randInt(50, 120));
-      }
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
-
-      // ── 3. TELEFONE ───────────────────────────────────────────────────────────
-      await humanPause(randInt(400, 900));
-      await humanType(p, '#PHONE_NUMBER', payload.telefone);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
-
-      // ── 4. SENHA ──────────────────────────────────────────────────────────────
-      await humanPause(randInt(400, 900));
-      await humanType(p, '#PASSWORD', payload.senha);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', '🔒 Senha preenchida', cycle);
-
-      // ── 5. NOME ───────────────────────────────────────────────────────────────
-      await humanPause(randInt(400, 900));
-      await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(200, 400));
-      await humanType(p, '#LAST_NAME', payload.sobrenome);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
-      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
-
-      // ── 6. TERMOS ─────────────────────────────────────────────────────────────
-      await aceitarTermos(p);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await humanClick(p, '#forward-button');
-
-      // ── Pós-cadastro ──────────────────────────────────────────────────────────
-      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
-      await humanPause(randInt(700, 1400));
-      globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
-
-      await dispensarCookies(p);
-      await selecionarCidade(p, payload.localizacao, cycle);
-      await dispensarCookies(p);
-
-      await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await dispensarCookies(p);
-      await humanClick(p, '[data-testid="submit-button"]');
-      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
-
-      await dispensarWhatsApp(p, cycle);
-      await clicarFotoPerfil(p, cycle, context);
-
-      const aindaAberta = contextosPorCiclo.has(cycle);
-      if (aindaAberta) {
-        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
-      } else {
-        globalState.addLog('info', `✅ Ciclo #${cycle} concluído!`, cycle);
-      }
-
-    } catch (error) {
-      globalState.clearPayload(cycle);
-      await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
-      await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
-      throw error;
-    }
-  }
-
-  static async cleanup(): Promise<void> {
-    for (const [cycle, ctx] of contextosPorCiclo.entries()) {
-      await ctx.close().catch(() => {});
-      globalState.addLog('info', `🗑️ Aba do ciclo #${cycle} fechada`);
-    }
-    contextosPorCiclo.clear();
-    await browser?.close().catch(() => {});
-    browser = null;
-    globalState.addLog('info', '🧹 Browser fechado');
-  }
 }
