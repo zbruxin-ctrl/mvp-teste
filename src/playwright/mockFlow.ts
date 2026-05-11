@@ -7,6 +7,7 @@ import { IEmailClient } from '../types/tempMail';
 import { EmailProvider } from '../types';
 import { gerarPayloadCompleto } from '../utils/dataGenerators';
 import { ArtifactsManager } from '../utils/artifacts';
+import * as accountStore from '../store/accountStore';
 
 chromiumExtra.use(StealthPlugin());
 
@@ -625,14 +626,47 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
   }
 
+  // ── Salva conta quando Socure confirmado ──────────────────────────────────
+  const salvarContaSocure = async (): Promise<void> => {
+    const payload = globalState.getPayload(cycle);
+    if (!payload) {
+      globalState.addLog('warn', '⚠️ Payload não encontrado no globalState — conta não salva', cycle);
+      return;
+    }
+    try {
+      const cookies = await context.cookies();
+      const saved = accountStore.save({
+        cycle,
+        provider: 'Socure',
+        nome: payload.nome,
+        sobrenome: payload.sobrenome,
+        email: payload.email,
+        telefone: payload.telefone,
+        senha: payload.senha,
+        localizacao: payload.localizacao,
+        codigoIndicacao: payload.codigoIndicacao,
+        cookies,
+      });
+      globalState.addLog('success', `💾 Conta salva! id=${saved.id} | ${payload.email}`, cycle);
+    } catch (e) {
+      globalState.addLog('warn', `⚠️ Erro ao salvar conta: ${e}`, cycle);
+    } finally {
+      globalState.clearPayload(cycle);
+    }
+  };
+
   const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
       globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
       await humanPause(randInt(500, 1000));
       await context.close().catch(() => {});
       contextosPorCiclo.delete(cycle);
+      globalState.clearPayload(cycle);
     } else {
       globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida aberta`, cycle);
+      if (provider === 'Socure') {
+        await salvarContaSocure();
+      }
     }
   };
 
@@ -954,6 +988,17 @@ export class MockPlaywrightFlow {
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
       globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
+      // ── Persiste payload no globalState para uso em clicarFotoPerfil ──────────
+      globalState.setPayload(cycle, {
+        nome: payload.nome,
+        sobrenome: payload.sobrenome,
+        email: payload.email,
+        telefone: payload.telefone,
+        senha: payload.senha,
+        localizacao: payload.localizacao,
+        codigoIndicacao: payload.codigoIndicacao,
+      });
+
       // ── 1. EMAIL ──────────────────────────────────────────────────────────────
       globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
@@ -1030,6 +1075,7 @@ export class MockPlaywrightFlow {
       }
 
     } catch (error) {
+      globalState.clearPayload(cycle);
       await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
       await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
       throw error;
