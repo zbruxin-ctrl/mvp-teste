@@ -956,18 +956,41 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  // ── FIX: Interceptar novas abas abertas PELO SITE (ex: popup, _blank) ────────
-  // Quando o usuário clica em "+ nova guia", "⋮ menu" etc. no Brave, o browser
-  // cria uma nova Page no contexto. Interceptamos e fechamos imediatamente para
-  // evitar que o script trave esperando interação em uma aba não controlada.
+  // ── FIX: Interceptar novas abas abertas PELO SITE (popup com window.open) ───
+  // ATENÇÃO: só fechamos a aba se ela tiver um "opener" (ou seja, foi aberta
+  // via window.open / target="_blank" pelo próprio site controlado).
+  // Abas abertas manualmente pelo usuário (nova guia, menu do browser) NÃO
+  // possuem opener e NÃO devem ser fechadas — são abas independentes do usuário.
   context.on('page', async (novaPage) => {
-    const url = novaPage.url();
-    globalState.addLog('info', `📌 Nova aba interceptada (url: ${url || 'about:blank'}) — fechando automaticamente`, cycle);
-    // Registra listeners KYC na nova aba antes de fechar (pode ter KYC signal)
-    registrarListenersPage(novaPage, cycle);
-    // Aguarda um instante para capturar qualquer signal de rede antes de fechar
-    await new Promise<void>((r) => setTimeout(r, 800));
-    await novaPage.close().catch(() => {});
+    try {
+      // Verifica se a nova página tem opener (foi aberta pelo site via JS)
+      const temOpener = await novaPage.evaluate(() => window.opener !== null).catch(() => false);
+
+      if (!temOpener) {
+        // Aba aberta pelo usuário manualmente — não interferir
+        globalState.addLog(
+          'info',
+          `🪟 Nova aba detectada sem opener (aberta pelo usuário) — ignorando`,
+          cycle
+        );
+        return;
+      }
+
+      // É um popup do site (window.open) — interceptar e fechar
+      const url = novaPage.url();
+      globalState.addLog(
+        'info',
+        `📌 Popup do site interceptado (url: ${url || 'about:blank'}) — fechando automaticamente`,
+        cycle
+      );
+      // Registra listeners KYC antes de fechar (pode ter KYC signal)
+      registrarListenersPage(novaPage, cycle);
+      // Aguarda um instante para capturar qualquer signal de rede antes de fechar
+      await new Promise<void>((r) => setTimeout(r, 800));
+      await novaPage.close().catch(() => {});
+    } catch {
+      // Se não conseguir verificar o opener, não fecha a aba (mais seguro)
+    }
   });
 
   try {
