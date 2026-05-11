@@ -88,7 +88,6 @@
     .kyc-signals { font-size: 11.5px; font-family: monospace; color: #555; max-height: 100px; overflow-y: auto; }
     .kyc-signal-row { border-top: 1px solid #e5e7eb; padding-top: 4px; margin-top: 4px; }
     .kyc-none { color: #9ca3af; font-size: 13px; text-align: center; padding: 20px 0; }
-    /* Accounts */
     .accounts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
     .accounts-count { font-size: 13px; color: #6b7280; font-weight: 600; }
     .accounts-table-wrap { overflow-x: auto; }
@@ -131,18 +130,20 @@
       <div class="provider-card">
         <div class="provider-header">
           <span class="provider-name">📧 Serviço de Email Temporário</span>
-          <span id="providerBadge" class="provider-badge badge-key">API Key</span>
+          <!-- badge inicia como Gratuito pois mail.tm é o padrão -->
+          <span id="providerBadge" class="provider-badge badge-free">Gratuito</span>
         </div>
         <label for="emailProvider" style="margin-bottom:4px">Provedor</label>
         <select id="emailProvider" onchange="onProviderChange()">
-          <option value="temp-mail.io">temp-mail.io (requer API key)</option>
+          <!-- mail.tm como padrão (primeiro = selecionado) -->
           <option value="mail.tm">mail.tm (gratuito, sem API key)</option>
+          <option value="temp-mail.io">temp-mail.io (requer API key)</option>
         </select>
-        <div id="apiKeyWrapper">
+        <div id="apiKeyWrapper" style="display:none">
           <label for="tempMailApiKey">API Key</label>
           <input id="tempMailApiKey" type="password" placeholder="sua-api-key" value="amr6V6AnadfeRcdMiwaO" />
         </div>
-        <p id="providerHint" class="provider-hint">temp-mail.io: requer conta paga. Cada poll consome 1 crédito.</p>
+        <p id="providerHint" class="provider-hint">mail.tm: completamente gratuito, sem API key. Cria conta automática a cada ciclo.</p>
       </div>
 
       <div class="speed-toggle-row">
@@ -365,28 +366,20 @@
       });
     }
 
-    // ─── Gera o script de injeção de cookies (formato userscript) ─────────────
-    // FIX 1: cookieStore removido — usamos apenas document.cookie (compatível com Tampermonkey)
-    // FIX 2: redirect não ocorre se a aba já estiver em drivers.uber.com (evita fechar abas Socure)
+    // ─── Gera o script de injeção de cookies ───────────────────────────────
+    // O script gerado inclui bloco de metadata do Tampermonkey para evitar
+    // o erro eslint: userscripts/no-invalid-metadata ao colar no Tampermonkey.
     function buildCookieScript(cookies, redirectUrl) {
       var arr = cookies.map(function(c) {
         var expiresMs = c.expires > 0 ? Math.round(c.expires * 1000) : -1;
-        return [
-          c.name,
-          c.value,
-          c.domain,
-          c.secure ? 1 : 0,
-          c.httpOnly ? 1 : 0,
-          expiresMs
-        ];
+        return [c.name, c.value, c.domain, c.secure ? 1 : 0, c.httpOnly ? 1 : 0, expiresMs];
       });
 
       var cookieArrayStr = JSON.stringify(arr, null, 0);
 
-      // Bloco de redirect:
-      // - Se redirectUrl fornecida: vai para ela (ex: account.uber.com/security)
-      // - Se não fornecida: vai para drivers.uber.com APENAS se ainda não estiver lá
-      //   (impede fechar/recarregar abas que já abriram em drivers.uber.com / Socure)
+      var targetUrl = redirectUrl || 'https://drivers.uber.com/';
+
+      // Bloco de redirect — não redireciona se já estiver no destino (evita fechar abas Socure)
       var redirectBlock;
       if (redirectUrl) {
         redirectBlock = 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href=' + JSON.stringify(redirectUrl) + ';},800);}';
@@ -394,7 +387,21 @@
         redirectBlock = 'var RAN="__scr_done";var H2=window.location.hostname;var alreadyThere=H2==="drivers.uber.com"||H2.endsWith(".drivers.uber.com");if(!alreadyThere&&!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href="https://drivers.uber.com/";},800);}';
       }
 
-      return '(function(){' +
+      var meta = [
+        '// ==UserScript==',
+        '// @name         Uber Cookie Injector',
+        '// @namespace    http://tampermonkey.net/',
+        '// @version      1.0',
+        '// @description  Injeta cookies de sessão Uber',
+        '// @author       MVP',
+        '// @match        https://*.uber.com/*',
+        '// @grant        GM_cookie',
+        '// @run-at       document-start',
+        '// ==/UserScript==',
+        ''
+      ].join('\n');
+
+      var body = '(function(){' +
         'var H=window.location.hostname,' +
         'C=' + cookieArrayStr + ';' +
         'var ok=function(d){d=d.replace(/^[.]/,"");return H===d||H.endsWith("."+d)};' +
@@ -409,6 +416,8 @@
         '});' +
         redirectBlock +
       '})()';
+
+      return meta + body;
     }
 
     // ─── Botão: copiar script de cookies (redireciona para drivers.uber.com) ──
