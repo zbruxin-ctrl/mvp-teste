@@ -25,7 +25,6 @@
     .btn-danger:hover:not(:disabled)    { background: #dc2626; }
     .btn-warning   { background: #f59e0b; color: #fff; }
     .btn-warning:hover:not(:disabled)   { background: #d97706; }
-    .btn-sm { width: auto; padding: 4px 10px; font-size: 12px; border-radius: 6px; margin-bottom: 0; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .status { padding: 12px; border-radius: 8px; text-align: center; font-weight: 700; margin-bottom: 14px; font-size: 15px; }
     .status.idle    { background: #d1fae5; color: #065f46; }
@@ -40,7 +39,6 @@
     .save-toast.show { display: block; }
     .proxy-hint { font-size: 11px; color: #9ca3af; margin-top: -10px; margin-bottom: 14px; line-height: 1.5; }
     .proxy-count { font-size: 12px; font-weight: 600; color: #4f46e5; margin-bottom: 8px; }
-    /* Email provider card */
     .provider-card { border: 1.5px solid #e0e0e0; border-radius: 10px; padding: 14px; margin-bottom: 14px; background: #fafafa; }
     .provider-card .provider-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
     .provider-card .provider-name { font-weight: 700; font-size: 14px; color: #333; }
@@ -50,7 +48,6 @@
     .provider-card select { margin-bottom: 10px; }
     .provider-card input  { margin-bottom: 0; }
     .provider-hint { font-size: 11px; color: #9ca3af; margin-top: 6px; line-height: 1.5; }
-    /* Speed mode toggle */
     .speed-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border: 1.5px solid #e0e0e0; border-radius: 10px; margin-bottom: 14px; background: #fafafa; }
     .speed-toggle-label { font-size: 13px; font-weight: 600; color: #333; }
     .speed-toggle-hint  { font-size: 11px; color: #9ca3af; margin-top: 2px; }
@@ -60,7 +57,6 @@
     .toggle-slider:before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; }
     .toggle-switch input:checked + .toggle-slider { background: #f59e0b; }
     .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
-    /* Logs */
     .logs { max-height: 320px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12.5px; line-height: 1.6; }
     .log-entry { margin-bottom: 2px; padding: 1px 4px; border-radius: 4px; }
     .log-info    { color: #0369a1; }
@@ -68,7 +64,6 @@
     .log-error   { color: #dc2626; }
     .log-success { color: #15803d; }
     .log-kyc { color: #7c3aed; background: #f5f3ff; border-left: 3px solid #7c3aed; padding-left: 8px; font-weight: 600; }
-    /* KYC por ciclo */
     .kyc-cycle-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
     .kyc-tab { padding: 5px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; border: 2px solid #e5e7eb; background: #f9fafb; color: #6b7280; transition: all .15s; }
     .kyc-tab:hover { border-color: #4f46e5; color: #4f46e5; }
@@ -93,7 +88,7 @@
     .kyc-signals { font-size: 11.5px; font-family: monospace; color: #555; max-height: 100px; overflow-y: auto; }
     .kyc-signal-row { border-top: 1px solid #e5e7eb; padding-top: 4px; margin-top: 4px; }
     .kyc-none { color: #9ca3af; font-size: 13px; text-align: center; padding: 20px 0; }
-    /* Accounts table */
+    /* Accounts */
     .accounts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
     .accounts-count { font-size: 13px; color: #6b7280; font-weight: 600; }
     .accounts-table-wrap { overflow-x: auto; }
@@ -101,12 +96,22 @@
     table.accounts-table th { background: #f3f4f6; color: #374151; font-weight: 700; padding: 9px 12px; text-align: left; border-bottom: 2px solid #e5e7eb; white-space: nowrap; }
     table.accounts-table td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; color: #374151; vertical-align: middle; }
     table.accounts-table tr:hover td { background: #f9fafb; }
-    .copy-btn { background: #e0e7ff; color: #3730a3; border: none; border-radius: 5px; padding: 3px 8px; font-size: 11px; font-weight: 700; cursor: pointer; margin-left: 6px; transition: background .15s; white-space: nowrap; }
-    .copy-btn:hover { background: #c7d2fe; }
-    .copy-btn.copied { background: #d1fae5; color: #065f46; }
+    .acc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .acc-btn { border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; margin-bottom: 0; width: auto; }
+    .acc-btn-cookies  { background: #dbeafe; color: #1d4ed8; }
+    .acc-btn-cookies:hover  { background: #bfdbfe; }
+    .acc-btn-security { background: #d1fae5; color: #065f46; }
+    .acc-btn-security:hover { background: #a7f3d0; }
+    .acc-btn-copy     { background: #e0e7ff; color: #3730a3; }
+    .acc-btn-copy:hover     { background: #c7d2fe; }
+    .acc-btn-copy.copied    { background: #d1fae5; color: #065f46; }
+    .acc-btn.loading  { opacity: .6; cursor: not-allowed; }
     .acc-kyc-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: #ddd6fe; color: #5b21b6; }
     .acc-score { font-weight: 800; color: #4f46e5; }
     .acc-empty { text-align: center; color: #9ca3af; font-size: 13px; padding: 28px 0; }
+    .acc-feedback { font-size: 11px; margin-top: 4px; padding: 3px 8px; border-radius: 5px; display: none; }
+    .acc-feedback.ok  { display: block; background: #d1fae5; color: #065f46; }
+    .acc-feedback.err { display: block; background: #fee2e2; color: #991b1b; }
     @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .kyc-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -123,31 +128,23 @@
       <label for="cadastroUrl">URL de Cadastro</label>
       <input id="cadastroUrl" placeholder="https://example.com/cadastro" value="https://bonjour.uber.com/" />
 
-      <!-- ── Email Provider ─────────────────────────────────────── -->
       <div class="provider-card">
         <div class="provider-header">
           <span class="provider-name">📧 Serviço de Email Temporário</span>
           <span id="providerBadge" class="provider-badge badge-key">API Key</span>
         </div>
-
         <label for="emailProvider" style="margin-bottom:4px">Provedor</label>
         <select id="emailProvider" onchange="onProviderChange()">
           <option value="temp-mail.io">temp-mail.io (requer API key)</option>
           <option value="mail.tm">mail.tm (gratuito, sem API key)</option>
         </select>
-
         <div id="apiKeyWrapper">
           <label for="tempMailApiKey">API Key</label>
           <input id="tempMailApiKey" type="password" placeholder="sua-api-key" value="amr6V6AnadfeRcdMiwaO" />
         </div>
-
-        <p id="providerHint" class="provider-hint">
-          temp-mail.io: requer conta paga. Cada poll consome 1 crédito.
-        </p>
+        <p id="providerHint" class="provider-hint">temp-mail.io: requer conta paga. Cada poll consome 1 crédito.</p>
       </div>
-      <!-- ──────────────────────────────────────────────────────── -->
 
-      <!-- ── Speed Mode ─────────────────────────────────────────── -->
       <div class="speed-toggle-row">
         <div>
           <div class="speed-toggle-label">⚡ Modo Rápido</div>
@@ -158,24 +155,18 @@
           <span class="toggle-slider"></span>
         </label>
       </div>
-      <!-- ──────────────────────────────────────────────────────── -->
 
       <label for="inviteCode">Código de Indicação</label>
       <input id="inviteCode" placeholder="ex: gkd2n7c" />
-
       <label for="otpTimeout">Timeout OTP (ms)</label>
       <input id="otpTimeout" type="number" value="60000" />
-
       <label for="cycleInterval">Intervalo entre ciclos (ms)</label>
       <input id="cycleInterval" type="number" value="60000" />
-
       <label for="extraDelay">Delay extra entre ações (ms)</label>
       <input id="extraDelay" type="number" value="2000" />
-
       <label for="parallelCycles">Ciclos simultâneos</label>
       <input id="parallelCycles" type="number" value="1" min="1" max="20" />
 
-      <!-- Proxies -->
       <label for="proxiesInput">🌐 Proxies (um por linha)</label>
       <div id="proxyCount" class="proxy-count" style="display:none"></div>
       <textarea id="proxiesInput" placeholder="177.10.20.30:8080&#10;177.10.20.31:8080:usuario:senha&#10;http://user:pass@1.2.3.4:3128&#10;socks5://user:pass@1.2.3.4:1080"></textarea>
@@ -226,10 +217,11 @@
               <th>KYC</th>
               <th>Score</th>
               <th>Salvo em</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody id="accountsBody">
-            <tr><td colspan="8" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>
+            <tr><td colspan="9" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>
           </tbody>
         </table>
       </div>
@@ -257,7 +249,6 @@
     };
 
     var KYC_ICONS  = { Socure: '🛡️', Veriff: '🪪' };
-    var KYC_COLORS = { WEAK: 'weak', LIKELY: 'likely', CONFIRMED: 'confirmed' };
     var BADGE_COLORS = { WEAK: 'badge-weak', LIKELY: 'badge-likely', CONFIRMED: 'badge-confirmed' };
 
     var PROVIDER_HINTS = {
@@ -265,19 +256,17 @@
       'mail.tm': 'mail.tm: completamente gratuito, sem API key. Cria conta automática a cada ciclo.',
     };
 
-    var _selectedCycle = null;
-    var _lastKycState  = {};
-    var _dirtyFields   = {};
-    var _dirtyTimers   = {};
+    var _selectedCycle    = null;
+    var _dirtyFields      = {};
+    var _dirtyTimers      = {};
     var _lastAccountsHash = '';
+    var _lastLogTs        = null;
 
-    // ─── Provider UI ─────────────────────────────────────────────────────────
     function onProviderChange() {
       var provider = document.getElementById('emailProvider').value;
       var wrapper  = document.getElementById('apiKeyWrapper');
       var badge    = document.getElementById('providerBadge');
       var hint     = document.getElementById('providerHint');
-
       if (provider === 'mail.tm') {
         wrapper.style.display = 'none';
         badge.textContent = 'Gratuito';
@@ -289,10 +278,8 @@
       }
       hint.textContent = PROVIDER_HINTS[provider] || '';
     }
-
     onProviderChange();
 
-    // ─── Dirty fields ─────────────────────────────────────────────────────────
     function markDirty(fieldId) {
       _dirtyFields[fieldId] = true;
       clearTimeout(_dirtyTimers[fieldId]);
@@ -305,15 +292,9 @@
       if (el) el.addEventListener('input', function() { markDirty(id); });
     });
     document.getElementById('emailProvider').addEventListener('change', function() { markDirty('emailProvider'); });
+    document.getElementById('proxiesInput').addEventListener('input', function() { updateProxyCount(this.value); });
 
-    document.getElementById('proxiesInput').addEventListener('input', function() {
-      updateProxyCount(this.value);
-    });
-
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-    function getPassword() {
-      return (document.getElementById('adminPassword').value || '').trim();
-    }
+    function getPassword() { return (document.getElementById('adminPassword').value || '').trim(); }
 
     function updateProxyCount(raw) {
       var lines = (raw || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
@@ -332,11 +313,7 @@
       if (/^(https?|socks[45]):\/\//i.test(raw)) {
         try {
           var u = new URL(raw);
-          return {
-            server: u.protocol + '//' + u.host,
-            username: u.username ? decodeURIComponent(u.username) : undefined,
-            password: u.password ? decodeURIComponent(u.password) : undefined,
-          };
+          return { server: u.protocol + '//' + u.host, username: u.username ? decodeURIComponent(u.username) : undefined, password: u.password ? decodeURIComponent(u.password) : undefined };
         } catch(e) { return null; }
       }
       var parts = raw.split(':');
@@ -347,13 +324,9 @@
 
     function buildConfig() {
       var proxiesRaw = document.getElementById('proxiesInput').value || '';
-      var proxies = proxiesRaw.split('\n')
-        .map(function(l) { return parseProxyString(l); })
-        .filter(Boolean);
-
+      var proxies = proxiesRaw.split('\n').map(function(l) { return parseProxyString(l); }).filter(Boolean);
       var provider = document.getElementById('emailProvider').value;
       var apiKey   = document.getElementById('tempMailApiKey').value.trim();
-
       return {
         cadastroUrl:    document.getElementById('cadastroUrl').value.trim(),
         emailProvider:  provider,
@@ -370,43 +343,54 @@
     }
 
     function authHeaders() {
-      return {
-        'Content-Type': 'application/json',
-        'x-admin-password': getPassword(),
-      };
+      return { 'Content-Type': 'application/json', 'x-admin-password': getPassword() };
     }
 
     function escHtml(str) {
       return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    // ─── Copy to clipboard ────────────────────────────────────────────────────
     function copyText(text, btnEl) {
       navigator.clipboard.writeText(text).then(function() {
         var orig = btnEl.textContent;
         btnEl.textContent = '✅';
         btnEl.classList.add('copied');
-        setTimeout(function() {
-          btnEl.textContent = orig;
-          btnEl.classList.remove('copied');
-        }, 1500);
+        setTimeout(function() { btnEl.textContent = orig; btnEl.classList.remove('copied'); }, 1500);
       }).catch(function() {
         var ta = document.createElement('textarea');
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
+        ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      });
+    }
+
+    // ─── Account actions ──────────────────────────────────────────────────────
+    function accountAction(id, action, btnEl, feedbackEl) {
+      if (btnEl.classList.contains('loading')) return;
+      btnEl.classList.add('loading');
+      feedbackEl.className = 'acc-feedback';
+      feedbackEl.textContent = '';
+
+      fetch('/api/accounts/' + id + '/' + action, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        btnEl.classList.remove('loading');
+        feedbackEl.className = 'acc-feedback ' + (data.ok ? 'ok' : 'err');
+        feedbackEl.textContent = data.ok ? (data.message || '✅ Feito!') : ('❌ ' + (data.error || 'Erro'));
+        setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
+      })
+      .catch(function(e) {
+        btnEl.classList.remove('loading');
+        feedbackEl.className = 'acc-feedback err';
+        feedbackEl.textContent = '❌ Erro de rede: ' + e.message;
+        setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
       });
     }
 
     // ─── API calls ────────────────────────────────────────────────────────────
     function saveConfig() {
-      fetch('/api/config', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify(buildConfig()),
-      })
+      fetch('/api/config', { method: 'POST', headers: authHeaders(), body: JSON.stringify(buildConfig()) })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
@@ -414,56 +398,34 @@
           toast.classList.add('show');
           setTimeout(function() { toast.classList.remove('show'); }, 2000);
           _dirtyFields = {};
-        } else {
-          alert('Erro ao salvar: ' + (data.error || 'desconhecido'));
-        }
+        } else { alert('Erro ao salvar: ' + (data.error || 'desconhecido')); }
       })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function startLoop() {
-      fetch('/api/start', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ config: buildConfig() }),
-      })
+      fetch('/api/start', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ config: buildConfig() }) })
       .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.ok) alert('Erro ao iniciar loop: ' + (data.error || 'desconhecido'));
-      })
+      .then(function(data) { if (!data.ok) alert('Erro ao iniciar loop: ' + (data.error || 'desconhecido')); })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function startOnce() {
-      fetch('/api/start-once', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ config: buildConfig() }),
-      })
+      fetch('/api/start-once', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ config: buildConfig() }) })
       .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.ok) alert('Erro ao iniciar ciclo: ' + (data.error || 'desconhecido'));
-      })
+      .then(function(data) { if (!data.ok) alert('Erro ao iniciar ciclo: ' + (data.error || 'desconhecido')); })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function stopBot() {
-      fetch('/api/stop', {
-        method: 'POST',
-        headers: authHeaders(),
-      })
+      fetch('/api/stop', { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.ok) alert('Erro ao parar: ' + (data.error || 'desconhecido'));
-      })
+      .then(function(data) { if (!data.ok) alert('Erro ao parar: ' + (data.error || 'desconhecido')); })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function clearLogs() {
-      fetch('/api/logs/clear', {
-        method: 'POST',
-        headers: authHeaders(),
-      })
+      fetch('/api/logs/clear', { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) document.getElementById('logs').innerHTML = '';
@@ -473,48 +435,28 @@
     }
 
     function clearKyc() {
-      fetch('/api/kyc/clear', {
-        method: 'POST',
-        headers: authHeaders(),
-      })
+      fetch('/api/kyc/clear', { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
-          _lastKycState = {};
           _selectedCycle = null;
           document.getElementById('kyc-tabs').innerHTML = '';
           document.getElementById('kyc-panel').innerHTML = '<div class="kyc-none">KYC limpo.</div>';
-        } else {
-          alert('Erro ao limpar KYC: ' + (data.error || 'desconhecido'));
-        }
+        } else { alert('Erro ao limpar KYC: ' + (data.error || 'desconhecido')); }
       })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     // ─── Polling ──────────────────────────────────────────────────────────────
-    var _lastLogTs = null;
-
     function pollStatus() {
-      fetch('/api/status')
-        .then(function(r) { return r.json(); })
-        .then(function(data) { renderStatus(data); })
-        .catch(function() {});
+      fetch('/api/status').then(function(r) { return r.json(); }).then(renderStatus).catch(function() {});
     }
-
     function pollLogs() {
-      fetch('/api/logs')
-        .then(function(r) { return r.json(); })
-        .then(function(logs) { renderLogs(logs); })
-        .catch(function() {});
+      fetch('/api/logs').then(function(r) { return r.json(); }).then(renderLogs).catch(function() {});
     }
-
     function pollKyc() {
-      fetch('/api/kyc')
-        .then(function(r) { return r.json(); })
-        .then(function(data) { renderKyc(data.byCycle || {}); })
-        .catch(function() {});
+      fetch('/api/kyc').then(function(r) { return r.json(); }).then(function(data) { renderKyc(data.byCycle || {}); }).catch(function() {});
     }
-
     function pollAccounts() {
       fetch('/api/accounts', { headers: { 'x-admin-password': getPassword() } })
         .then(function(r) { return r.ok ? r.json() : { accounts: [] }; })
@@ -529,12 +471,10 @@
       var el = document.getElementById('status');
       el.className = 'status ' + map.color;
       el.textContent = map.emoji + ' ' + map.text;
-
       document.getElementById('cyclesCompleted').textContent = data.cyclesCompleted || 0;
       document.getElementById('cyclesTotal').textContent     = data.cyclesTotal     || 0;
       document.getElementById('activeParallel').textContent  = data.activeParallel  || 0;
       document.getElementById('statusText').textContent      = s;
-
       var running = data.isRunning || false;
       document.getElementById('startBtn').disabled     = running;
       document.getElementById('startOnceBtn').disabled = running;
@@ -547,10 +487,8 @@
       var newest = logs[0] && logs[0].timestamp;
       if (newest === _lastLogTs) return;
       _lastLogTs = newest;
-
       var container = document.getElementById('logs');
       var wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
-
       var html = '';
       for (var i = 0; i < logs.length; i++) {
         var log = logs[i];
@@ -565,63 +503,66 @@
 
     // ─── Render: Accounts ─────────────────────────────────────────────────────
     function renderAccounts(accounts) {
-      var hash = JSON.stringify(accounts);
+      var hash = accounts.length + (accounts[0] ? accounts[0].id : '');
       if (hash === _lastAccountsHash) return;
       _lastAccountsHash = hash;
 
-      var countEl = document.getElementById('accountsCount');
-      var tbody   = document.getElementById('accountsBody');
-
-      countEl.textContent = accounts.length + (accounts.length === 1 ? ' conta' : ' contas');
+      document.getElementById('accountsCount').textContent =
+        accounts.length + (accounts.length === 1 ? ' conta' : ' contas');
 
       if (accounts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>';
+        document.getElementById('accountsBody').innerHTML =
+          '<tr><td colspan="9" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>';
         return;
       }
 
       var html = '';
       for (var i = 0; i < accounts.length; i++) {
         var acc = accounts[i];
-        var savedAt = acc.savedAt ? new Date(acc.savedAt).toLocaleString('pt-BR') : '-';
-        var emailHtml = escHtml(acc.email || '-') +
-          '<button class="copy-btn" onclick="copyText(' + JSON.stringify(acc.email || '') + ', this)">📋 copiar</button>';
-        var senhaHtml = acc.password
-          ? '<span style="font-family:monospace">' + escHtml(acc.password) + '</span>' +
-            '<button class="copy-btn" onclick="copyText(' + JSON.stringify(acc.password || '') + ', this)">📋 copiar</button>'
-          : '-';
-        var telefoneHtml = escHtml(acc.phone || acc.telefone || '-');
-        var nomeHtml = escHtml((acc.firstName || '') + ' ' + (acc.lastName || acc.sobrenome || '')).trim() || '-';
-        var kycHtml = acc.kycProvider
-          ? '<span class="acc-kyc-badge">' + escHtml(acc.kycProvider) + '</span>'
-          : '-';
-        var scoreHtml = acc.kycScore != null
-          ? '<span class="acc-score">' + acc.kycScore + '</span>'
-          : '-';
+        var savedAt = acc.createdAt ? new Date(acc.createdAt).toLocaleString('pt-BR') : '-';
+        var nomeCompleto = ((acc.nome || '') + ' ' + (acc.sobrenome || '')).trim() || '-';
+        var hasCookies = acc.cookies && acc.cookies.length > 0;
+        var cookieCount = hasCookies ? acc.cookies.length : 0;
+        var rowId = 'acc-' + acc.id.replace(/-/g,'');
 
         html += '<tr>' +
           '<td>' + (i + 1) + '</td>' +
-          '<td>' + emailHtml + '</td>' +
-          '<td>' + senhaHtml + '</td>' +
-          '<td>' + telefoneHtml + '</td>' +
-          '<td>' + nomeHtml + '</td>' +
-          '<td>' + kycHtml + '</td>' +
-          '<td>' + scoreHtml + '</td>' +
+          '<td>' +
+            escHtml(acc.email || '-') +
+            ' <button class="acc-btn acc-btn-copy" onclick="copyText(' + JSON.stringify(acc.email || '') + ', this)">📋</button>' +
+          '</td>' +
+          '<td>' +
+            (acc.senha ? '<span style="font-family:monospace">' + escHtml(acc.senha) + '</span> <button class="acc-btn acc-btn-copy" onclick="copyText(' + JSON.stringify(acc.senha || '') + ', this)">📋</button>' : '-') +
+          '</td>' +
+          '<td>' + escHtml(acc.telefone || '-') + '</td>' +
+          '<td>' + escHtml(nomeCompleto) + '</td>' +
+          '<td><span class="acc-kyc-badge">' + escHtml(acc.provider || 'Socure') + '</span></td>' +
+          '<td></td>' +
           '<td style="white-space:nowrap;font-size:11px;color:#9ca3af">' + escHtml(savedAt) + '</td>' +
+          '<td>' +
+            '<div class="acc-actions">' +
+              '<button class="acc-btn acc-btn-cookies" ' + (hasCookies ? '' : 'disabled title="Sem cookies"') +
+                ' onclick="accountAction(\'' + acc.id + '\', \'inject-cookies\', this, document.getElementById(\'' + rowId + '\'))">' +
+                '🍪 Injetar Cookies' + (hasCookies ? ' (' + cookieCount + ')' : '') +
+              '</button>' +
+              '<button class="acc-btn acc-btn-security" ' + (hasCookies ? '' : 'disabled title="Sem cookies"') +
+                ' onclick="accountAction(\'' + acc.id + '\', \'open-security\', this, document.getElementById(\'' + rowId + '\'))">' +
+                '⚙️ Abrir Configurações' +
+              '</button>' +
+            '</div>' +
+            '<div id="' + rowId + '" class="acc-feedback"></div>' +
+          '</td>' +
           '</tr>';
       }
-      tbody.innerHTML = html;
+      document.getElementById('accountsBody').innerHTML = html;
     }
 
     // ─── Render: KYC ──────────────────────────────────────────────────────────
     function renderKyc(byCycle) {
       var cycleNums = Object.keys(byCycle).map(Number).sort(function(a,b){return b-a;});
       if (cycleNums.length === 0) return;
+      if (_selectedCycle === null || byCycle[_selectedCycle] === undefined) _selectedCycle = cycleNums[0];
 
-      if (_selectedCycle === null || byCycle[_selectedCycle] === undefined) {
-        _selectedCycle = cycleNums[0];
-      }
-
-      var tabsEl = document.getElementById('kyc-tabs');
       var tabsHtml = '';
       for (var i = 0; i < cycleNums.length; i++) {
         var c = cycleNums[i];
@@ -634,7 +575,7 @@
         var active = c === _selectedCycle ? ' active' : '';
         tabsHtml += '<button class="kyc-tab ' + bestLevel + active + '" onclick="selectKycCycle(' + c + ')">Ciclo #' + c + '</button>';
       }
-      tabsEl.innerHTML = tabsHtml;
+      document.getElementById('kyc-tabs').innerHTML = tabsHtml;
 
       var cycleData = byCycle[_selectedCycle] || {};
       var entries = Object.entries(cycleData);
@@ -642,7 +583,6 @@
         document.getElementById('kyc-panel').innerHTML = '<div class="kyc-none">Nenhum provider detectado neste ciclo.</div>';
         return;
       }
-
       var panelHtml = '<div class="kyc-grid">';
       for (var j = 0; j < entries.length; j++) {
         var provider = entries[j][0];
@@ -667,17 +607,11 @@
 
     function selectKycCycle(cycle) {
       _selectedCycle = cycle;
-      fetch('/api/kyc')
-        .then(function(r) { return r.json(); })
-        .then(function(data) { renderKyc(data.byCycle || {}); })
-        .catch(function() {});
+      fetch('/api/kyc').then(function(r) { return r.json(); }).then(function(data) { renderKyc(data.byCycle || {}); }).catch(function() {});
     }
 
     // ─── Init ─────────────────────────────────────────────────────────────────
-    pollStatus();
-    pollLogs();
-    pollKyc();
-    pollAccounts();
+    pollStatus(); pollLogs(); pollKyc(); pollAccounts();
     setInterval(pollStatus,   2000);
     setInterval(pollLogs,     2000);
     setInterval(pollKyc,      3000);

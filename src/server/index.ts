@@ -82,7 +82,9 @@ function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config
 app.get('/api/status',   (_req, res) => { res.json(globalState.getState()); });
 app.get('/api/logs',     (_req, res) => { res.json(globalState.getLogs()); });
 app.get('/api/kyc',      (_req, res) => { res.json(globalState.getKycState()); });
-app.get('/api/accounts', requireAuth, (_req, res) => { res.json(accountStore.list()); });
+app.get('/api/accounts', requireAuth, (_req, res) => {
+  res.json({ accounts: accountStore.list() });
+});
 
 app.post('/api/logs/clear', requireAuth, (_req, res) => {
   globalState.clearLogs();
@@ -129,6 +131,70 @@ app.post('/api/kyc/clear', requireAuth, (_req, res) => {
 app.delete('/api/accounts/:id', requireAuth, (req, res) => {
   const removed = accountStore.remove(req.params.id);
   res.json({ ok: removed });
+});
+
+/**
+ * POST /api/accounts/:id/inject-cookies
+ * Abre uma nova aba no browser já conectado, injeta os cookies da conta
+ * e navega para https://www.uber.com — pronto para usar.
+ */
+app.post('/api/accounts/:id/inject-cookies', requireAuth, async (req, res) => {
+  const account = accountStore.list().find((a) => a.id === req.params.id);
+  if (!account) { res.status(404).json({ ok: false, error: 'Conta não encontrada' }); return; }
+  if (!account.cookies || account.cookies.length === 0) {
+    res.status(400).json({ ok: false, error: 'Esta conta não possui cookies salvos' });
+    return;
+  }
+
+  const targetUrl = (req.body?.url as string) || 'https://www.uber.com/';
+
+  try {
+    const browser = MockPlaywrightFlow.getBrowser();
+    if (!browser) {
+      res.status(503).json({ ok: false, error: 'Browser não iniciado. Inicie o bot primeiro.' });
+      return;
+    }
+
+    // Cria contexto isolado com os cookies da conta
+    const context = await browser.newContext();
+    await context.addCookies(account.cookies);
+    const page = await context.newPage();
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    res.json({ ok: true, message: `Cookies injetados e navegando para ${targetUrl}` });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/accounts/:id/open-security
+ * Igual ao inject-cookies mas navega direto para a página de segurança do Uber.
+ */
+app.post('/api/accounts/:id/open-security', requireAuth, async (req, res) => {
+  const account = accountStore.list().find((a) => a.id === req.params.id);
+  if (!account) { res.status(404).json({ ok: false, error: 'Conta não encontrada' }); return; }
+  if (!account.cookies || account.cookies.length === 0) {
+    res.status(400).json({ ok: false, error: 'Esta conta não possui cookies salvos' });
+    return;
+  }
+
+  try {
+    const browser = MockPlaywrightFlow.getBrowser();
+    if (!browser) {
+      res.status(503).json({ ok: false, error: 'Browser não iniciado. Inicie o bot primeiro.' });
+      return;
+    }
+
+    const context = await browser.newContext();
+    await context.addCookies(account.cookies);
+    const page = await context.newPage();
+    await page.goto('https://account.uber.com/security', { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    res.json({ ok: true, message: 'Abrindo https://account.uber.com/security com cookies injetados' });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.listen(PORT, () => {
