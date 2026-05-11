@@ -22,8 +22,7 @@ const MOBILE_DEVICE = devices['iPhone 14'];
 // ─── Speed helpers ────────────────────────────────────────────────────────────
 
 function isSpeedMode(): boolean {
-  const cfg = globalState.getConfig();
-  return !!(cfg as any)?.speedMode;
+  return !!(globalState.getState().config as any)?.speedMode;
 }
 
 /** Retorna valor reduzido quando speedMode ativo (40% do original) */
@@ -831,4 +830,287 @@ function detectKycProvider(url: string): string | null {
     if (pattern.test(url)) return provider;
   }
   return null;
+}
+
+// ─── Registra listeners ───────────────────────────────────────────────────────
+
+function registrarListenersFrame(frame: Frame, cycle: number): void {
+  try {
+    const url = frame.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'frame-url', 5, cycle, url);
+  } catch { /* ignora */ }
+}
+
+function registrarListenersPage(page: Page, cycle: number): void {
+  try {
+    for (const frame of page.frames()) {
+      registrarListenersFrame(frame, cycle);
+    }
+  } catch { /* ignora */ }
+
+  page.on('frameattached', (frame) => {
+    registrarListenersFrame(frame, cycle);
+  });
+
+  page.on('framenavigated', (frame) => {
+    const url = frame.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
+  });
+
+  page.on('websocket', (ws) => {
+    const url = ws.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
+  });
+
+  page.on('request', (req) => {
+    const url = req.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
+  });
+
+  page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
+    globalState.addKycSignal(provider, source, weight, cycle, url);
+  }).catch(() => {});
+}
+
+// ─── Cria contexto isolado ────────────────────────────────────────────────────
+
+async function criarContextoIsolado(
+  cycle: number
+): Promise<{ context: BrowserContext; page: Page }> {
+  const proxy = globalState.getProxyForCycle(cycle);
+
+  const context = await browser!.newContext({
+    ...MOBILE_DEVICE,
+    locale: 'pt-BR',
+    timezoneId: 'America/Sao_Paulo',
+    geolocation: { latitude: -23.5505, longitude: -46.6333 },
+    permissions: ['geolocation'],
+    extraHTTPHeaders: {
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    },
+    ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
+  });
+
+  await context.addInitScript({ content: stealthScript });
+  await context.addInitScript({ content: KYC_INIT_SCRIPT });
+
+  await context.route('**/*', (route) => {
+    const url = route.request().url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
+    route.continue();
+  });
+
+  const page = await context.newPage();
+
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      mobile: true,
+      width: MOBILE_DEVICE.viewport?.width ?? 390,
+      height: MOBILE_DEVICE.viewport?.height ?? 844,
+      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
+      screenOrientation: { angle: 0, type: 'portraitPrimary' },
+    });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: MOBILE_DEVICE.userAgent ?? '',
+      acceptLanguage: 'pt-BR,pt;q=0.9',
+      platform: 'iPhone',
+    });
+    globalState.addLog(
+      'info',
+      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})${proxy ? ` | Proxy: ${proxy.server}` : ''}`,
+      cycle
+    );
+  } catch (e) {
+    globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
+  }
+
+  registrarListenersPage(page, cycle);
+
+  context.on('page', (novaPage) => {
+    globalState.addLog('info', `📌 Nova aba/popup aberta: ${novaPage.url() || '(carregando...)'}`, cycle);
+    registrarListenersPage(novaPage, cycle);
+  });
+
+  contextosPorCiclo.set(cycle, context);
+  return { context, page };
+}
+
+// ─── Flow principal ───────────────────────────────────────────────────────────
+
+export class MockPlaywrightFlow {
+  static async init(headless = false): Promise<void> {
+    if (browser) {
+      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
+      return;
+    }
+    if (browserLaunching) {
+      globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
+      const deadline = Date.now() + 30_000;
+      while (!browser && Date.now() < deadline) {
+        await new Promise<void>((r) => setTimeout(r, 200));
+      }
+      if (!browser) throw new Error('Timeout aguardando browser iniciar');
+      return;
+    }
+    browserLaunching = true;
+    try {
+      globalState.addLog('info', '🦁 Iniciando Brave...');
+      browser = await chromiumExtra.launch({
+        headless,
+        executablePath: BRAVE_PATH,
+        slowMo: 0,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-infobars',
+          '--disable-dev-shm-usage',
+          '--no-first-run',
+          '--no-default-browser-check',
+        ],
+      }) as unknown as Browser;
+      globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
+    } finally {
+      browserLaunching = false;
+    }
+  }
+
+  static async execute(
+    cadastroUrl: string,
+    config: {
+      emailProvider: EmailProvider;
+      tempMailApiKey: string;
+      otpTimeout: number;
+      extraDelay: number;
+      inviteCode: string;
+    },
+    cycle: number
+  ): Promise<void> {
+    if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
+
+    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
+    const { context, page: p } = await criarContextoIsolado(cycle);
+
+    const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
+
+    try {
+      await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await humanPause(randInt(sp(800), sp(1600)));
+      globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
+
+      const emailAccount = await client.createRandomEmail();
+      const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
+      globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
+
+      globalState.setPayload(cycle, {
+        nome: payload.nome,
+        sobrenome: payload.sobrenome,
+        email: payload.email,
+        telefone: payload.telefone,
+        senha: payload.senha,
+        localizacao: payload.localizacao,
+        codigoIndicacao: payload.codigoIndicacao,
+      });
+
+      // ── 1. EMAIL ──────────────────────────────────────────────────────────────
+      globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
+      await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
+
+      // ── 2. OTP ────────────────────────────────────────────────────────────────
+      globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
+      const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
+      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
+
+      await humanPause(randInt(sp(800), sp(1400)));
+      const digits = otp.replace(/\D/g, '').split('');
+      for (let i = 0; i < digits.length; i++) {
+        await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
+        await humanPause(randInt(sp(50), sp(120)));
+      }
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
+
+      // ── 3. TELEFONE ───────────────────────────────────────────────────────────
+      await humanPause(randInt(sp(400), sp(900)));
+      await humanType(p, '#PHONE_NUMBER', payload.telefone);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
+
+      // ── 4. SENHA ──────────────────────────────────────────────────────────────
+      await humanPause(randInt(sp(400), sp(900)));
+      await humanType(p, '#PASSWORD', payload.senha);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', '🔒 Senha preenchida', cycle);
+
+      // ── 5. NOME ───────────────────────────────────────────────────────────────
+      await humanPause(randInt(sp(400), sp(900)));
+      await humanType(p, '#FIRST_NAME', payload.nome);
+      await humanPause(randInt(sp(200), sp(400)));
+      await humanType(p, '#LAST_NAME', payload.sobrenome);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await humanClick(p, '#forward-button');
+      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
+
+      // ── 6. TERMOS ─────────────────────────────────────────────────────────────
+      await aceitarTermos(p);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await humanClick(p, '#forward-button');
+
+      // ── Pós-cadastro ──────────────────────────────────────────────────────────
+      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
+      await humanPause(randInt(sp(700), sp(1400)));
+      globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
+
+      await dispensarCookies(p);
+      await selecionarCidade(p, payload.localizacao, cycle);
+      await dispensarCookies(p);
+
+      await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
+      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await dispensarCookies(p);
+      await humanClick(p, '[data-testid="submit-button"]');
+      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
+
+      await dispensarWhatsApp(p, cycle);
+      await clicarFotoPerfil(p, cycle, context);
+
+      const aindaAberta = contextosPorCiclo.has(cycle);
+      if (aindaAberta) {
+        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
+      } else {
+        globalState.addLog('info', `✅ Ciclo #${cycle} concluído!`, cycle);
+      }
+
+    } catch (error) {
+      globalState.clearPayload(cycle);
+      await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
+      await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
+      throw error;
+    }
+  }
+
+  static async cleanup(): Promise<void> {
+    for (const [cycle, ctx] of contextosPorCiclo.entries()) {
+      await ctx.close().catch(() => {});
+      globalState.addLog('info', `🗑️ Aba do ciclo #${cycle} fechada`);
+    }
+    contextosPorCiclo.clear();
+    await browser?.close().catch(() => {});
+    browser = null;
+    globalState.addLog('info', '🧹 Browser fechado');
+  }
 }
