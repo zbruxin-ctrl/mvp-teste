@@ -15,6 +15,9 @@ let browser: Browser | null = null;
 let browserLaunching = false;
 const contextosPorCiclo = new Map<number, BrowserContext>();
 
+/** Timeout máximo de um ciclo completo (10 minutos). Evita abas zumbis. */
+const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
+
 const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
 
 const MOBILE_DEVICE = devices['iPhone 14'];
@@ -883,6 +886,22 @@ async function criarContextoIsolado(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
+  // ── Log de proxy ── (resposta à pergunta: "o proxy está sendo usado?")
+  if (proxy) {
+    globalState.addLog(
+      'info',
+      `🌐 [Proxy] Ciclo #${cycle} → usando proxy: ${proxy.server}` +
+      (proxy.username ? ` | usuário: ${proxy.username}` : ''),
+      cycle
+    );
+  } else {
+    globalState.addLog(
+      'warn',
+      `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy (conexão direta)`,
+      cycle
+    );
+  }
+
   const context = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -924,7 +943,7 @@ async function criarContextoIsolado(
     });
     globalState.addLog(
       'info',
-      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})${proxy ? ` | Proxy: ${proxy.server}` : ''}`,
+      `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})`,
       cycle
     );
   } catch (e) {
@@ -940,6 +959,18 @@ async function criarContextoIsolado(
 
   contextosPorCiclo.set(cycle, context);
   return { context, page };
+}
+
+// ─── Fecha contexto zumbi ─────────────────────────────────────────────────────
+
+async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void> {
+  const ctx = contextosPorCiclo.get(cycle);
+  if (ctx) {
+    globalState.addLog('warn', `🧹 Fechando aba do ciclo #${cycle} — motivo: ${motivo}`, cycle);
+    await ctx.close().catch(() => {});
+    contextosPorCiclo.delete(cycle);
+  }
+  globalState.clearPayload(cycle);
 }
 
 // ─── Flow principal ───────────────────────────────────────────────────────────
@@ -995,6 +1026,35 @@ export class MockPlaywrightFlow {
   ): Promise<void> {
     if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
 
+    // ── Timeout global: garante que ciclos travados não fiquem abertos para sempre ──
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`⏱️ Ciclo #${cycle} excedeu o timeout de ${CYCLE_TIMEOUT_MS / 60_000} min`)),
+        CYCLE_TIMEOUT_MS
+      )
+    );
+
+    try {
+      await Promise.race([timeoutPromise, MockPlaywrightFlow._executarCiclo(cadastroUrl, config, cycle)]);
+    } catch (error) {
+      // Fecha a aba do ciclo que travou (erro real ou timeout)
+      await fecharContextoCiclo(cycle, String(error));
+      throw error;
+    }
+  }
+
+  /** Lógica real do ciclo — separada para permitir o Promise.race com timeout */
+  private static async _executarCiclo(
+    cadastroUrl: string,
+    config: {
+      emailProvider: EmailProvider;
+      tempMailApiKey: string;
+      otpTimeout: number;
+      extraDelay: number;
+      inviteCode: string;
+    },
+    cycle: number
+  ): Promise<void> {
     globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
     const { context, page: p } = await criarContextoIsolado(cycle);
 
