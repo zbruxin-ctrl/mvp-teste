@@ -3,6 +3,9 @@
   "appName": "MVP Bot",
   "webDir": "www",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "url": "https://murky-residual-outlast.ngrok-free.dev",
+    "cleartext": true,
+    "allowNavigation": ["*"]
   }
 }
