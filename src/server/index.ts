@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { globalState } from '../state/globalState';
 import { MockPlaywrightFlow } from '../playwright/mockFlow';
+import * as accountStore from '../store/accountStore';
 import { Config } from '../types';
 
 const app = express();
@@ -78,9 +79,10 @@ function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config
   return { ok: true, data: body };
 }
 
-app.get('/api/status', (_req, res) => { res.json(globalState.getState()); });
-app.get('/api/logs',   (_req, res) => { res.json(globalState.getLogs()); });
-app.get('/api/kyc',    (_req, res) => { res.json(globalState.getKycState()); });
+app.get('/api/status',   (_req, res) => { res.json(globalState.getState()); });
+app.get('/api/logs',     (_req, res) => { res.json(globalState.getLogs()); });
+app.get('/api/kyc',      (_req, res) => { res.json(globalState.getKycState()); });
+app.get('/api/accounts', requireAuth, (_req, res) => { res.json(accountStore.list()); });
 
 app.post('/api/logs/clear', requireAuth, (_req, res) => {
   globalState.clearLogs();
@@ -122,6 +124,11 @@ app.post('/api/stop', requireAuth, (_req, res) => {
 app.post('/api/kyc/clear', requireAuth, (_req, res) => {
   globalState.clearKycState();
   res.json({ ok: true });
+});
+
+app.delete('/api/accounts/:id', requireAuth, (req, res) => {
+  const removed = accountStore.remove(req.params.id);
+  res.json({ ok: removed });
 });
 
 app.listen(PORT, () => {

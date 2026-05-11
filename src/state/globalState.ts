@@ -4,7 +4,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export type CycleExecutor = (config: Config, cycle: number) => Promise<void>;
 
-// ─── KYC State ────────────────────────────────────────────────────────────────────────
+// ─── KYC State ────────────────────────────────────────────────────────────────
 
 export interface KycSignal {
   provider: 'Socure' | 'Veriff' | string;
@@ -30,21 +30,24 @@ function kycLevel(score: number): KycProviderState['level'] {
   return 'WEAK';
 }
 
-// ─── Helpers de proxy ─────────────────────────────────────────────────────────────
+// ─── Payload por ciclo ────────────────────────────────────────────────────────
 
-/**
- * Parseia uma string de proxy em ProxyConfig.
- * Suporta:
- *   host:porta
- *   host:porta:usuario:senha
- *   http(s)://usuario:senha@host:porta
- *   socks5://usuario:senha@host:porta
- */
+export interface CyclePayload {
+  nome: string;
+  sobrenome: string;
+  email: string;
+  telefone: string;
+  senha: string;
+  localizacao: string;
+  codigoIndicacao: string;
+}
+
+// ─── Helpers de proxy ─────────────────────────────────────────────────────────
+
 export function parseProxyString(raw: string): ProxyConfig | null {
   raw = raw.trim();
   if (!raw) return null;
 
-  // Formato URL completo (http://, https://, socks5://)
   if (/^(https?|socks[45]):\/\//i.test(raw)) {
     try {
       const u = new URL(raw);
@@ -57,7 +60,6 @@ export function parseProxyString(raw: string): ProxyConfig | null {
     }
   }
 
-  // Formato host:porta ou host:porta:usuario:senha
   const parts = raw.split(':');
   if (parts.length === 2) {
     return { server: `http://${parts[0]}:${parts[1]}` };
@@ -73,7 +75,7 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   return null;
 }
 
-// ─── GlobalState ─────────────────────────────────────────────────────────────────────
+// ─── GlobalState ──────────────────────────────────────────────────────────────
 
 class GlobalState {
   private state: AppState = {
@@ -102,10 +104,27 @@ class GlobalState {
   private currentCycle = 0;
   private executor: CycleExecutor | null = null;
 
-  // KYC isolado por ciclo: cycle → provider → KycProviderState
+  // KYC isolado por ciclo
   private kycByCycle: KycByCycle = {};
 
-  // ─── Proxy API ───────────────────────────────────────────────────────────────────
+  // Payload de cadastro por ciclo
+  private payloadByCycle: Record<number, CyclePayload> = {};
+
+  // ─── Payload API ─────────────────────────────────────────────────────────────
+
+  setPayload(cycle: number, payload: CyclePayload): void {
+    this.payloadByCycle[cycle] = payload;
+  }
+
+  getPayload(cycle: number): CyclePayload | undefined {
+    return this.payloadByCycle[cycle];
+  }
+
+  clearPayload(cycle: number): void {
+    delete this.payloadByCycle[cycle];
+  }
+
+  // ─── Proxy API ───────────────────────────────────────────────────────────────
 
   getProxyForCycle(cycle: number): ProxyConfig | undefined {
     const proxies = this.state.config.proxies;
@@ -120,7 +139,7 @@ class GlobalState {
     return proxy;
   }
 
-  // ─── KYC API ────────────────────────────────────────────────────────────────────
+  // ─── KYC API ─────────────────────────────────────────────────────────────────
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
     if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
@@ -166,7 +185,7 @@ class GlobalState {
     this.kycByCycle = {};
   }
 
-  // ─── Core API ─────────────────────────────────────────────────────────────────────
+  // ─── Core API ────────────────────────────────────────────────────────────────
 
   setExecutor(fn: CycleExecutor): void {
     this.executor = fn;
