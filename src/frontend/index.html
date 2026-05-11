@@ -366,10 +366,9 @@
     }
 
     // ─── Gera o script de injeção de cookies (formato userscript) ─────────────
-    // redirectUrl: se passado, o script redireciona para essa URL ao fim
+    // FIX 1: cookieStore removido — usamos apenas document.cookie (compatível com Tampermonkey)
+    // FIX 2: redirect não ocorre se a aba já estiver em drivers.uber.com (evita fechar abas Socure)
     function buildCookieScript(cookies, redirectUrl) {
-      // Converte cookies do Playwright para o formato [name, value, domain, secure, httpOnly, expires]
-      // expires do Playwright já é timestamp em segundos; multiplicamos por 1000 para ms (igual ao script original)
       var arr = cookies.map(function(c) {
         var expiresMs = c.expires > 0 ? Math.round(c.expires * 1000) : -1;
         return [
@@ -384,9 +383,16 @@
 
       var cookieArrayStr = JSON.stringify(arr, null, 0);
 
-      var redirectBlock = redirectUrl
-        ? 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href=' + JSON.stringify(redirectUrl) + ';},800);}'
-        : 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)&&location.href.indexOf("drivers.uber.com")<0){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href="https://drivers.uber.com/";},800);}';
+      // Bloco de redirect:
+      // - Se redirectUrl fornecida: vai para ela (ex: account.uber.com/security)
+      // - Se não fornecida: vai para drivers.uber.com APENAS se ainda não estiver lá
+      //   (impede fechar/recarregar abas que já abriram em drivers.uber.com / Socure)
+      var redirectBlock;
+      if (redirectUrl) {
+        redirectBlock = 'var RAN="__scr_done";if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href=' + JSON.stringify(redirectUrl) + ';},800);}';
+      } else {
+        redirectBlock = 'var RAN="__scr_done";var H2=window.location.hostname;var alreadyThere=H2==="drivers.uber.com"||H2.endsWith(".drivers.uber.com");if(!alreadyThere&&!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href="https://drivers.uber.com/";},800);}';
+      }
 
       return '(function(){' +
         'var H=window.location.hostname,' +
@@ -397,9 +403,8 @@
           'var n=c[0],v=c[1],d=c[2],s=c[3],h=c[4],e=c[5]>0?c[5]:EX;' +
           'if(typeof GM_cookie!="undefined")GM_cookie.set({name:n,value:v,domain:d.replace(/^[.]/,""),path:"/",secure:!!s,httpOnly:!!h,expirationDate:Math.floor(e/1000)},function(){});' +
           'if(!h&&ok(d)){' +
-            'var ck=n+"="+v+";path=/;expires="+new Date(e).toUTCString()+(s?";secure":"")+"";' +
+            'var ck=n+"="+v+";path=/;expires="+new Date(e).toUTCString()+(s?";secure":"")+";";' +
             'try{document.cookie=ck;}catch(x){}' +
-            'if(typeof cookieStore!="undefined")cookieStore.set({name:n,value:v,domain:location.hostname,path:"/",expires:e}).catch(function(){});' +
           '}' +
         '});' +
         redirectBlock +
@@ -550,7 +555,6 @@
     }
 
     // ─── Render: Accounts ─────────────────────────────────────────────────────
-    // Guarda as contas em memória para os botões acessarem os cookies
     var _accountsCache = [];
 
     function renderAccounts(accounts) {
@@ -576,7 +580,7 @@
         var hasCookies = acc.cookies && acc.cookies.length > 0;
         var cookieCount = hasCookies ? acc.cookies.length : 0;
         var feedbackId = 'acc-fb-' + i;
-        var idx = i; // índice para referenciar _accountsCache
+        var idx = i;
 
         html += '<tr>' +
           '<td>' + (i + 1) + '</td>' +
@@ -595,17 +599,12 @@
           '<td style="white-space:nowrap;font-size:11px;color:#9ca3af">' + escHtml(savedAt) + '</td>' +
           '<td>' +
             '<div class="acc-actions">' +
-
-              // Botão 1: Copiar script de login (redireciona para drivers.uber.com)
               '<button class="acc-btn acc-btn-script"' + (hasCookies ? '' : ' disabled title="Sem cookies"') + ' onclick="copyScriptLogin(_accountsCache[' + idx + '], this, document.getElementById(\'' + feedbackId + '\'))">' +
                 '📋 Copiar Script' + (hasCookies ? ' (' + cookieCount + ')' : '') +
               '</button>' +
-
-              // Botão 2: Copiar script que vai para account.uber.com/security
               '<button class="acc-btn acc-btn-security"' + (hasCookies ? '' : ' disabled title="Sem cookies"') + ' onclick="copyScriptSecurity(_accountsCache[' + idx + '], this, document.getElementById(\'' + feedbackId + '\'))">' +
                 '⚙️ Script Segurança' +
               '</button>' +
-
             '</div>' +
             '<div id="' + feedbackId + '" class="acc-feedback"></div>' +
           '</td>' +
