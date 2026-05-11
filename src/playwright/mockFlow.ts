@@ -560,6 +560,124 @@ function resolverProviderDominante(
   return melhor;
 }
 
+// ─── Polling do botão "Tirar foto" ───────────────────────────────────────────────
+
+/**
+ * Tenta clicar no botão de "Tirar foto" com polling estilo OTP:
+ *  - poll a cada POLL_INTERVAL_MS
+ *  - a cada 2 polls sem encontrar: faz scroll (para revelar elemento fora da tela)
+ *  - a cada 3 polls sem encontrar: re-clica no item "Foto do perfil" (volta à origem)
+ *  - loga cada tentativa numerada
+ *  - retorna true se clicou, false se esgotou o tempo
+ */
+async function pollingBotaoTirarFoto(
+  p: Page,
+  seletoresItem: string[],
+  seletoresBotao: string[],
+  cycle: number,
+  timeoutMs = 60_000
+): Promise<boolean> {
+  const POLL_INTERVAL_MS = isSpeedMode() ? 1_500 : 3_000;
+  const inicio = Date.now();
+  let tentativa = 0;
+
+  globalState.addLog('info', `📸 [TirarFoto] Iniciando polling (timeout: ${timeoutMs / 1000}s, intervalo: ${POLL_INTERVAL_MS / 1000}s)`, cycle);
+
+  while (Date.now() - inicio < timeoutMs) {
+    tentativa++;
+    globalState.addLog('info', `🔄 [TirarFoto] Poll #${tentativa} — buscando botão...`, cycle);
+
+    // 1ª prioridade: tentar cada seletor do botão diretamente
+    for (const sel of seletoresBotao) {
+      try {
+        const el = p.locator(sel).first();
+        const visivel = await el.isVisible({ timeout: 1200 }).catch(() => false);
+        if (visivel) {
+          const box = await el.boundingBox().catch(() => null);
+          if (box) {
+            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+            await humanPause(randInt(sp(200), sp(400)));
+          }
+          await el.click({ force: true, timeout: 5000 });
+          globalState.addLog('info', `✅ [TirarFoto] Poll #${tentativa} — botão clicado! (${sel})`, cycle);
+          return true;
+        }
+      } catch { /* tenta próximo seletor */ }
+    }
+
+    globalState.addLog('info', `📍 [TirarFoto] Poll #${tentativa} — botão não encontrado ainda`, cycle);
+
+    // A cada 2 polls: scroll para revelar botões fora da tela
+    if (tentativa % 2 === 0) {
+      try {
+        const scrollY = tentativa % 4 === 0 ? 0 : 300;
+        await p.evaluate(`window.scrollBy(0, ${scrollY})`);
+        globalState.addLog('info', `📌 [TirarFoto] Poll #${tentativa} — scroll aplicado (${scrollY > 0 ? '+' + scrollY : 'topo'})`, cycle);
+        await humanPause(randInt(sp(300), sp(600)));
+
+        // Tenta de novo após o scroll
+        for (const sel of seletoresBotao) {
+          try {
+            const el = p.locator(sel).first();
+            const visivel = await el.isVisible({ timeout: 1200 }).catch(() => false);
+            if (visivel) {
+              const box = await el.boundingBox().catch(() => null);
+              if (box) {
+                await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+                await humanPause(randInt(sp(200), sp(400)));
+              }
+              await el.click({ force: true, timeout: 5000 });
+              globalState.addLog('info', `✅ [TirarFoto] Poll #${tentativa} (pós-scroll) — botão clicado! (${sel})`, cycle);
+              return true;
+            }
+          } catch { /* ignora */ }
+        }
+      } catch (e) {
+        globalState.addLog('warn', `⚠️ [TirarFoto] Poll #${tentativa} — erro no scroll: ${e}`, cycle);
+      }
+    }
+
+    // A cada 3 polls: re-clicar no item "Foto do perfil" para reabrir a tela
+    if (tentativa % 3 === 0) {
+      globalState.addLog('info', `🔁 [TirarFoto] Poll #${tentativa} — re-clicando em "Foto do perfil"...`, cycle);
+      try {
+        await p.evaluate('window.scrollTo(0, 0)');
+        await humanPause(randInt(sp(400), sp(700)));
+
+        for (const sel of seletoresItem) {
+          try {
+            const el = p.locator(sel).first();
+            const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
+            if (visivel) {
+              const box = await el.boundingBox().catch(() => null);
+              if (box) {
+                await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+                await humanPause(randInt(sp(200), sp(400)));
+              }
+              await el.click({ force: true, timeout: 5000 });
+              globalState.addLog('info', `📸 [TirarFoto] Poll #${tentativa} — "Foto do perfil" re-clicado (${sel})`, cycle);
+              await humanPause(randInt(sp(1000), sp(2000)));
+              break;
+            }
+          } catch { /* ignora */ }
+        }
+      } catch (e) {
+        globalState.addLog('warn', `⚠️ [TirarFoto] Poll #${tentativa} — erro no re-clique: ${e}`, cycle);
+      }
+    }
+
+    // Aguarda próximo poll
+    const restante = timeoutMs - (Date.now() - inicio);
+    if (restante > 0) {
+      globalState.addLog('info', `⏳ [TirarFoto] Poll #${tentativa} — aguardando ${POLL_INTERVAL_MS / 1000}s (restam ${Math.round(restante / 1000)}s)...`, cycle);
+      await humanPause(POLL_INTERVAL_MS);
+    }
+  }
+
+  globalState.addLog('warn', `❌ [TirarFoto] Timeout após ${tentativa} polls (${timeoutMs / 1000}s) — botão não encontrado`, cycle);
+  return false;
+}
+
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
@@ -578,16 +696,20 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     'li:has-text("Foto")',
   ];
 
-  const SELETORES_TIRAR = [
+  const SELETORES_BOTAO_FOTO = [
     '[data-dgui="button"]:has-text("Tirar foto")',
     'button:has-text("Tirar foto")',
     'button:has-text("Usar meu telefone")',
     'button:has-text("Enviar foto")',
     'button:has-text("Escolher foto")',
+    'button:has-text("Take photo")',
+    'button:has-text("Upload photo")',
     '[data-testid="step-bottom-navigation"] button',
     '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
+    '[data-dgui="button"]',
   ];
 
+  // ── 1. Aguarda e clica em "Foto do perfil" na lista ─────────────────────────────
   const TIMEOUT_ITEM = 20_000;
   const inicioItem = Date.now();
   let clicouItem = false;
@@ -619,42 +741,22 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     return;
   }
 
-  await humanPause(randInt(sp(1500), sp(2500)));
+  await humanPause(randInt(sp(1200), sp(2000)));
 
-  let botaoFotoClicado = false;
-  for (let tentativa = 0; tentativa < 6; tentativa++) {
-    for (const sel of SELETORES_TIRAR) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-        if (visivel) {
-          const box = await el.boundingBox().catch(() => null);
-          if (box) {
-            await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-            await humanPause(randInt(sp(300), sp(600)));
-          }
-          await el.click({ force: true, timeout: 5000 });
-          globalState.addLog('info', `📸 Botão foto clicado (${sel})`, cycle);
-          botaoFotoClicado = true;
-          break;
-        }
-      } catch { /* tenta próximo */ }
-    }
-    if (botaoFotoClicado) break;
-    if (tentativa > 0 && tentativa % 2 === 0) {
-      try {
-        await p.evaluate('window.scrollBy(0, 200)');
-        globalState.addLog('info', '📸 Scroll aplicado para revelar botão de foto', cycle);
-      } catch { /* ignora */ }
-    }
-    await humanPause(isSpeedMode() ? 1000 : 2500);
+  // ── 2. Polling do botão "Tirar foto" (estilo OTP) ───────────────────────────
+  const botaoClicado = await pollingBotaoTirarFoto(
+    p,
+    SELETORES_ITEM,
+    SELETORES_BOTAO_FOTO,
+    cycle,
+    60_000   // 60s de timeout total
+  );
+
+  if (!botaoClicado) {
+    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após polling completo', cycle);
   }
 
-  if (!botaoFotoClicado) {
-    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
-  }
-
-  // ── Salva conta quando Socure confirmado ──────────────────────────────────────
+  // ── 3. Salva conta quando Socure confirmado ────────────────────────────────
   const salvarContaSocure = async (): Promise<void> => {
     const payload = globalState.getPayload(cycle);
     if (!payload) {
@@ -698,6 +800,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     }
   };
 
+  // ── 4. Aguarda KYC inicializar ────────────────────────────────────────────────
   globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
   const fimKyc1 = Date.now() + 30_000;
   while (Date.now() < fimKyc1) {
@@ -710,51 +813,19 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     await humanPause(isSpeedMode() ? 500 : 1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado em 30s — tentando re-clique após scroll...', cycle);
-  try {
-    await p.evaluate('window.scrollTo(0, 0)');
-    await humanPause(randInt(sp(500), sp(1000)));
-
-    for (const sel of SELETORES_ITEM) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
-        if (visivel) {
-          await el.click({ force: true, timeout: 5000 });
-          globalState.addLog('info', `📸 Re-clique em "Foto do perfil" (${sel})`, cycle);
-          break;
-        }
-      } catch { /* ignora */ }
+  globalState.addLog('warn', '⚠️ KYC não detectado após 30s — aguardando mais 20s (re-poll)...', cycle);
+  const fimKyc2 = Date.now() + 20_000;
+  while (Date.now() < fimKyc2) {
+    const dominante = resolverProviderDominante(cycle, 4);
+    if (dominante) {
+      globalState.addLog('info', `✅ KYC detectado (re-poll): ${dominante.provider} (score=${dominante.score})`, cycle);
+      await detectarEFechar(dominante.provider, dominante.score, dominante.url);
+      return;
     }
-    await humanPause(randInt(sp(1500), sp(2500)));
-
-    for (const sel of SELETORES_TIRAR) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-        if (visivel) {
-          await el.click({ force: true, timeout: 5000 });
-          globalState.addLog('info', `📸 Re-clique no botão de foto (${sel})`, cycle);
-          break;
-        }
-      } catch { /* ignora */ }
-    }
-
-    const fimKyc2 = Date.now() + 20_000;
-    while (Date.now() < fimKyc2) {
-      const dominante = resolverProviderDominante(cycle, 4);
-      if (dominante) {
-        globalState.addLog('info', `✅ KYC detectado (re-clique): ${dominante.provider} (score=${dominante.score})`, cycle);
-        await detectarEFechar(dominante.provider, dominante.score, dominante.url);
-        return;
-      }
-      await humanPause(isSpeedMode() ? 500 : 1000);
-    }
-  } catch (e) {
-    globalState.addLog('warn', `⚠️ Erro no re-clique: ${e}`, cycle);
+    await humanPause(isSpeedMode() ? 500 : 1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após re-clique. Aba mantida aberta para inspeção.', cycle);
+  globalState.addLog('warn', '⚠️ KYC não detectado após 50s total. Aba mantida aberta para inspeção.', cycle);
 }
 
 // ─── Stealth script ───────────────────────────────────────────────────────────
@@ -889,7 +960,6 @@ async function criarContextoIsolado(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
-  // ── Log de proxy ── (confirma qual proxy está sendo usado)
   if (proxy) {
     globalState.addLog(
       'info',
@@ -1029,7 +1099,6 @@ export class MockPlaywrightFlow {
   ): Promise<void> {
     if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
 
-    // ── Timeout global: garante que ciclos travados não fiquem abertos para sempre ──
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error(`⏱️ Ciclo #${cycle} excedeu o timeout de ${CYCLE_TIMEOUT_MS / 60_000} min`)),
@@ -1045,7 +1114,6 @@ export class MockPlaywrightFlow {
     }
   }
 
-  /** Lógica real do ciclo — separada para permitir o Promise.race com timeout */
   private static async _executarCiclo(
     cadastroUrl: string,
     config: {
