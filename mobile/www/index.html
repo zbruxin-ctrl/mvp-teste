@@ -271,6 +271,8 @@
     .btn-ghost:hover { background: var(--surface-3); }
     .btn-danger { background: rgba(224,80,80,0.15); color: var(--error); border: 1px solid rgba(224,80,80,0.3); }
     .btn-danger:hover { background: rgba(224,80,80,0.25); }
+    .btn-success { background: rgba(76,175,118,0.15); color: var(--success); border: 1px solid rgba(76,175,118,0.3); }
+    .btn-success:hover { background: rgba(76,175,118,0.25); }
 
     /* ─── KPI GRID ───────────────────────────────────────── */
     .kpi-grid {
@@ -410,6 +412,112 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* ─── CONFIG FORM ────────────────────────────────────── */
+    .config-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-4);
+      margin-bottom: var(--space-5);
+    }
+    .config-group { display: flex; flex-direction: column; gap: var(--space-2); }
+    .config-group.full { grid-column: 1 / -1; }
+    .config-label {
+      font-size: var(--text-xs);
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .config-hint {
+      font-size: 11px;
+      color: var(--faint);
+      margin-top: 2px;
+    }
+    .config-input {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-sm);
+      color: var(--text);
+      width: 100%;
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .config-input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(79,142,245,0.15);
+    }
+    .config-input::placeholder { color: var(--faint); }
+    .config-input[type="number"] { font-variant-numeric: tabular-nums; }
+
+    /* toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-3) var(--space-4);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+    .toggle-info { display: flex; flex-direction: column; gap: 2px; }
+    .toggle-name { font-size: var(--text-sm); font-weight: 500; }
+    .toggle-desc { font-size: 11px; color: var(--muted); }
+    .toggle-switch {
+      position: relative;
+      width: 40px; height: 22px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: var(--faint);
+      border-radius: var(--radius-full);
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+    .toggle-track::before {
+      content: '';
+      position: absolute;
+      left: 3px; top: 3px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform var(--transition);
+    }
+    .toggle-switch input:checked + .toggle-track { background: var(--primary); }
+    .toggle-switch input:checked + .toggle-track::before { transform: translateX(18px); }
+
+    /* section divider */
+    .config-section-title {
+      font-size: var(--text-xs);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding-bottom: var(--space-3);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: var(--space-4);
+      grid-column: 1 / -1;
+    }
+
+    .config-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--border);
+    }
+    .config-save-status {
+      font-size: var(--text-xs);
+      color: var(--muted);
+      flex: 1;
+    }
+    .config-save-status.saved { color: var(--success); }
+    .config-save-status.saving { color: var(--warning); }
+    .config-save-status.error  { color: var(--error); }
+
     /* ─── RESPONSIVE ─────────────────────────────────────── */
     @media (max-width: 768px) {
       #sidebar { transform: translateX(calc(-1 * var(--sidebar-w))); }
@@ -418,6 +526,7 @@
       .menu-btn { display: flex; }
       .topbar-url { display: none; }
       .cards-row { grid-template-columns: 1fr; }
+      .config-grid { grid-template-columns: 1fr; }
       .status-actions { flex-direction: column; width: 100%; }
       .status-banner { flex-wrap: wrap; }
       #content { padding: var(--space-4) var(--space-3); }
@@ -432,7 +541,6 @@
 <!-- SIDEBAR -->
 <aside id="sidebar" aria-label="Menu lateral">
   <div class="sidebar-logo">
-    <!-- Logo SVG -->
     <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-label="MVP Bot">
       <rect width="32" height="32" rx="8" fill="var(--primary)" opacity="0.15"/>
       <rect x="2" y="2" width="28" height="28" rx="7" fill="none" stroke="var(--primary)" stroke-width="1.5"/>
@@ -595,12 +703,109 @@
 
     <!-- ═══ VIEW: CONFIG ══════════════════════════════════ -->
     <div class="view" id="view-config">
-      <h1 style="font-size:var(--text-lg);font-weight:700;margin-bottom:var(--space-4)">Configurações</h1>
-      <div class="card" style="padding:var(--space-6)">
-        <p style="color:var(--muted);font-size:var(--text-xs)">
-          ⚙️ Tela de Configurações — em breve na <strong>Parte 2</strong>.<br/>
-          Incluirá todos os campos do config do bot (intervalos, limites, tokens, etc.)
-        </p>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-5)">
+        <div>
+          <h1 style="font-size:var(--text-lg);font-weight:700">Configurações</h1>
+          <p style="font-size:var(--text-xs);color:var(--muted);margin-top:var(--space-1)">Ajuste os parâmetros do bot. As alterações são aplicadas no próximo ciclo.</p>
+        </div>
+        <button class="btn btn-ghost" onclick="loadConfig()" title="Recarregar do servidor">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:middle;margin-right:4px"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 1 0 .49-3.67"/></svg>
+          Recarregar
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Parâmetros do Bot</span>
+          <span class="card-badge" id="configLoadedBadge" style="display:none">Carregado</span>
+        </div>
+        <div style="padding:var(--space-5)">
+          <form id="configForm" onsubmit="saveConfig(event)">
+
+            <!-- Seção: URLs & Tokens -->
+            <div class="config-grid">
+              <div class="config-section-title">URLs &amp; Tokens</div>
+
+              <div class="config-group full">
+                <label class="config-label" for="cfgCadastroUrl">URL de Cadastro</label>
+                <input class="config-input" type="url" id="cfgCadastroUrl" name="cadastroUrl"
+                       placeholder="https://exemplo.com/cadastro" autocomplete="off"/>
+                <span class="config-hint">Endereço da página de cadastro que o bot acessa</span>
+              </div>
+
+              <div class="config-group full">
+                <label class="config-label" for="cfgTempMailApiKey">TempMail API Key</label>
+                <input class="config-input" type="password" id="cfgTempMailApiKey" name="tempMailApiKey"
+                       placeholder="••••••••••••••••" autocomplete="new-password"/>
+                <span class="config-hint">Chave da API do serviço de e-mail temporário</span>
+              </div>
+            </div>
+
+            <!-- Seção: Intervalos & Delays -->
+            <div class="config-grid">
+              <div class="config-section-title">Intervalos &amp; Delays</div>
+
+              <div class="config-group">
+                <label class="config-label" for="cfgCycleInterval">Intervalo entre Ciclos</label>
+                <input class="config-input" type="number" id="cfgCycleInterval" name="cycleInterval"
+                       min="1000" max="3600000" step="1000" placeholder="60000"/>
+                <span class="config-hint">Milissegundos entre cada loop (padrão: 60000 = 1 min)</span>
+              </div>
+
+              <div class="config-group">
+                <label class="config-label" for="cfgOtpTimeout">Timeout OTP</label>
+                <input class="config-input" type="number" id="cfgOtpTimeout" name="otpTimeout"
+                       min="5000" max="300000" step="1000" placeholder="30000"/>
+                <span class="config-hint">Tempo máximo aguardando o OTP (padrão: 30000 = 30s)</span>
+              </div>
+
+              <div class="config-group">
+                <label class="config-label" for="cfgExtraDelay">Extra Delay por Passo</label>
+                <input class="config-input" type="number" id="cfgExtraDelay" name="extraDelay"
+                       min="0" max="10000" step="100" placeholder="2000"/>
+                <span class="config-hint">Delay adicional em ms em cada etapa do pipeline</span>
+              </div>
+
+              <!-- Visualização em tempo real dos valores em segundos -->
+              <div class="config-group" style="justify-content:flex-end">
+                <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4)">
+                  <div style="font-size:var(--text-xs);color:var(--muted);margin-bottom:var(--space-2);font-weight:600">Resumo em segundos</div>
+                  <div style="font-size:11px;color:var(--muted);line-height:2;font-variant-numeric:tabular-nums">
+                    Ciclo: <strong id="previewCycle" style="color:var(--text)">—</strong><br/>
+                    OTP: <strong id="previewOtp" style="color:var(--text)">—</strong><br/>
+                    Delay: <strong id="previewDelay" style="color:var(--text)">—</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Seção: Comportamento -->
+            <div class="config-grid">
+              <div class="config-section-title">Comportamento</div>
+
+              <div class="config-group full">
+                <div class="toggle-row">
+                  <div class="toggle-info">
+                    <span class="toggle-name">Modo Headless</span>
+                    <span class="toggle-desc">Executa o navegador em segundo plano sem interface gráfica</span>
+                  </div>
+                  <label class="toggle-switch" aria-label="Modo headless">
+                    <input type="checkbox" id="cfgHeadless" name="headless" checked/>
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Ações -->
+            <div class="config-actions">
+              <span class="config-save-status" id="configSaveStatus">Nenhuma alteração pendente</span>
+              <button type="button" class="btn btn-ghost" onclick="resetConfigForm()">Desfazer</button>
+              <button type="submit" class="btn btn-primary" id="btnSaveConfig">Salvar Configurações</button>
+            </div>
+
+          </form>
+        </div>
       </div>
     </div>
 
@@ -635,8 +840,8 @@
 <script>
   // ─── CONFIG ─────────────────────────────────────────────
   const BASE = 'https://murky-residual-outlast.ngrok-free.dev';
-  const POLL_STATUS = 4000;   // ms
-  const POLL_LOGS   = 3000;   // ms
+  const POLL_STATUS = 4000;
+  const POLL_LOGS   = 3000;
   const MAX_LOGS    = 100;
 
   // ─── STATE ──────────────────────────────────────────────
@@ -645,6 +850,7 @@
   let statusTimer = null;
   let logsTimer   = null;
   let currentView = 'dashboard';
+  let savedConfig = {};
 
   // ─── THEME ──────────────────────────────────────────────
   function toggleTheme() {
@@ -677,6 +883,7 @@
     currentView = name;
     closeSidebar();
     if (name === 'logs') renderFullLogs();
+    if (name === 'config') loadConfig();
   }
 
   // ─── TOAST ──────────────────────────────────────────────
@@ -754,8 +961,8 @@
     text.textContent = running ? 'Rodando' : 'Parado';
     sub.textContent  = data.message || (running ? 'Bot em execução' : 'Bot pausado');
 
-    const ok    = data.ciclosOk    ?? data.successCount ?? 0;
-    const total = data.ciclosTotal ?? data.totalCount   ?? 0;
+    const ok    = data.ciclosOk    ?? data.successCount ?? data.cyclesCompleted ?? 0;
+    const total = data.ciclosTotal ?? data.totalCount   ?? data.cyclesTotal     ?? 0;
     const ativos= data.ativos      ?? data.activeCount  ?? 0;
     const taxa  = total > 0 ? Math.round((ok/total)*100) + '%' : '—';
 
@@ -823,7 +1030,7 @@
     const l = line.toLowerCase();
     if (l.includes('erro') || l.includes('error') || l.includes('fail')) return 'error';
     if (l.includes('warn') || l.includes('aviso')) return 'warn';
-    if (l.includes('ok') || l.includes('sucesso') || l.includes('success') || l.includes('✓')) return 'ok';
+    if (l.includes('ok') || l.includes('sucesso') || l.includes('success') || l.includes('✓') || l.includes('concluído') || l.includes('conclud')) return 'ok';
     return 'info';
   }
 
@@ -881,6 +1088,99 @@
     }
   }
 
+  // ─── CONFIG FORM ─────────────────────────────────────────
+  async function loadConfig() {
+    const badge  = document.getElementById('configLoadedBadge');
+    const status = document.getElementById('configSaveStatus');
+    status.className = 'config-save-status saving';
+    status.textContent = 'Carregando do servidor...';
+    try {
+      const res = await api('/config');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const cfg = data.config || data;
+      savedConfig = { ...cfg };
+      fillConfigForm(cfg);
+      badge.style.display = '';
+      status.className = 'config-save-status saved';
+      status.textContent = 'Configurações carregadas ✓';
+    } catch(e) {
+      // Sem endpoint /config — preenche com defaults
+      fillConfigForm({});
+      status.className = 'config-save-status';
+      status.textContent = 'Endpoint /config não encontrado — valores padrão';
+    }
+  }
+
+  function fillConfigForm(cfg) {
+    const v = (key, fallback) => cfg[key] !== undefined ? cfg[key] : fallback;
+    document.getElementById('cfgCadastroUrl').value    = v('cadastroUrl', '');
+    document.getElementById('cfgTempMailApiKey').value = v('tempMailApiKey', '');
+    document.getElementById('cfgCycleInterval').value  = v('cycleInterval', 60000);
+    document.getElementById('cfgOtpTimeout').value     = v('otpTimeout', 30000);
+    document.getElementById('cfgExtraDelay').value     = v('extraDelay', 2000);
+    document.getElementById('cfgHeadless').checked     = v('headless', true);
+    updatePreview();
+  }
+
+  function updatePreview() {
+    const cycle = parseInt(document.getElementById('cfgCycleInterval').value) || 0;
+    const otp   = parseInt(document.getElementById('cfgOtpTimeout').value)    || 0;
+    const delay = parseInt(document.getElementById('cfgExtraDelay').value)    || 0;
+    document.getElementById('previewCycle').textContent = cycle ? (cycle/1000).toFixed(1) + 's' : '—';
+    document.getElementById('previewOtp').textContent   = otp   ? (otp/1000).toFixed(1)   + 's' : '—';
+    document.getElementById('previewDelay').textContent = delay ? (delay/1000).toFixed(2) + 's' : '—';
+  }
+
+  // Atualiza preview ao digitar
+  ['cfgCycleInterval','cfgOtpTimeout','cfgExtraDelay'].forEach(id => {
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById(id).addEventListener('input', updatePreview);
+    });
+  });
+
+  async function saveConfig(e) {
+    e.preventDefault();
+    const btn    = document.getElementById('btnSaveConfig');
+    const status = document.getElementById('configSaveStatus');
+    btn.disabled = true;
+    btn.textContent = 'Salvando...';
+    status.className = 'config-save-status saving';
+    status.textContent = 'Enviando para o servidor...';
+
+    const payload = {
+      cadastroUrl:    document.getElementById('cfgCadastroUrl').value.trim(),
+      tempMailApiKey: document.getElementById('cfgTempMailApiKey').value.trim(),
+      cycleInterval:  parseInt(document.getElementById('cfgCycleInterval').value)  || 60000,
+      otpTimeout:     parseInt(document.getElementById('cfgOtpTimeout').value)     || 30000,
+      extraDelay:     parseInt(document.getElementById('cfgExtraDelay').value)     || 2000,
+      headless:       document.getElementById('cfgHeadless').checked,
+    };
+
+    try {
+      const res = await api('/config', { method: 'POST', body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      savedConfig = { ...payload };
+      status.className = 'config-save-status saved';
+      status.textContent = 'Configurações salvas com sucesso ✓';
+      toast('Configurações salvas!', 'ok');
+    } catch(e) {
+      status.className = 'config-save-status error';
+      status.textContent = 'Erro ao salvar: ' + (e.message || 'falha de rede');
+      toast('Erro ao salvar config: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Salvar Configurações';
+    }
+  }
+
+  function resetConfigForm() {
+    fillConfigForm(savedConfig);
+    const status = document.getElementById('configSaveStatus');
+    status.className = 'config-save-status';
+    status.textContent = 'Alterações desfeitas';
+  }
+
   // ─── UTIL ────────────────────────────────────────────────
   function escHtml(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -896,13 +1196,19 @@
     logsTimer   = setInterval(fetchLogs,   POLL_LOGS);
   }
 
-  // Detecta tema do sistema
   if (window.matchMedia('(prefers-color-scheme: light)').matches) {
     document.documentElement.setAttribute('data-theme', 'light');
     document.getElementById('themeIcon').innerHTML = '<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
   }
 
-  document.addEventListener('DOMContentLoaded', startPolling);
+  document.addEventListener('DOMContentLoaded', () => {
+    startPolling();
+    // Listeners dos inputs de preview
+    ['cfgCycleInterval','cfgOtpTimeout','cfgExtraDelay'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', updatePreview);
+    });
+  });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) startPolling(); });
 </script>
 </body>
