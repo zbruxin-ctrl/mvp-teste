@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>MVP Bot — Logs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&display=swap" rel="stylesheet"/>
+  <style>
+    :root{
+      --font-body:'Inter',system-ui,sans-serif;
+      --text-xs:clamp(0.75rem,0.7rem + 0.25vw,0.875rem);
+      --text-sm:clamp(0.875rem,0.8rem + 0.35vw,1rem);
+      --text-base:clamp(1rem,0.95rem + 0.25vw,1.125rem);
+      --text-lg:clamp(1.125rem,1rem + 0.75vw,1.5rem);
+      --space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;
+      --space-5:1.25rem;--space-6:1.5rem;--space-8:2rem;
+      --radius-sm:.375rem;--radius-md:.5rem;--radius-lg:.75rem;--radius-xl:1rem;--radius-full:9999px;
+      --transition:180ms cubic-bezier(0.16,1,0.3,1);
+      --sidebar-w:220px;
+    }
+    [data-theme="dark"]{
+      --bg:#0f0f0f;--surface:#161616;--surface-2:#1c1c1c;--surface-3:#242424;
+      --border:rgba(255,255,255,0.08);--text:#e8e8e6;--muted:#7a7978;--faint:#3a3a38;
+      --primary:#4f8ef5;--success:#4caf76;--warning:#e8a030;--error:#e05050;
+      --shadow:0 4px 20px rgba(0,0,0,0.5);
+    }
+    [data-theme="light"]{
+      --bg:#f5f5f3;--surface:#ffffff;--surface-2:#f8f8f6;--surface-3:#efefed;
+      --border:rgba(0,0,0,0.08);--text:#1a1a18;--muted:#6a6a68;--faint:#dcdcd8;
+      --primary:#2563eb;--success:#15803d;--warning:#b45309;--error:#dc2626;
+      --shadow:0 4px 20px rgba(0,0,0,0.08);
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    html{-webkit-font-smoothing:antialiased;}
+    body{font-family:var(--font-body);font-size:var(--text-sm);color:var(--text);background:var(--bg);min-height:100dvh;display:flex;overflow:hidden;}
+    button{cursor:pointer;border:none;background:none;font:inherit;color:inherit;}
+    input,select{font:inherit;color:inherit;}
+
+    /* SIDEBAR */
+    #sidebar{width:var(--sidebar-w);min-height:100dvh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;position:fixed;left:0;top:0;bottom:0;z-index:100;transform:translateX(0);transition:transform var(--transition);}
+    .sidebar-logo{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-5) var(--space-4);border-bottom:1px solid var(--border);}
+    .sidebar-logo-text{font-size:var(--text-sm);font-weight:700;letter-spacing:-0.02em;}
+    .sidebar-logo-sub{font-size:var(--text-xs);color:var(--muted);margin-top:1px;}
+    nav{flex:1;padding:var(--space-3) var(--space-2);}
+    .nav-section{font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--muted);text-transform:uppercase;padding:var(--space-3) var(--space-3) var(--space-2);}
+    .nav-item{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);color:var(--muted);font-size:var(--text-sm);font-weight:500;text-decoration:none;transition:color var(--transition),background var(--transition);cursor:pointer;margin-bottom:2px;border:none;background:none;width:100%;text-align:left;}
+    .nav-item:hover{color:var(--text);background:var(--surface-2);}
+    .nav-item.active{color:var(--primary);background:rgba(79,142,245,0.1);}
+    .nav-item svg{flex-shrink:0;opacity:0.7;}
+    .nav-item.active svg{opacity:1;}
+    .sidebar-footer{padding:var(--space-4);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);}
+    .conn-dot{width:8px;height:8px;border-radius:50%;background:var(--faint);transition:background var(--transition);}
+    .conn-dot.online{background:var(--success);box-shadow:0 0 6px var(--success);}
+    .conn-dot.offline{background:var(--error);}
+    .conn-label{font-size:var(--text-xs);color:var(--muted);flex:1;}
+    .theme-btn{width:32px;height:32px;border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;color:var(--muted);transition:color var(--transition),background var(--transition);}
+    .theme-btn:hover{color:var(--text);background:var(--surface-2);}
+    #overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99;}
+    #overlay.show{display:block;}
+
+    /* MAIN */
+    #main{flex:1;margin-left:var(--sidebar-w);min-height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
+    #topbar{height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 var(--space-5);gap:var(--space-3);flex-shrink:0;}
+    .menu-btn{display:none;width:36px;height:36px;border-radius:var(--radius-md);align-items:center;justify-content:center;color:var(--muted);transition:color var(--transition),background var(--transition);}
+    .menu-btn:hover{color:var(--text);background:var(--surface-2);}
+    .topbar-title{font-size:var(--text-sm);font-weight:600;flex:1;}
+    #content{flex:1;overflow-y:auto;padding:var(--space-5);display:flex;flex-direction:column;}
+
+    /* TOOLBAR */
+    .logs-toolbar{
+      display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-4);flex-wrap:wrap;
+    }
+    .logs-toolbar h1{font-size:var(--text-lg);font-weight:700;flex:1;min-width:120px;}
+    .search-input{
+      background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);
+      padding:var(--space-2) var(--space-3);font-size:var(--text-xs);color:var(--text);
+      outline:none;width:200px;transition:border-color var(--transition),box-shadow var(--transition);
+    }
+    .search-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,142,245,0.15);}
+    .filter-btn{
+      padding:var(--space-2) var(--space-3);
+      border-radius:var(--radius-full);
+      font-size:var(--text-xs);font-weight:600;
+      border:1px solid var(--border);
+      background:var(--surface-2);color:var(--muted);
+      transition:all var(--transition);
+    }
+    .filter-btn:hover{background:var(--surface-3);color:var(--text);}
+    .filter-btn.active-filter{background:rgba(79,142,245,0.15);color:var(--primary);border-color:rgba(79,142,245,0.3);}
+    .filter-btn.f-ok.active-filter{background:rgba(76,175,118,0.15);color:var(--success);border-color:rgba(76,175,118,0.3);}
+    .filter-btn.f-warn.active-filter{background:rgba(232,160,48,0.15);color:var(--warning);border-color:rgba(232,160,48,0.3);}
+    .filter-btn.f-error.active-filter{background:rgba(224,80,80,0.15);color:var(--error);border-color:rgba(224,80,80,0.3);}
+
+    .btn{padding:var(--space-2) var(--space-4);border-radius:var(--radius-md);font-size:var(--text-xs);font-weight:600;cursor:pointer;border:none;transition:opacity var(--transition),transform var(--transition);white-space:nowrap;}
+    .btn:active{transform:scale(0.97);}
+    .btn-ghost{background:var(--surface-2);color:var(--text);border:1px solid var(--border);}
+    .btn-ghost:hover{background:var(--surface-3);}
+    .btn-danger{background:rgba(224,80,80,0.12);color:var(--error);border:1px solid rgba(224,80,80,0.25);}
+    .btn-danger:hover{background:rgba(224,80,80,0.2);}
+
+    /* LOG CARD */
+    .log-card{
+      background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+      flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;
+    }
+    .log-card-header{display:flex;align-items:center;justify-content:space-between;padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--border);flex-wrap:wrap;gap:var(--space-2);}
+    .log-meta{display:flex;align-items:center;gap:var(--space-3);}
+    .log-badge{font-size:var(--text-xs);padding:2px var(--space-2);border-radius:var(--radius-full);background:var(--surface-2);color:var(--muted);font-variant-numeric:tabular-nums;}
+    .log-badge.live{background:rgba(76,175,118,0.15);color:var(--success);}
+    .live-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 1.5s ease infinite;display:inline-block;margin-right:4px;}
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+    .log-actions{display:flex;gap:var(--space-2);}
+
+    .log-box{
+      flex:1;overflow-y:auto;padding:var(--space-3) var(--space-4);
+      font-family:'Menlo','Monaco','Consolas',monospace;
+      font-size:11px;line-height:1.8;
+    }
+    .log-line{display:flex;align-items:baseline;gap:var(--space-2);padding:1px 0;}
+    .log-line.hidden{display:none;}
+    .log-time{color:var(--faint);flex-shrink:0;user-select:none;font-size:10px;}
+    .log-level{flex-shrink:0;font-size:10px;font-weight:700;width:36px;text-align:center;padding:0 2px;border-radius:2px;}
+    .log-msg{flex:1;word-break:break-word;}
+    .log-line.l-info .log-level{background:rgba(79,142,245,0.12);color:var(--primary);}
+    .log-line.l-info .log-msg{color:var(--muted);}
+    .log-line.l-ok .log-level{background:rgba(76,175,118,0.12);color:var(--success);}
+    .log-line.l-ok .log-msg{color:var(--success);}
+    .log-line.l-warn .log-level{background:rgba(232,160,48,0.12);color:var(--warning);}
+    .log-line.l-warn .log-msg{color:var(--warning);}
+    .log-line.l-error .log-level{background:rgba(224,80,80,0.12);color:var(--error);}
+    .log-line.l-error .log-msg{color:var(--error);}
+
+    .log-highlight{background:rgba(232,160,48,0.3);border-radius:2px;}
+
+    .empty-logs{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-10);color:var(--muted);gap:var(--space-3);text-align:center;}
+    .empty-logs svg{color:var(--faint);}
+    .empty-logs p{font-size:var(--text-xs);max-width:24ch;line-height:1.6;}
+
+    /* TOAST */
+    #toastArea{position:fixed;bottom:var(--space-5);right:var(--space-5);z-index:999;display:flex;flex-direction:column;gap:var(--space-2);}
+    .toast{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-4);font-size:var(--text-xs);box-shadow:var(--shadow);animation:toastIn .2s ease;max-width:280px;}
+    .toast.ok{border-color:rgba(76,175,118,0.4);color:var(--success);}
+    .toast.error{border-color:rgba(224,80,80,0.4);color:var(--error);}
+    @keyframes toastIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+    .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+
+    /* RESPONSIVE */
+    @media(max-width:768px){
+      #sidebar{transform:translateX(calc(-1 * var(--sidebar-w)));}
+      #sidebar.open{transform:translateX(0);}
+      #main{margin-left:0;}
+      .menu-btn{display:flex;}
+      .search-input{width:100%;}
+      #content{padding:var(--space-4) var(--space-3);}
+      .logs-toolbar{gap:var(--space-2);}
+    }
+    @media(min-width:769px){#overlay{display:none !important;}}
+  </style>
+</head>
+<body>
+
+<aside id="sidebar" aria-label="Menu lateral">
+  <div class="sidebar-logo">
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="8" fill="var(--primary)" opacity="0.15"/>
+      <rect x="2" y="2" width="28" height="28" rx="7" fill="none" stroke="var(--primary)" stroke-width="1.5"/>
+      <circle cx="11" cy="13" r="2" fill="var(--primary)"/>
+      <circle cx="21" cy="13" r="2" fill="var(--primary)"/>
+      <path d="M10 20c1.5 2 10.5 2 12 0" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M16 4v3M16 25v3M4 16h3M25 16h3" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+    </svg>
+    <div>
+      <div class="sidebar-logo-text">MVP Bot</div>
+      <div class="sidebar-logo-sub">Control Panel</div>
+    </div>
+  </div>
+  <nav>
+    <div class="nav-section">Principal</div>
+    <a class="nav-item" href="index.html">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </a>
+    <a class="nav-item active" href="logs.html" aria-current="page">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Logs
+    </a>
+    <div class="nav-section" style="margin-top:var(--space-3)">Configuração</div>
+    <a class="nav-item" href="config.html">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      Configurações
+    </a>
+    <a class="nav-item" href="contas.html">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Contas Salvas
+    </a>
+    <a class="nav-item" href="kyc.html">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      KYC Detector
+    </a>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="conn-dot" id="connDot"></div>
+    <span class="conn-label" id="connLabel">Verificando...</span>
+    <button class="theme-btn" onclick="toggleTheme()" aria-label="Alternar tema">
+      <svg id="themeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </div>
+</aside>
+
+<div id="overlay" onclick="closeSidebar()"></div>
+
+<main id="main">
+  <header id="topbar">
+    <button class="menu-btn" onclick="toggleSidebar()" aria-label="Abrir menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <span class="topbar-title">Logs do Servidor</span>
+    <span id="topbarSpinner" style="display:none"><span class="spinner"></span></span>
+  </header>
+
+  <div id="content">
+    <!-- Toolbar -->
+    <div class="logs-toolbar">
+      <h1>Logs</h1>
+      <input class="search-input" type="text" id="searchInput" placeholder="Buscar nos logs..." oninput="applyFilters()" aria-label="Buscar nos logs"/>
+      <button class="filter-btn active-filter" id="fb-all"  onclick="setFilter('all')" >Todos</button>
+      <button class="filter-btn f-ok"          id="fb-ok"   onclick="setFilter('ok')"  >✓ OK</button>
+      <button class="filter-btn f-warn"        id="fb-warn" onclick="setFilter('warn')">! Warn</button>
+      <button class="filter-btn f-error"       id="fb-error"onclick="setFilter('error')">× Erro</button>
+    </div>
+
+    <!-- Log Card -->
+    <div class="log-card">
+      <div class="log-card-header">
+        <div class="log-meta">
+          <span><span class="live-dot"></span></span>
+          <span class="log-badge live" id="logCount">0 linhas</span>
+          <span class="log-badge" id="filteredCount" style="display:none"></span>
+        </div>
+        <div class="log-actions">
+          <button class="btn btn-ghost" onclick="fetchLogs()" title="Atualizar">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Atualizar
+          </button>
+          <button class="btn btn-ghost" onclick="scrollToBottom()">&#8595; Final</button>
+          <button class="btn btn-danger" onclick="clearLogs()">Limpar</button>
+        </div>
+      </div>
+      <div class="log-box" id="logBox">
+        <div class="empty-logs" id="emptyLogs">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+          <p>Aguardando logs do servidor...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="toastArea" aria-live="polite"></div>
+
+<script>
+  const BASE = 'https://murky-residual-outlast.ngrok-free.dev';
+  const POLL = 3000;
+  const MAX_LOGS = 500;
+  let allLogs = [];
+  let activeFilter = 'all';
+  let pollTimer = null;
+
+  // THEME
+  function toggleTheme(){
+    const h=document.documentElement,d=h.getAttribute('data-theme')==='dark';
+    h.setAttribute('data-theme',d?'light':'dark');
+    document.getElementById('themeIcon').innerHTML=d
+      ?'<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>'
+      :'<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+  }
+  if(window.matchMedia('(prefers-color-scheme: light)').matches){
+    document.documentElement.setAttribute('data-theme','light');
+    document.getElementById('themeIcon').innerHTML='<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
+  }
+
+  // SIDEBAR
+  function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('overlay').classList.toggle('show');}
+  function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');}
+
+  // TOAST
+  function toast(msg,type='info'){
+    const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;
+    document.getElementById('toastArea').appendChild(el);
+    setTimeout(()=>el.remove(),3500);
+  }
+
+  // FETCH
+  async function api(path,opts={}){
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),8000);
+    try{
+      const res=await fetch(BASE+path,{
+        signal:ctrl.signal,
+        headers:{'ngrok-skip-browser-warning':'1','Content-Type':'application/json','x-admin-password':'connect@10',...(opts.headers||{})},
+        ...opts
+      });
+      clearTimeout(tid);
+      return res;
+    }catch(e){clearTimeout(tid);throw e;}
+  }
+
+  function setOnline(v){
+    document.getElementById('connDot').className='conn-dot '+(v?'online':'offline');
+    document.getElementById('connLabel').textContent=v?'Online':'Sem conexão';
+  }
+
+  // CLASSIFY
+  function classifyLog(line){
+    const l=line.toLowerCase();
+    if(l.includes('erro')||l.includes('error')||l.includes('fail')||l.includes('exception')) return 'error';
+    if(l.includes('warn')||l.includes('aviso')||l.includes('atenção')) return 'warn';
+    if(l.includes(' ok')||l.includes('sucesso')||l.includes('success')||l.includes('✓')||l.includes('conclu')) return 'ok';
+    return 'info';
+  }
+
+  function levelLabel(cls){
+    const map={ok:'OK',warn:'AVS',error:'ERR',info:'INF'};
+    return map[cls]||'INF';
+  }
+
+  // HIGHLIGHT
+  function highlight(text, query){
+    if(!query) return escHtml(text);
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    return escHtml(text).replace(new RegExp('('+escaped+')','gi'),'<mark class="log-highlight">$1</mark>');
+  }
+
+  // RENDER
+  function renderLogs(){
+    const box   = document.getElementById('logBox');
+    const empty = document.getElementById('emptyLogs');
+    const query = document.getElementById('searchInput').value.trim().toLowerCase();
+    document.getElementById('logCount').textContent = allLogs.length + ' linhas';
+
+    if(!allLogs.length){
+      box.innerHTML='';
+      box.appendChild(empty);
+      empty.style.display='flex';
+      document.getElementById('filteredCount').style.display='none';
+      return;
+    }
+    empty.style.display='none';
+
+    let filtered=0;
+    const html = allLogs.map(entry=>{
+      const raw   = typeof entry==='string'?entry:(entry.message||JSON.stringify(entry));
+      const time  = typeof entry==='object'&&entry.time?entry.time:'';
+      const cls   = classifyLog(raw);
+      const show  = (activeFilter==='all'||activeFilter===cls) && (!query||raw.toLowerCase().includes(query));
+      if(show) filtered++;
+      return `<div class="log-line l-${cls}${show?'':' hidden'}">
+        <span class="log-time">${escHtml(time)}</span>
+        <span class="log-level">${levelLabel(cls)}</span>
+        <span class="log-msg">${highlight(raw,query)}</span>
+      </div>`;
+    }).join('');
+
+    box.innerHTML=html;
+
+    const fc=document.getElementById('filteredCount');
+    if(activeFilter!=='all'||query){
+      fc.textContent=filtered+' visíveis';
+      fc.style.display='inline';
+    } else {
+      fc.style.display='none';
+    }
+    scrollToBottom();
+  }
+
+  function applyFilters(){ renderLogs(); }
+
+  function setFilter(f){
+    activeFilter=f;
+    ['all','ok','warn','error'].forEach(k=>{
+      const b=document.getElementById('fb-'+k);
+      if(b) b.className='filter-btn'+(k==='ok'?' f-ok':k==='warn'?' f-warn':k==='error'?' f-error':'')+(f===k?' active-filter':'');
+    });
+    renderLogs();
+  }
+
+  function scrollToBottom(){
+    const box=document.getElementById('logBox');
+    box.scrollTop=box.scrollHeight;
+  }
+
+  // FETCH LOGS
+  async function fetchLogs(){
+    document.getElementById('topbarSpinner').style.display='inline-block';
+    try{
+      const res=await api('/api/logs');
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const data=await res.json();
+      const lines=Array.isArray(data)?data:(data.logs||data.lines||[]);
+      allLogs=lines.slice(-MAX_LOGS);
+      setOnline(true);
+      renderLogs();
+    }catch(e){
+      setOnline(false);
+    }finally{
+      document.getElementById('topbarSpinner').style.display='none';
+    }
+  }
+
+  // CLEAR LOGS
+  async function clearLogs(){
+    if(!confirm('Limpar todos os logs no servidor?')) return;
+    try{
+      const res=await api('/api/logs/clear',{method:'POST'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      allLogs=[];
+      renderLogs();
+      toast('Logs limpos no servidor','ok');
+    }catch(e){
+      toast('Falha ao limpar: '+(e.message||'erro'),'error');
+    }
+  }
+
+  function escHtml(s){
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // INIT
+  document.addEventListener('DOMContentLoaded',()=>{
+    fetchLogs();
+    pollTimer=setInterval(fetchLogs,POLL);
+  });
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden){ fetchLogs(); pollTimer=setInterval(fetchLogs,POLL); }
+    else clearInterval(pollTimer);
+  });
+</script>
+</body>
+</html>
