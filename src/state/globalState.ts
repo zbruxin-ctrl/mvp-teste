@@ -44,29 +44,41 @@ export interface CyclePayload {
 
 // ─── Helpers de proxy ─────────────────────────────────────────────────────────
 
+/**
+ * Parseia uma string de proxy nos formatos:
+ *   http://user:pass@host:port          ← formato principal (DataImpulse etc.)
+ *   socks5://user:pass@host:port
+ *   host:port
+ *   host:port:user:pass
+ *
+ * Usa regex própria para extrair user/pass — evita bugs do new URL() com
+ * usernames que contêm '__', '.' ou outros caracteres especiais.
+ */
 export function parseProxyString(raw: string): ProxyConfig | null {
   raw = raw.trim();
   if (!raw) return null;
 
-  if (/^(https?|socks[45]):\/\//i.test(raw)) {
-    try {
-      const u = new URL(raw);
-      const server = `${u.protocol}//${u.host}`;
-      const username = u.username ? decodeURIComponent(u.username) : undefined;
-      const password = u.password ? decodeURIComponent(u.password) : undefined;
-      return { server, username, password };
-    } catch {
-      return null;
-    }
+  // Formato: scheme://user:pass@host:port  ou  scheme://host:port
+  const schemeMatch = raw.match(
+    /^(https?|socks[45]):\/\/(?:([^:@]+):([^@]*)@)?([^:/]+):(\d+)\s*$/i
+  );
+  if (schemeMatch) {
+    const [, scheme, user, pass, host, port] = schemeMatch;
+    return {
+      server:   `${scheme}://${host}:${port}`,
+      username: user  || undefined,
+      password: pass  || undefined,
+    };
   }
 
+  // Formato legado: host:port  ou  host:port:user:pass
   const parts = raw.split(':');
   if (parts.length === 2) {
     return { server: `http://${parts[0]}:${parts[1]}` };
   }
   if (parts.length === 4) {
     return {
-      server: `http://${parts[0]}:${parts[1]}`,
+      server:   `http://${parts[0]}:${parts[1]}`,
       username: parts[2],
       password: parts[3],
     };

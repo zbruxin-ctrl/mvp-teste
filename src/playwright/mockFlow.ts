@@ -28,9 +28,12 @@ function isSpeedMode(): boolean {
   return !!(globalState.getState().config as any)?.speedMode;
 }
 
-/** Retorna valor reduzido quando speedMode ativo (40% do original) */
+/**
+ * Em speedMode: 40% do delay normal + 500ms fixos de margem.
+ * Garante mínimo de 530ms para evitar rejeições por automação.
+ */
 function sp(normal: number): number {
-  return isSpeedMode() ? Math.max(30, Math.round(normal * 0.4)) : normal;
+  return isSpeedMode() ? Math.max(530, Math.round(normal * 0.4) + 500) : normal;
 }
 
 // ─── Helpers humanos ──────────────────────────────────────────────────────────
@@ -651,7 +654,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
     globalState.addLog('warn', '⚠️ Botão de foto não encontrado após 6 tentativas', cycle);
   }
 
-  // ── Salva conta quando Socure confirmado ──────────────────────────────────
+  // ── Salva conta quando Socure confirmado ──────────────────────────────────────
   const salvarContaSocure = async (): Promise<void> => {
     const payload = globalState.getPayload(cycle);
     if (!payload) {
@@ -886,7 +889,7 @@ async function criarContextoIsolado(
 ): Promise<{ context: BrowserContext; page: Page }> {
   const proxy = globalState.getProxyForCycle(cycle);
 
-  // ── Log de proxy ── (resposta à pergunta: "o proxy está sendo usado?")
+  // ── Log de proxy ── (confirma qual proxy está sendo usado)
   if (proxy) {
     globalState.addLog(
       'info',
@@ -1037,7 +1040,6 @@ export class MockPlaywrightFlow {
     try {
       await Promise.race([timeoutPromise, MockPlaywrightFlow._executarCiclo(cadastroUrl, config, cycle)]);
     } catch (error) {
-      // Fecha a aba do ciclo que travou (erro real ou timeout)
       await fecharContextoCiclo(cycle, String(error));
       throw error;
     }
@@ -1080,14 +1082,14 @@ export class MockPlaywrightFlow {
         codigoIndicacao: payload.codigoIndicacao,
       });
 
-      // ── 1. EMAIL ──────────────────────────────────────────────────────────────
+      // ── 1. EMAIL ────────────────────────────────────────────────────────────────
       globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // ── 2. OTP ────────────────────────────────────────────────────────────────
+      // ── 2. OTP ──────────────────────────────────────────────────────────────────
       globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
       const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
@@ -1102,21 +1104,21 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
-      // ── 3. TELEFONE ───────────────────────────────────────────────────────────
+      // ── 3. TELEFONE ─────────────────────────────────────────────────────────────
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
-      // ── 4. SENHA ──────────────────────────────────────────────────────────────
+      // ── 4. SENHA ────────────────────────────────────────────────────────────────
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PASSWORD', payload.senha);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
       globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
-      // ── 5. NOME ───────────────────────────────────────────────────────────────
+      // ── 5. NOME ─────────────────────────────────────────────────────────────────
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#FIRST_NAME', payload.nome);
       await humanPause(randInt(sp(200), sp(400)));
@@ -1125,12 +1127,12 @@ export class MockPlaywrightFlow {
       await humanClick(p, '#forward-button');
       globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
-      // ── 6. TERMOS ─────────────────────────────────────────────────────────────
+      // ── 6. TERMOS ───────────────────────────────────────────────────────────────
       await aceitarTermos(p);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
 
-      // ── Pós-cadastro ──────────────────────────────────────────────────────────
+      // ── Pós-cadastro ────────────────────────────────────────────────────────────
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(sp(700), sp(1400)));
       globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
