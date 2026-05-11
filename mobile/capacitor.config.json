@@ -1,0 +1,8 @@
+{
+  "appId": "com.mvp.automation",
+  "appName": "MVP Bot",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}

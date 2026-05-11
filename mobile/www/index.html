@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MVP Bot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f0f;
+      color: #f1f1f1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding: 24px;
+    }
+    .logo { font-size: 48px; margin-bottom: 12px; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    p  { font-size: 14px; color: #888; margin-bottom: 32px; text-align: center; max-width: 300px; }
+    .input-group { width: 100%; max-width: 360px; margin-bottom: 16px; }
+    label { font-size: 12px; color: #aaa; display: block; margin-bottom: 6px; }
+    input {
+      width: 100%;
+      padding: 14px 16px;
+      background: #1c1c1c;
+      border: 1.5px solid #2e2e2e;
+      border-radius: 10px;
+      color: #f1f1f1;
+      font-size: 15px;
+      outline: none;
+    }
+    input:focus { border-color: #6366f1; }
+    button {
+      width: 100%;
+      max-width: 360px;
+      padding: 15px;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .2s;
+      margin-bottom: 10px;
+    }
+    button:active { background: #4f46e5; }
+    .hint { font-size: 11px; color: #555; text-align: center; max-width: 300px; line-height: 1.6; margin-top: 8px; }
+    .hint code { color: #888; background: #1c1c1c; padding: 1px 5px; border-radius: 4px; }
+    #errorMsg { color: #ef4444; font-size: 13px; margin-top: -6px; margin-bottom: 10px; display: none; }
+  </style>
+</head>
+<body>
+  <div class="logo">🤖</div>
+  <h1>MVP Bot</h1>
+  <p>Insira o endereço do seu servidor para acessar o dashboard.</p>
+
+  <div class="input-group">
+    <label>URL do Servidor (ngrok ou IP local)</label>
+    <input id="urlInput" type="url" placeholder="https://abc123.ngrok-free.app" />
+  </div>
+
+  <div id="errorMsg">URL inválida. Use o formato https://... ou http://...</div>
+
+  <button onclick="conectar()">Conectar ao Dashboard</button>
+  <button onclick="usarLocal()" style="background:#1c1c1c;border:1.5px solid #2e2e2e;color:#aaa;font-weight:500;">Usar IP local (192.168.x.x:3000)</button>
+
+  <p class="hint">
+    No PC com o bot rodando, execute:<br/>
+    <code>ngrok http 3000</code><br/>
+    e cole a URL gerada acima.
+  </p>
+
+  <script>
+    var STORAGE_KEY = 'mvp_server_url';
+
+    // Tenta recuperar URL salva
+    var saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      document.getElementById('urlInput').value = saved;
+    }
+
+    function isValidUrl(str) {
+      try { var u = new URL(str); return u.protocol === 'http:' || u.protocol === 'https:'; }
+      catch(e) { return false; }
+    }
+
+    function conectar() {
+      var url = document.getElementById('urlInput').value.trim().replace(/\/$/, '');
+      var errEl = document.getElementById('errorMsg');
+      if (!isValidUrl(url)) {
+        errEl.style.display = 'block';
+        return;
+      }
+      errEl.style.display = 'none';
+      localStorage.setItem(STORAGE_KEY, url);
+      window.location.href = url;
+    }
+
+    function usarLocal() {
+      // Detecta IP local via WebRTC
+      var pc = new RTCPeerConnection({ iceServers: [] });
+      pc.createDataChannel('');
+      pc.createOffer().then(function(o) { pc.setLocalDescription(o); });
+      pc.onicecandidate = function(e) {
+        if (!e || !e.candidate) return;
+        var m = e.candidate.candidate.match(/([0-9]{1,3}(\.[0-9]{1,3}){3})/);
+        if (m && !m[1].startsWith('127.')) {
+          var url = 'http://' + m[1] + ':3000';
+          document.getElementById('urlInput').value = url;
+          pc.close();
+        }
+      };
+    }
+
+    // Se já tem URL salva válida, vai direto sem mostrar tela de config
+    if (saved && isValidUrl(saved)) {
+      // Aguarda 1s pra não ser instantâneo demais
+      setTimeout(function() {
+        window.location.href = saved;
+      }, 800);
+    }
+  </script>
+</body>
+</html>
