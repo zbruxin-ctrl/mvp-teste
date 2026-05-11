@@ -34,16 +34,31 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Python deps
+        run: pip install pillow
+
+      - name: Generate icon and splash
+        working-directory: mobile
+        run: python3 resources/generate-assets.py
+
       - name: Install Capacitor dependencies
         working-directory: mobile
         run: npm install
 
+      - name: Install @capacitor/assets
+        working-directory: mobile
+        run: npm install -D @capacitor/assets
+
       - name: Init Capacitor Android
         working-directory: mobile
         run: |
-          npx cap init "MVP Bot" "com.mvp.automation" --web-dir www
+          npx cap init "ConnectDroid" "com.mvp.automation" --web-dir www
           npx cap add android
           npx cap sync android
+
+      - name: Generate Android assets
+        working-directory: mobile
+        run: npx capacitor-assets generate --android
 
       - name: Make gradlew executable
         working-directory: mobile/android
@@ -55,16 +70,11 @@ jobs:
 
       - name: Listar APKs gerados
         run: |
-          echo "=== Procurando APKs em mobile/ ==="
-          find mobile -name "*.apk" 2>/dev/null || echo "Nenhum APK encontrado em mobile/"
-          echo "=== Procurando APKs em todo o workspace ==="
           find . -name "*.apk" 2>/dev/null || echo "Nenhum APK encontrado"
-          echo "=== Estrutura de mobile/android/app/build ==="
-          ls -la mobile/android/app/build/outputs/ 2>/dev/null || echo "Pasta outputs nao existe"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: mvp-bot-debug
+          name: connectdroid-debug
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30

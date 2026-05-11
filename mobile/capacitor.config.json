@@ -1,11 +1,19 @@
 {
   "appId": "com.mvp.automation",
-  "appName": "MVP Bot",
+  "appName": "ConnectDroid",
   "webDir": "www",
   "server": {
     "androidScheme": "https",
     "url": "https://murky-residual-outlast.ngrok-free.dev",
     "cleartext": true,
     "allowNavigation": ["*"]
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#080616",
+      "showSpinner": false,
+      "androidScaleType": "CENTER_CROP"
+    }
   }
 }
