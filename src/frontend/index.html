@@ -112,15 +112,41 @@
     .acc-feedback { font-size: 11px; margin-top: 4px; padding: 3px 8px; border-radius: 5px; display: none; }
     .acc-feedback.ok  { display: block; background: #d1fae5; color: #065f46; }
     .acc-feedback.err { display: block; background: #fee2e2; color: #991b1b; }
+    /* Barra de conexão */
+    .conn-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+    .conn-bar.online  { background: #d1fae5; color: #065f46; }
+    .conn-bar.offline { background: #fee2e2; color: #991b1b; }
+    .conn-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .conn-bar.online  .conn-dot { background: #10b981; }
+    .conn-bar.offline .conn-dot { background: #ef4444; }
+    /* Painel URL base */
+    .url-panel { background: #eef2ff; border: 1.5px solid #c7d2fe; border-radius: 10px; padding: 14px; margin-bottom: 18px; }
+    .url-panel label { color: #3730a3; font-weight: 700; margin-bottom: 6px; }
+    .url-panel input { margin-bottom: 0; border-color: #a5b4fc; background: #fff; }
+    .url-panel p { font-size: 11px; color: #6366f1; margin-top: 6px; }
     @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .kyc-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
+
+  <!-- Barra de conexão -->
+  <div id="connBar" class="conn-bar offline">
+    <div class="conn-dot"></div>
+    <span id="connText">Verificando conexão...</span>
+  </div>
+
   <div class="grid">
 
     <!-- Config -->
     <div class="panel">
       <h1>⚙️ Configurações</h1>
+
+      <!-- URL Base (ngrok ou servidor) -->
+      <div class="url-panel">
+        <label for="baseUrl">🌐 URL do Servidor (ngrok / IP)</label>
+        <input id="baseUrl" type="text" placeholder="https://xxxx.ngrok-free.app" value="https://murky-residual-outlast.ngrok-free.dev" oninput="onBaseUrlChange()" />
+        <p>Use a URL do ngrok para acessar remotamente. Deixe vazio para usar localhost.</p>
+      </div>
 
       <label for="adminPassword">🔑 Senha Admin</label>
       <input id="adminPassword" type="password" placeholder="connect@10" value="connect@10" />
@@ -131,12 +157,10 @@
       <div class="provider-card">
         <div class="provider-header">
           <span class="provider-name">📧 Serviço de Email Temporário</span>
-          <!-- badge inicia como Gratuito pois mail.tm é o padrão -->
           <span id="providerBadge" class="provider-badge badge-free">Gratuito</span>
         </div>
         <label for="emailProvider" style="margin-bottom:4px">Provedor</label>
         <select id="emailProvider" onchange="onProviderChange()">
-          <!-- mail.tm como padrão (primeiro = selecionado) -->
           <option value="mail.tm">mail.tm (gratuito, sem API key)</option>
           <option value="temp-mail.io">temp-mail.io (requer API key)</option>
         </select>
@@ -278,6 +302,49 @@
     var _lastAccountsHash = '';
     var _lastLogTs        = null;
 
+    // ─── URL Base (ngrok / servidor) ─────────────────────────────────────────
+    function getBaseUrl() {
+      var raw = (document.getElementById('baseUrl').value || '').trim().replace(/\/$/, '');
+      return raw; // ex: "https://xxxx.ngrok-free.app" ou "" para localhost
+    }
+
+    function apiUrl(path) {
+      var base = getBaseUrl();
+      return base ? base + path : path;
+    }
+
+    function onBaseUrlChange() {
+      // Reinicia o indicador de conexão ao mudar a URL
+      var bar = document.getElementById('connBar');
+      bar.className = 'conn-bar offline';
+      document.getElementById('connText').textContent = 'Verificando...';
+      checkConnection();
+    }
+
+    // ─── Indicador de conexão ─────────────────────────────────────────────────
+    function checkConnection() {
+      fetch(apiUrl('/api/status'), { signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined })
+        .then(function(r) {
+          var bar = document.getElementById('connBar');
+          if (r.ok || r.status === 401) {
+            bar.className = 'conn-bar online';
+            document.getElementById('connText').textContent = '🟢 Conectado — ' + (getBaseUrl() || 'localhost');
+          } else {
+            bar.className = 'conn-bar offline';
+            document.getElementById('connText').textContent = '🔴 Erro ' + r.status + ' — verifique a URL';
+          }
+        })
+        .catch(function() {
+          var bar = document.getElementById('connBar');
+          bar.className = 'conn-bar offline';
+          document.getElementById('connText').textContent = '🔴 Sem conexão — servidor não responde';
+        });
+    }
+
+    setInterval(checkConnection, 8000);
+    checkConnection();
+
+    // ─── Providers ───────────────────────────────────────────────────────────
     function onProviderChange() {
       var provider = document.getElementById('emailProvider').value;
       var wrapper  = document.getElementById('apiKeyWrapper');
@@ -359,7 +426,7 @@
     }
 
     function authHeaders() {
-      return { 'Content-Type': 'application/json', 'x-admin-password': getPassword() };
+      return { 'Content-Type': 'application/json', 'x-admin-password': getPassword(), 'ngrok-skip-browser-warning': '1' };
     }
 
     function escHtml(str) {
@@ -386,7 +453,6 @@
       });
 
       var cookieArrayStr = JSON.stringify(arr, null, 0);
-
       var targetUrl = redirectUrl || 'https://drivers.uber.com/';
 
       var redirectBlock;
@@ -459,7 +525,7 @@
 
     // ─── API calls ────────────────────────────────────────────────────────────
     function saveConfig() {
-      fetch('/api/config', { method: 'POST', headers: authHeaders(), body: JSON.stringify(buildConfig()) })
+      fetch(apiUrl('/api/config'), { method: 'POST', headers: authHeaders(), body: JSON.stringify(buildConfig()) })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
@@ -473,28 +539,28 @@
     }
 
     function startLoop() {
-      fetch('/api/start', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ config: buildConfig() }) })
+      fetch(apiUrl('/api/start'), { method: 'POST', headers: authHeaders(), body: JSON.stringify({ config: buildConfig() }) })
       .then(function(r) { return r.json(); })
       .then(function(data) { if (!data.ok) alert('Erro ao iniciar loop: ' + (data.error || 'desconhecido')); })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function startOnce() {
-      fetch('/api/start-once', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ config: buildConfig() }) })
+      fetch(apiUrl('/api/start-once'), { method: 'POST', headers: authHeaders(), body: JSON.stringify({ config: buildConfig() }) })
       .then(function(r) { return r.json(); })
       .then(function(data) { if (!data.ok) alert('Erro ao iniciar ciclo: ' + (data.error || 'desconhecido')); })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function stopBot() {
-      fetch('/api/stop', { method: 'POST', headers: authHeaders() })
+      fetch(apiUrl('/api/stop'), { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(data) { if (!data.ok) alert('Erro ao parar: ' + (data.error || 'desconhecido')); })
       .catch(function(e) { alert('Erro de rede: ' + e.message); });
     }
 
     function clearLogs() {
-      fetch('/api/logs/clear', { method: 'POST', headers: authHeaders() })
+      fetch(apiUrl('/api/logs/clear'), { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) document.getElementById('logs').innerHTML = '';
@@ -504,7 +570,7 @@
     }
 
     function clearKyc() {
-      fetch('/api/kyc/clear', { method: 'POST', headers: authHeaders() })
+      fetch(apiUrl('/api/kyc/clear'), { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
@@ -517,17 +583,19 @@
     }
 
     // ─── Polling ──────────────────────────────────────────────────────────────
+    var _pollHeaders = { 'ngrok-skip-browser-warning': '1' };
+
     function pollStatus() {
-      fetch('/api/status').then(function(r) { return r.json(); }).then(renderStatus).catch(function() {});
+      fetch(apiUrl('/api/status'), { headers: _pollHeaders }).then(function(r) { return r.json(); }).then(renderStatus).catch(function() {});
     }
     function pollLogs() {
-      fetch('/api/logs').then(function(r) { return r.json(); }).then(renderLogs).catch(function() {});
+      fetch(apiUrl('/api/logs'), { headers: _pollHeaders }).then(function(r) { return r.json(); }).then(renderLogs).catch(function() {});
     }
     function pollKyc() {
-      fetch('/api/kyc').then(function(r) { return r.json(); }).then(function(data) { renderKyc(data.byCycle || {}); }).catch(function() {});
+      fetch(apiUrl('/api/kyc'), { headers: _pollHeaders }).then(function(r) { return r.json(); }).then(function(data) { renderKyc(data.byCycle || {}); }).catch(function() {});
     }
     function pollAccounts() {
-      fetch('/api/accounts', { headers: { 'x-admin-password': getPassword() } })
+      fetch(apiUrl('/api/accounts'), { headers: { 'x-admin-password': getPassword(), 'ngrok-skip-browser-warning': '1' } })
         .then(function(r) { return r.ok ? r.json() : { accounts: [] }; })
         .then(function(data) { renderAccounts(data.accounts || []); })
         .catch(function() {});
@@ -679,7 +747,7 @@
 
     function selectKycCycle(cycle) {
       _selectedCycle = cycle;
-      fetch('/api/kyc').then(function(r) { return r.json(); }).then(function(data) { renderKyc(data.byCycle || {}); }).catch(function() {});
+      fetch(apiUrl('/api/kyc'), { headers: _pollHeaders }).then(function(r) { return r.json(); }).then(function(data) { renderKyc(data.byCycle || {}); }).catch(function() {});
     }
 
     // ─── Init ─────────────────────────────────────────────────────────────────
