@@ -196,7 +196,6 @@ export class MailTmClient implements IEmailClient {
     return pwd;
   }
 
-  // ─── request com log do status HTTP bruto ────────────────────────────────────
   private async request<T>(
     endpoint: string,
     method: 'GET' | 'POST' = 'GET',
@@ -215,7 +214,6 @@ export class MailTmClient implements IEmailClient {
 
     if (!res) throw new Error(`Mail.tm ${endpoint}: erro de rede/timeout`);
 
-    // 401 explícito — token rejeitado pela API
     if (res.status === 401 && auth) {
       globalState.addLog('warn', '🔑 [mail.tm] 401 recebido — reautenticando...');
       await this.relogin();
@@ -292,22 +290,19 @@ export class MailTmClient implements IEmailClient {
     return { email, token: tokenResp.token };
   }
 
-  // ─── waitForOTP com relogin proativo ─────────────────────────────────────────
   async waitForOTP(email: string, timeoutMs = 90000, cycle?: number): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
-    let emptyPollStreak = 0;          // polls consecutivos com lista vazia
-    const EMPTY_STREAK_RELOGIN = 3;   // relogin após N polls vazios seguidos
+    let emptyPollStreak = 0;
+    const EMPTY_STREAK_RELOGIN = 3;
     const POLL_INTERVAL_MS = 6_000;
     const INITIAL_WAIT_MS  = 8_000;
 
-    // Debug: confirma o estado do token antes de começar
     globalState.addLog('info',
       `⏳ [mail.tm] Aguardando OTP (${Math.round(timeoutMs / 1000)}s) | token: ${
         this.authToken ? this.authToken.slice(0, 12) + '...' : 'NULL ⚠️'
       }`, cycle);
 
-    // Se por algum motivo o token for null, tenta relogin antes de começar
     if (!this.authToken) {
       globalState.addLog('warn', '⚠️ [mail.tm] Token nulo antes do poll — tentando relogin...', cycle);
       await this.relogin();
@@ -367,7 +362,6 @@ export class MailTmClient implements IEmailClient {
           globalState.addLog('info',
             `💭 [mail.tm] Sem novas mensagens (streak vazio: ${emptyPollStreak}) — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
 
-          // Relogin proativo: mail.tm retorna [] silenciosamente quando o token expira
           if (emptyPollStreak > 0 && emptyPollStreak % EMPTY_STREAK_RELOGIN === 0) {
             globalState.addLog('warn',
               `🔑 [mail.tm] ${emptyPollStreak} polls vazios consecutivos — renovando token preventivamente...`, cycle);
@@ -392,11 +386,7 @@ export class MailTmClient implements IEmailClient {
 // ──────────────────────────────────────────────────────────────────────────────────
 // YOPmailClient
 // ──────────────────────────────────────────────────────────────────────────────────
-// Usa @yopmail.com diretamente — domínio principal aceito pelo site-alvo.
-// A lib easy-yopmail só precisa do local part para consultar a inbox.
-// ──────────────────────────────────────────────────────────────────────────────────
 
-// Tipo retornado por getInbox() conforme documentação easy-yopmail
 interface YopInboxResult {
   inbox: Array<{ id: string; subject: string; from: string; timestamp?: string; page?: number }>;
 }
@@ -419,13 +409,11 @@ export class YOPmailClient implements IEmailClient {
     return { email: this.email, token: this.inbox };
   }
 
-  // ─── Extrai OTP do subject sem chamar readMessage ────────────────────────────
   private tryOtpFromSubject(subject: string): string | null {
     const m = subject.match(/\b(\d{4,8})\b/);
     return m ? m[1]! : null;
   }
 
-  // ─── Tenta ler o corpo com múltiplas estratégias ─────────────────────────────
   private async readBodyRobust(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     EasyYopmail: any,
@@ -564,12 +552,214 @@ export class YOPmailClient implements IEmailClient {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────────
+// GuerrillaMailClient  (api.guerrillamail.com — sem API key, gratuito)
+// ──────────────────────────────────────────────────────────────────────────────────
+// A Uber não tem wshu.net/yopmail.com na blocklist deste serviço.
+// Domínios disponíveis: guerrillamailblock.com, grr.la, guerrillamail.info,
+//   guerrillamail.biz, guerrillamail.de, guerrillamail.net, guerrillamail.org,
+//   spam4.me, sharklasers.com, guerrillamail.com
+// ──────────────────────────────────────────────────────────────────────────────────
+
+const GUERRILLA_DOMAINS = [
+  'sharklasers.com',
+  'guerrillamail.info',
+  'grr.la',
+  'guerrillamail.biz',
+  'guerrillamail.de',
+  'guerrillamail.net',
+  'guerrillamail.org',
+  'spam4.me',
+];
+
+interface GuerrillaSetEmailResp {
+  alias: string;
+  email_addr: string;
+  email_timestamp: number;
+  sid_token: string;
+}
+
+interface GuerrillaCheckResp {
+  list: Array<{
+    mail_id: string;
+    mail_from: string;
+    mail_subject: string;
+    mail_excerpt: string;
+    mail_timestamp: string;
+    mail_read: string;
+    mail_date: string;
+  }>;
+  count: string;
+  email: string;
+  alias: string;
+  ts: number;
+  sid_token: string;
+}
+
+interface GuerrillaFetchResp {
+  mail_id: string;
+  mail_from: string;
+  mail_subject: string;
+  mail_body: string;
+  mail_timestamp: string;
+  mail_date: string;
+  sid_token: string;
+}
+
+export class GuerrillaMailClient implements IEmailClient {
+  private sidToken: string | null = null;
+  private emailAddr: string = '';
+  private readonly BASE = 'https://api.guerrillamail.com/ajax.php';
+
+  private async apiGet<T>(params: Record<string, string>): Promise<T> {
+    const qs = new URLSearchParams(params).toString();
+    const url = `${this.BASE}?${qs}`;
+    const res = await safeFetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' },
+      timeoutMs: 15000,
+    });
+    if (!res) throw new Error(`Guerrilla API timeout: ${url}`);
+    if (!res.ok) throw new Error(`Guerrilla API ${res.status}`);
+    const text = await res.text();
+    return JSON.parse(text) as T;
+  }
+
+  async createRandomEmail(): Promise<EmailAccount> {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let localPart = '';
+    for (let i = 0; i < 10; i++) localPart += chars[Math.floor(Math.random() * chars.length)];
+
+    const domain = GUERRILLA_DOMAINS[Math.floor(Math.random() * GUERRILLA_DOMAINS.length)]!;
+
+    globalState.addLog('info', `📧 [guerrilla] Criando email: ${localPart}@${domain}`);
+
+    const resp = await withRetry(
+      'guerrilla setEmailUser',
+      () => this.apiGet<GuerrillaSetEmailResp>({
+        f: 'set_email_user',
+        email_user: localPart,
+        email_domain: domain,
+        lang: 'en',
+      })
+    );
+
+    this.sidToken = resp.sid_token;
+    this.emailAddr = resp.email_addr;
+
+    globalState.addLog('info', `✅ [guerrilla] Email criado: ${this.emailAddr} | sid: ${this.sidToken?.slice(0, 10)}...`);
+    return { email: this.emailAddr, token: this.sidToken ?? '' };
+  }
+
+  async waitForOTP(email: string, timeoutMs = 90_000, cycle?: number): Promise<string> {
+    const startTime = Date.now();
+    const POLL_INTERVAL_MS = 6_000;
+    const INITIAL_WAIT_MS  = 8_000;
+    let seqId = 0;
+    let poll = 0;
+
+    globalState.addLog('info', `⏳ [guerrilla] Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`, cycle);
+    await sleep(INITIAL_WAIT_MS);
+
+    while (Date.now() - startTime < timeoutMs) {
+      if (isStopped()) throw new Error('Parado pelo usuário');
+      poll++;
+
+      try {
+        const params: Record<string, string> = {
+          f: 'check_email',
+          seq: String(seqId),
+          lang: 'en',
+        };
+        if (this.sidToken) params['sid_token'] = this.sidToken;
+
+        const resp = await withRetry(
+          'guerrilla checkEmail',
+          () => this.apiGet<GuerrillaCheckResp>(params),
+          3, 2000
+        );
+
+        // Atualiza sid_token se a API rotacionar
+        if (resp.sid_token) this.sidToken = resp.sid_token;
+
+        const msgs = resp.list ?? [];
+        globalState.addLog('info', `📬 [guerrilla] Poll #${poll}: ${msgs.length} mensagem(s) na inbox`, cycle);
+
+        if (msgs.length > 0) {
+          for (const msg of msgs) {
+            globalState.addLog('info', `📧 [guerrilla] Lendo: "${msg.mail_subject}" de ${msg.mail_from}`, cycle);
+
+            // Tenta OTP no subject primeiro (mais rápido)
+            const otpSubject = msg.mail_subject?.match(/\b(\d{4,8})\b/)?.[1] ?? null;
+            if (otpSubject) {
+              globalState.addLog('success', `🎉 [guerrilla] OTP no subject: ${otpSubject}`, cycle);
+              return otpSubject;
+            }
+
+            // Busca o corpo completo do email
+            try {
+              const fetchParams: Record<string, string> = {
+                f: 'fetch_email',
+                email_id: msg.mail_id,
+                lang: 'en',
+              };
+              if (this.sidToken) fetchParams['sid_token'] = this.sidToken;
+
+              const full = await withRetry(
+                'guerrilla fetchEmail',
+                () => this.apiGet<GuerrillaFetchResp>(fetchParams),
+                3, 2000
+              );
+              if (full.sid_token) this.sidToken = full.sid_token;
+
+              const body = full.mail_body ?? '';
+              globalState.addLog('info', `📄 [guerrilla] Body (200): ${body.slice(0, 200)}`, cycle);
+
+              const mailMsg: MailMessage = {
+                mail_id:      msg.mail_id,
+                mail_from:    msg.mail_from,
+                mail_to:      this.emailAddr,
+                mail_subject: msg.mail_subject ?? '',
+                mail_preview: msg.mail_excerpt ?? '',
+                mail_html:    body,
+                mail_text:    body,
+                created_at:   new Date().toISOString(),
+              };
+
+              const otp = await OTPParser.extractFromMessageAsync(mailMsg);
+              if (otp) {
+                globalState.addLog('success', `🎉 [guerrilla] OTP encontrado: ${otp}`, cycle);
+                return otp;
+              }
+              globalState.addLog('warn', `⚠️ [guerrilla] Nenhum OTP em "${msg.mail_subject}"`, cycle);
+            } catch (e) {
+              globalState.addLog('warn', `⚠️ [guerrilla] Erro ao ler msg ${msg.mail_id}: ${e instanceof Error ? e.message : e}`, cycle);
+            }
+          }
+          // Avança seqId para o maior mail_id visto (API usa como cursor)
+          const maxId = Math.max(...msgs.map(m => parseInt(m.mail_id, 10) || 0));
+          if (maxId > seqId) seqId = maxId;
+        } else {
+          globalState.addLog('info', `💭 [guerrilla] Sem mensagens — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Parado')) throw e;
+        globalState.addLog('warn', `⚠️ [guerrilla] Erro no poll #${poll}: ${e instanceof Error ? e.message : e}`, cycle);
+      }
+
+      await sleep(POLL_INTERVAL_MS);
+    }
+    throw new Error(`⏰ Timeout aguardando OTP guerrilla (${Math.round(timeoutMs / 1000)}s)`);
+  }
+}
+
 export function createEmailClient(
-  provider: 'temp-mail.io' | 'mail.tm' | 'yopmail',
+  provider: 'temp-mail.io' | 'mail.tm' | 'yopmail' | 'guerrilla',
   apiKey?: string
 ): IEmailClient {
-  if (provider === 'mail.tm')  return new MailTmClient();
-  if (provider === 'yopmail')  return new YOPmailClient();
+  if (provider === 'mail.tm')   return new MailTmClient();
+  if (provider === 'yopmail')   return new YOPmailClient();
+  if (provider === 'guerrilla') return new GuerrillaMailClient();
   if (!apiKey) throw new Error('temp-mail.io requer uma API key');
   return new TempMailClient(apiKey);
 }
