@@ -1,0 +1,36 @@
+# Dependências
+node_modules/
+
+# Build
+dist/
+build/
+
+# Dados gerados em runtime
+data/
+artifacts/
+
+# Logs
+*.log
+logs/
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.production
+
+# Capacitor / Android
+mobile/android/
+mobile/ios/
+mobile/node_modules/
+mobile/package-lock.json
+
+# npm
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
