@@ -28,7 +28,7 @@ globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.execute(
     config.cadastroUrl,
     {
-      emailProvider:  config.emailProvider  ?? 'temp-mail.io',
+      emailProvider:  config.emailProvider  ?? 'tempmailc',
       tempMailApiKey: config.tempMailApiKey ?? '',
       otpTimeout:     config.otpTimeout,
       extraDelay:     config.extraDelay,
@@ -47,7 +47,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-const VALID_EMAIL_PROVIDERS = ['temp-mail.io', 'mail.tm', 'yopmail'];
+const VALID_EMAIL_PROVIDERS = ['tempmailc', 'temp-mail.io', 'mail.tm'];
 
 function validateConfig(body: Partial<Config> & { proxyServer?: string; proxyUser?: string; proxyPass?: string }): { ok: true; data: Partial<Config> } | { ok: false; error: string } {
   const errors: string[] = [];
