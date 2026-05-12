@@ -11,14 +11,9 @@ import * as accountStore from '../store/accountStore';
 
 chromiumExtra.use(StealthPlugin());
 
-// ─── Detecção de ambiente ─────────────────────────────────────────────────────
-// No Railway (Linux) usamos Chromium headless do Playwright.
-// No Windows local usamos o Brave instalado.
-
-const IS_LINUX = process.platform === 'linux';
-const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
-
-// ─── Instâncias de browser (uma por configuração de proxy de launch) ───────────
+// ─── Sempre headless — rodando em servidor/celular ────────────────────────────
+// Não há desktop local; o app mobile exibe o painel via WebView apontando para
+// o Railway. O Playwright roda no Railway (Linux) sempre headless.
 
 let browser: Browser | null = null;
 let browserLaunching = false;
@@ -992,7 +987,8 @@ async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void>
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
-  static async init(headless = false): Promise<void> {
+  // headless sempre true — servidor Railway/produção, sem desktop local
+  static async init(headless = true): Promise<void> {
     const firstProxy = getFirstAvailableProxy();
     const launchProxyKey = firstProxy ? firstProxy.server : '__system__';
 
@@ -1019,46 +1015,24 @@ export class MockPlaywrightFlow {
 
     browserLaunching = true;
     try {
-      let proxyArg = firstProxy ? firstProxy.server : '';
+      const proxyArg = firstProxy ? firstProxy.server : '';
 
-      // ── Detecta ambiente ──────────────────────────────────────────────────
-      // Linux (Railway/servidor) → Chromium headless do Playwright (sem executablePath)
-      // Windows (local) → Brave instalado em BRAVE_PATH
-      if (IS_LINUX) {
-        globalState.addLog('info', '🐧 Linux detectado → usando Chromium headless do Playwright');
-        browser = await chromiumExtra.launch({
-          headless: true,
-          slowMo: 0,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-infobars',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-first-run',
-            '--no-default-browser-check',
-            ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
-          ],
-        }) as unknown as Browser;
-      } else {
-        globalState.addLog('info', '🦁 Windows detectado → usando Brave');
-        browser = await chromiumExtra.launch({
-          headless,
-          executablePath: BRAVE_PATH,
-          slowMo: 0,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-infobars',
-            '--disable-dev-shm-usage',
-            '--no-first-run',
-            '--no-default-browser-check',
-            ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
-          ],
-        }) as unknown as Browser;
-      }
+      globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway/produção)');
+      browser = await chromiumExtra.launch({
+        headless: true,
+        slowMo: 0,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-infobars',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-default-browser-check',
+          ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
+        ],
+      }) as unknown as Browser;
 
       currentLaunchProxy = launchProxyKey;
       globalState.addLog('info', '✅ Browser pronto!');
