@@ -34,7 +34,6 @@ export interface DiagnoseResult {
     dataTestid: string | null;
     visible: boolean;
   }>;
-  screenshot: string; // base64 PNG
   error?: string;
 }
 
@@ -68,7 +67,6 @@ export async function diagnoseUberForm(cadastroUrl: string): Promise<DiagnoseRes
     const currentUrl = page.url();
     const title = await page.title();
 
-    // Coleta todos os inputs e textareas
     const inputs = await page.evaluate(() => {
       const els = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
       return els.map((el: any) => ({
@@ -83,7 +81,6 @@ export async function diagnoseUberForm(cadastroUrl: string): Promise<DiagnoseRes
       }));
     });
 
-    // Coleta todos os botões
     const buttons = await page.evaluate(() => {
       const els = Array.from(document.querySelectorAll('button, [role="button"], [data-dgui="button"]'));
       return els.map((el: any) => ({
@@ -95,20 +92,15 @@ export async function diagnoseUberForm(cadastroUrl: string): Promise<DiagnoseRes
       }));
     });
 
-    // Screenshot em base64
-    const screenshotBuf = await page.screenshot({ fullPage: false });
-    const screenshot = screenshotBuf.toString('base64');
-
     await context.close();
 
-    return { url: currentUrl, title, inputs, buttons, screenshot };
+    return { url: currentUrl, title, inputs, buttons };
   } catch (err: any) {
     return {
       url: cadastroUrl,
       title: '',
       inputs: [],
       buttons: [],
-      screenshot: '',
       error: err?.message ?? String(err),
     };
   } finally {
