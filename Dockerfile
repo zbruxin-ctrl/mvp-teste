@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci
+COPY package.json ./
+RUN npm install
 
 # Instala o Chromium do Playwright (sem --with-deps, pois as deps ja estao acima)
 RUN npx playwright install chromium
