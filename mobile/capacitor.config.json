@@ -4,9 +4,18 @@
   "webDir": "www",
   "server": {
     "androidScheme": "https",
-    "url": "https://murky-residual-outlast.ngrok-free.dev",
     "cleartext": true,
-    "allowNavigation": ["*"]
+    "allowNavigation": [
+      "https://murky-residual-outlast.ngrok-free.dev",
+      "https://*.ngrok-free.dev",
+      "https://*.ngrok-free.app",
+      "https://*.ngrok.io"
+    ]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
   },
   "plugins": {
     "SplashScreen": {
@@ -14,6 +23,9 @@
       "backgroundColor": "#080616",
       "showSpinner": false,
       "androidScaleType": "CENTER_CROP"
+    },
+    "CapacitorHttp": {
+      "enabled": true
     }
   }
 }
