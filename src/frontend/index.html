@@ -400,9 +400,9 @@
       padding-top: var(--space-4);
       border-top: 1px solid var(--border);
     }
-    /* mail.tm api key field toggle */
-    #mailtm-key-wrap { display: none; }
-    #mailtm-key-wrap.visible { display: flex; flex-direction: column; gap: var(--space-2); }
+    /* api key field toggle */
+    #apikey-wrap { display: none; }
+    #apikey-wrap.visible { display: flex; flex-direction: column; gap: var(--space-2); }
 
     /* ─── LOGS PAGE ──────────────────────────────────────── */
     .log-toolbar {
@@ -1033,13 +1033,13 @@
       <div class="field">
         <label for="cfg-email-provider">Provedor de email temporário</label>
         <select id="cfg-email-provider" name="emailProvider">
-          <option value="tempmail">TempMail (1secmail / mail.tm API)</option>
-          <option value="mailtm">Mail.tm (gratuito, sem API key)</option>
+          <option value="temp-mail.io">TempMail (1secmail / temp-mail.io)</option>
+          <option value="mail.tm">Mail.tm (gratuito, sem API key)</option>
         </select>
         <span class="field-hint">Mail.tm não precisa de API key — cria caixas de entrada via REST público.</span>
       </div>
 
-      <div class="field" id="mailtm-key-wrap">
+      <div class="field" id="apikey-wrap">
         <label for="cfg-apikey">TempMail API Key</label>
         <input type="password" id="cfg-apikey" name="tempMailApiKey" placeholder="Sua chave de API" autocomplete="off"/>
         <span class="field-hint">Necessária apenas quando o provedor for TempMail.</span>
@@ -1577,18 +1577,18 @@ function renderCycleHistory() {
 
 /* ─── EMAIL PROVIDER TOGGLE ───────────────────────────── */
 const emailProviderSel = document.getElementById('cfg-email-provider');
-const mailtmKeyWrap    = document.getElementById('mailtm-key-wrap');
+const apikeyWrap       = document.getElementById('apikey-wrap');
 
 function updateEmailProviderUI() {
-  const val = emailProviderSel.value;
-  if (val === 'tempmail') {
-    mailtmKeyWrap.classList.add('visible');
+  // Mostra o campo de API key SOMENTE para temp-mail.io
+  if (emailProviderSel.value === 'temp-mail.io') {
+    apikeyWrap.classList.add('visible');
   } else {
-    mailtmKeyWrap.classList.remove('visible');
+    apikeyWrap.classList.remove('visible');
   }
 }
 emailProviderSel.addEventListener('change', updateEmailProviderUI);
-updateEmailProviderUI(); // estado inicial
+updateEmailProviderUI();
 
 /* ─── CONFIG FORM ─────────────────────────────────────── */
 function loadConfigForm(config) {
@@ -1600,7 +1600,8 @@ function loadConfigForm(config) {
   document.getElementById('cfg-interval').value       = config.cycleInterval    ?? 60000;
   document.getElementById('cfg-delay').value          = config.extraDelay       ?? 2000;
   document.getElementById('cfg-headless').value       = config.headless === false ? 'false' : 'true';
-  document.getElementById('cfg-email-provider').value = config.emailProvider    || 'tempmail';
+  // emailProvider vindo do backend já é "temp-mail.io" ou "mail.tm"
+  document.getElementById('cfg-email-provider').value = config.emailProvider    || 'temp-mail.io';
   document.getElementById('cfg-proxy-server').value   = config.proxyServer      || '';
   document.getElementById('cfg-proxy-user').value     = config.proxyUser        || '';
   document.getElementById('cfg-proxy-pass').value     = config.proxyPass        || '';
@@ -1612,9 +1613,10 @@ document.getElementById('config-form').addEventListener('submit', async () => {
   btn.disabled = true; btn.textContent = 'Salvando…';
   try {
     const emailProvider = document.getElementById('cfg-email-provider').value;
+    // emailProvider agora é "temp-mail.io" ou "mail.tm" — igual ao que o backend espera
     const payload = {
       cadastroUrl:    document.getElementById('cfg-url').value,
-      tempMailApiKey: emailProvider === 'tempmail' ? document.getElementById('cfg-apikey').value : '',
+      tempMailApiKey: emailProvider === 'temp-mail.io' ? document.getElementById('cfg-apikey').value : '',
       emailProvider,
       otpTimeout:     parseInt(document.getElementById('cfg-otp').value),
       cycleInterval:  parseInt(document.getElementById('cfg-interval').value),
