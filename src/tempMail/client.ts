@@ -264,99 +264,76 @@ export class MailTmClient implements IEmailClient {
     const domains = domainsResp['hydra:member']?.filter(d => d.isActive);
     if (!domains || domains.length === 0) throw new Error('Mail.tm: nenhum domínio disponível');
 
-    const domain = domains[Math.floor(Math.random() * domains.length)].domain;
-    const localPart = 'user' + Math.random().toString(36).slice(2, 10);
-    const address = `${localPart}@${domain}`;
+    const domain = domains[Math.floor(Math.random() * domains.length)]!.domain;
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let localPart = '';
+    for (let i = 0; i < 12; i++) localPart += chars[Math.floor(Math.random() * chars.length)];
+    const email = `${localPart}@${domain}`;
     const password = this.generatePassword();
 
-    globalState.addLog('info', `📧 [mail.tm] Criando conta: ${address}`);
+    globalState.addLog('info', `📧 [mail.tm] Criando conta: ${email}`);
     await withRetry(
       'mail.tm createAccount',
-      () => this.request<{ id: string; address: string }>('/accounts', 'POST', { address, password })
+      () => this.request('/accounts', 'POST', { address: email, password })
     );
 
     const tokenResp = await withRetry(
       'mail.tm getToken',
-      () => this.request<{ id: string; token: string }>('/token', 'POST', { address, password })
+      () => this.request<{ id: string; token: string }>('/token', 'POST', { address: email, password })
     );
+
     this.authToken = tokenResp.token;
-    this.accountEmail = address;
+    this.accountEmail = email;
     this.accountPassword = password;
 
-    globalState.addLog('info', `✅ [mail.tm] Conta criada e autenticada: ${address}`);
-    return { email: address, token: tokenResp.token };
-  }
-
-  private async listMessages(): Promise<MailTmMessageSummary[]> {
-    const resp = await this.request<{ 'hydra:member': MailTmMessageSummary[] }>(
-      '/messages?page=1', 'GET', undefined, true
-    );
-    return resp['hydra:member'] ?? [];
-  }
-
-  private async getFullMessage(id: string): Promise<{ html: string; text: string }> {
-    const resp = await this.request<MailTmMessageFull>(`/messages/${id}`, 'GET', undefined, true);
-    const html = Array.isArray(resp.html) ? resp.html.join('\n') : (resp.html ?? '');
-    const text = (typeof resp.text === 'string' && resp.text.trim().length > 0)
-      ? resp.text
-      : (resp.intro ?? '');
-    return { html, text };
+    globalState.addLog('info', `✅ [mail.tm] Email criado: ${email}`);
+    return { email, token: tokenResp.token };
   }
 
   async waitForOTP(email: string, timeoutMs = 90000, cycle?: number): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
-    const POLL_INTERVAL_MS = 5_000;
-    const INITIAL_WAIT_MS  = 6_000;
+    const POLL_INTERVAL_MS = 6_000;
+    const INITIAL_WAIT_MS  = 8_000;
 
-    globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`, cycle);
-    if (!this.authToken) throw new Error('Mail.tm: não autenticado — chame createRandomEmail() primeiro');
-
-    globalState.addLog('info', `⏳ [mail.tm] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`, cycle);
+    globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`, cycle);
     await sleep(INITIAL_WAIT_MS);
 
-    let tentativaPoll = 0;
     while (Date.now() - startTime < timeoutMs) {
       if (isStopped()) throw new Error('Parado pelo usuário');
-
-      tentativaPoll++;
-      globalState.addLog('info', `🔄 [mail.tm] Poll #${tentativaPoll} — buscando mensagens...`, cycle);
-
       try {
-        const messages = await withRetry('mail.tm listMessages', () => this.listMessages(), 3, 1500);
-        globalState.addLog('info', `📬 [mail.tm] ${messages.length} mensagem(s) (anterior: ${lastMessageCount})`, cycle);
+        const data = await withRetry(
+          'mail.tm listMessages',
+          () => this.request<{ 'hydra:member': MailTmMessageSummary[] }>('/messages', 'GET', undefined, true),
+          3, 1500
+        );
+        const messages = data['hydra:member'] ?? [];
 
         if (messages.length > lastMessageCount) {
-          const novas = messages.slice(lastMessageCount);
-          globalState.addLog('info', `📨 [mail.tm] ${novas.length} mensagem(s) nova(s) — verificando OTP...`, cycle);
-
-          for (const msg of novas.reverse()) {
-            globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from.address}`, cycle);
+          globalState.addLog('info', `📨 [mail.tm] ${messages.length} mensagem(s) — verificando OTP...`, cycle);
+          for (const msg of messages.slice(lastMessageCount).reverse()) {
             try {
-              const full = await withRetry('mail.tm getFullMessage', () => this.getFullMessage(msg.id), 3, 1500);
-              globalState.addLog('info', `📄 [mail.tm] html(300): ${full.html.slice(0, 300)}`, cycle);
-              globalState.addLog('info', `📄 [mail.tm] text(300): ${full.text.slice(0, 300)}`, cycle);
-
+              const full = await withRetry(
+                'mail.tm getMessage',
+                () => this.request<MailTmMessageFull>(`/messages/${msg.id}`, 'GET', undefined, true),
+                3, 1500
+              );
               const mailMsg: MailMessage = {
-                mail_id: msg.id,
-                mail_from: msg.from.address,
-                mail_to: email,
-                mail_subject: msg.subject,
-                mail_preview: '',
-                mail_html: full.html,
-                mail_text: full.text,
-                created_at: msg.createdAt,
+                mail_id:      full.id,
+                mail_from:    full.from?.address ?? '',
+                mail_to:      email,
+                mail_subject: full.subject ?? '',
+                mail_preview: full.intro ?? '',
+                mail_html:    full.html?.join('') ?? '',
+                mail_text:    full.text ?? '',
+                created_at:   full.createdAt,
               };
-
               const otp = await OTPParser.extractFromMessageAsync(mailMsg);
               if (otp) {
                 globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`, cycle);
                 return otp;
               }
-              globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP extraído de "${msg.subject}"`, cycle);
-            } catch (e) {
-              globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`, cycle);
-            }
+            } catch { /* mensagem individual falhou — continua */ }
           }
           lastMessageCount = messages.length;
         } else {
@@ -364,9 +341,8 @@ export class MailTmClient implements IEmailClient {
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
-        globalState.addLog('warn', `⚠️ [mail.tm] Erro no poll #${tentativaPoll}: ${e instanceof Error ? e.message : e}`, cycle);
+        globalState.addLog('warn', `⚠️ [mail.tm] Erro no poll: ${e instanceof Error ? e.message : e}`, cycle);
       }
-
       await sleep(POLL_INTERVAL_MS);
     }
     throw new Error(`⏰ Timeout aguardando OTP mail.tm (${Math.round(timeoutMs / 1000)}s)`);
@@ -375,6 +351,7 @@ export class MailTmClient implements IEmailClient {
 
 // ──────────────────────────────────────────────────────────────────────────────────
 // YOPmailClient
+// ──────────────────────────────────────────────────────────────────────────────────
 // Usa @yopmail.com diretamente — domínio principal aceito pelo site-alvo.
 // A lib easy-yopmail só precisa do local part para consultar a inbox.
 // ──────────────────────────────────────────────────────────────────────────────────
@@ -398,20 +375,81 @@ export class YOPmailClient implements IEmailClient {
 
   async createRandomEmail(): Promise<EmailAccount> {
     this.inbox = this.generateInbox();
-    // Usa @yopmail.com diretamente — domínio principal, não alias.
-    // Aliases como elitemail.org, cool.fr etc. são bloqueados pelo site-alvo.
     this.email = `${this.inbox}@yopmail.com`;
     globalState.addLog('info', `📧 [yopmail] Email criado: ${this.email}`);
     return { email: this.email, token: this.inbox };
   }
 
+  // ─── Extrai OTP do subject sem chamar readMessage ────────────────────────────
+  private tryOtpFromSubject(subject: string): string | null {
+    const m = subject.match(/\b(\d{4,8})\b/);
+    return m ? m[1]! : null;
+  }
+
+  // ─── Tenta ler o corpo com múltiplas estratégias ─────────────────────────────
+  private async readBodyRobust(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    EasyYopmail: any,
+    id: string,
+    cycle?: number
+  ): Promise<string> {
+    // Estratégia 1: format HTML + selector #mail (conteúdo principal)
+    try {
+      const r = await EasyYopmail.readMessage(this.inbox, id, { format: 'HTML', selector: '#mail' });
+      const body = r?.content ?? r?.data ?? '';
+      const bodyStr = Array.isArray(body) ? body.join(' ') : String(body);
+      if (bodyStr && !bodyStr.includes('CAPTCHA') && bodyStr.trim().length > 10) {
+        globalState.addLog('info', `📄 [yopmail] body via HTML#mail (300): ${bodyStr.slice(0, 300)}`, cycle);
+        return bodyStr;
+      }
+    } catch (e) {
+      globalState.addLog('warn', `⚠️ [yopmail] readMessage HTML#mail falhou: ${e instanceof Error ? e.message : e}`, cycle);
+    }
+
+    // Estratégia 2: format HTML sem selector (html completo)
+    try {
+      const r = await EasyYopmail.readMessage(this.inbox, id, { format: 'HTML' });
+      const body = r?.content ?? r?.data ?? '';
+      const bodyStr = Array.isArray(body) ? body.join(' ') : String(body);
+      if (bodyStr && !bodyStr.includes('CAPTCHA') && bodyStr.trim().length > 10) {
+        globalState.addLog('info', `📄 [yopmail] body via HTML full (300): ${bodyStr.slice(0, 300)}`, cycle);
+        return bodyStr;
+      }
+    } catch (e) {
+      globalState.addLog('warn', `⚠️ [yopmail] readMessage HTML full falhou: ${e instanceof Error ? e.message : e}`, cycle);
+    }
+
+    // Estratégia 3: format TXT via objeto options (API v5)
+    try {
+      const r = await EasyYopmail.readMessage(this.inbox, id, { format: 'TXT' });
+      const body = r?.content ?? r?.data ?? '';
+      const bodyStr = Array.isArray(body) ? body.join(' ') : String(body);
+      if (bodyStr && !bodyStr.includes('CAPTCHA') && bodyStr.trim().length > 10) {
+        globalState.addLog('info', `📄 [yopmail] body via TXT-obj (300): ${bodyStr.slice(0, 300)}`, cycle);
+        return bodyStr;
+      }
+    } catch (e) {
+      globalState.addLog('warn', `⚠️ [yopmail] readMessage TXT-obj falhou: ${e instanceof Error ? e.message : e}`, cycle);
+    }
+
+    // Estratégia 4: assinatura legada string (compatibilidade com versões antigas)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = await (EasyYopmail.readMessage as any)(this.inbox, id, 'TXT');
+      const body = r?.content ?? r?.data ?? '';
+      const bodyStr = Array.isArray(body) ? body.join(' ') : String(body);
+      globalState.addLog('info', `📄 [yopmail] body via TXT-str (300): ${bodyStr.slice(0, 300)}`, cycle);
+      return bodyStr;
+    } catch (e) {
+      globalState.addLog('warn', `⚠️ [yopmail] readMessage TXT-str falhou: ${e instanceof Error ? e.message : e}`, cycle);
+    }
+
+    return '';
+  }
+
   async waitForOTP(email: string, timeoutMs = 120_000, cycle?: number): Promise<string> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const EasyYopmail = require('easy-yopmail') as {
-      getMail: () => Promise<string>;
-      getInbox: (inbox: string) => Promise<YopInboxResult>;
-      readMessage: (inbox: string, id: string, format: string) => Promise<{ content?: string; data?: string }>;
-    };
+    const EasyYopmail = require('easy-yopmail');
 
     const startTime = Date.now();
     const POLL_INTERVAL_MS = 7_000;
@@ -430,12 +468,10 @@ export class YOPmailClient implements IEmailClient {
       globalState.addLog('info', `🔄 [yopmail] Poll #${poll} — verificando inbox ${this.inbox}...`, cycle);
 
       try {
-        // getInbox() recebe apenas o local part (sem @dominio)
-        // e retorna { inbox: [...] } conforme documentação
         const result = await withRetry(
           'yopmail getInbox',
           () => EasyYopmail.getInbox(this.inbox),
-          3, 2000
+          3, 3000
         );
 
         const messages = Array.isArray(result.inbox) ? result.inbox : [];
@@ -447,23 +483,30 @@ export class YOPmailClient implements IEmailClient {
 
           for (const msg of novas) {
             globalState.addLog('info', `📧 [yopmail] Lendo: "${msg.subject}" de ${msg.from}`, cycle);
+
+            // Estratégia 0: OTP direto no subject (evita chamar readMessage)
+            const otpSubject = this.tryOtpFromSubject(msg.subject ?? '');
+            if (otpSubject) {
+              globalState.addLog('success', `🎉 [yopmail] OTP no subject: ${otpSubject}`, cycle);
+              return otpSubject;
+            }
+
+            // Estratégias 1-4: ler o corpo com retry e backoff maior
             try {
-              const full = await withRetry(
-                'yopmail readMessage',
-                () => EasyYopmail.readMessage(this.inbox, msg.id, 'TXT'),
-                3, 2000
+              const bodyStr = await withRetry(
+                'yopmail readBody',
+                () => this.readBodyRobust(EasyYopmail, msg.id, cycle),
+                3, 4000
               );
-              const body = full.content ?? full.data ?? '';
-              globalState.addLog('info', `📄 [yopmail] body(300): ${String(body).slice(0, 300)}`, cycle);
 
               const mailMsg: MailMessage = {
                 mail_id:      msg.id,
                 mail_from:    msg.from,
                 mail_to:      this.email,
-                mail_subject: msg.subject,
+                mail_subject: msg.subject ?? '',
                 mail_preview: '',
-                mail_html:    '',
-                mail_text:    String(body),
+                mail_html:    bodyStr,
+                mail_text:    bodyStr,
                 created_at:   new Date().toISOString(),
               };
 
