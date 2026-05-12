@@ -365,6 +365,14 @@
       box-shadow: var(--shadow);
       display: flex; flex-direction: column; gap: var(--space-5);
     }
+    .config-section-title {
+      font-size: var(--text-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-faint);
+      padding-bottom: var(--space-3);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: var(--space-1);
+    }
     .field { display: flex; flex-direction: column; gap: var(--space-2); }
     .field label { font-size: var(--text-xs); font-weight: 500; color: var(--text-muted); }
     .field input, .field select {
@@ -382,12 +390,19 @@
     }
     .field-hint { font-size: var(--text-xs); color: var(--text-faint); margin-top: 2px; }
     .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
-    @media (max-width: 540px) { .field-row { grid-template-columns: 1fr; } }
+    .field-row-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: var(--space-4); }
+    @media (max-width: 540px) {
+      .field-row { grid-template-columns: 1fr; }
+      .field-row-3 { grid-template-columns: 1fr; }
+    }
     .config-actions {
       display: flex; gap: var(--space-3); justify-content: flex-end;
       padding-top: var(--space-4);
       border-top: 1px solid var(--border);
     }
+    /* mail.tm api key field toggle */
+    #mailtm-key-wrap { display: none; }
+    #mailtm-key-wrap.visible { display: flex; flex-direction: column; gap: var(--space-2); }
 
     /* ─── LOGS PAGE ──────────────────────────────────────── */
     .log-toolbar {
@@ -973,16 +988,14 @@
     </div>
 
     <form class="config-form" id="config-form" onsubmit="return false">
+
+      <!-- ── Geral ── -->
+      <div class="config-section-title">Geral</div>
+
       <div class="field">
         <label for="cfg-url">URL de cadastro</label>
         <input type="url" id="cfg-url" name="cadastroUrl" placeholder="https://exemplo.com/cadastro" autocomplete="off"/>
         <span class="field-hint">URL completa da página de cadastro que o bot irá preencher.</span>
-      </div>
-
-      <div class="field">
-        <label for="cfg-apikey">TempMail API Key</label>
-        <input type="password" id="cfg-apikey" name="tempMailApiKey" placeholder="Sua chave de API" autocomplete="off"/>
-        <span class="field-hint">Chave da API do serviço de email temporário.</span>
       </div>
 
       <div class="field-row">
@@ -1011,6 +1024,44 @@
             <option value="false">Não (com janela)</option>
           </select>
           <span class="field-hint">Executar navegador sem interface visual.</span>
+        </div>
+      </div>
+
+      <!-- ── Provedor de Email ── -->
+      <div class="config-section-title" style="margin-top:var(--space-2)">Provedor de Email</div>
+
+      <div class="field">
+        <label for="cfg-email-provider">Provedor de email temporário</label>
+        <select id="cfg-email-provider" name="emailProvider">
+          <option value="tempmail">TempMail (1secmail / mail.tm API)</option>
+          <option value="mailtm">Mail.tm (gratuito, sem API key)</option>
+        </select>
+        <span class="field-hint">Mail.tm não precisa de API key — cria caixas de entrada via REST público.</span>
+      </div>
+
+      <div class="field" id="mailtm-key-wrap">
+        <label for="cfg-apikey">TempMail API Key</label>
+        <input type="password" id="cfg-apikey" name="tempMailApiKey" placeholder="Sua chave de API" autocomplete="off"/>
+        <span class="field-hint">Necessária apenas quando o provedor for TempMail.</span>
+      </div>
+
+      <!-- ── Proxy ── -->
+      <div class="config-section-title" style="margin-top:var(--space-2)">Proxy HTTP/SOCKS</div>
+
+      <div class="field">
+        <label for="cfg-proxy-server">Servidor proxy</label>
+        <input type="text" id="cfg-proxy-server" name="proxyServer" placeholder="http://1.2.3.4:8080  ou  socks5://host:1080" autocomplete="off"/>
+        <span class="field-hint">Deixe vazio para não usar proxy. Suporta http, https e socks5.</span>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="cfg-proxy-user">Usuário do proxy</label>
+          <input type="text" id="cfg-proxy-user" name="proxyUser" placeholder="usuário (opcional)" autocomplete="off"/>
+        </div>
+        <div class="field">
+          <label for="cfg-proxy-pass">Senha do proxy</label>
+          <input type="password" id="cfg-proxy-pass" name="proxyPass" placeholder="senha (opcional)" autocomplete="off"/>
         </div>
       </div>
 
@@ -1057,9 +1108,8 @@
 
 <script>
 /* ─── CONFIG ──────────────────────────────────────────── */
-const API = 'https://murky-residual-outlast.ngrok-free.dev';
+const API = 'https://mvp-teste-production.up.railway.app';
 const HEADERS = {
-  'ngrok-skip-browser-warning': 'true',
   'Content-Type': 'application/json',
   'x-admin-password': 'connect@10'
 };
@@ -1345,7 +1395,6 @@ function renderKyc() {
   const byCycle = kycData.byCycle || {};
   const cycles = Object.keys(byCycle).map(Number).sort((a, b) => b - a);
 
-  // KPI counts across all cycles
   let weak = 0, likely = 0, confirmed = 0;
   const providerSet = new Set();
   for (const cycleMap of Object.values(byCycle)) {
@@ -1361,7 +1410,6 @@ function renderKyc() {
   document.getElementById('kyc-count-confirmed').textContent = confirmed;
   document.getElementById('kyc-providers-count').textContent = providerSet.size;
 
-  // Cycle tabs
   const tabsEl = document.getElementById('kyc-cycle-tabs');
   if (!cycles.length) {
     tabsEl.innerHTML = '';
@@ -1527,29 +1575,54 @@ function renderCycleHistory() {
     </div>`).join('');
 }
 
+/* ─── EMAIL PROVIDER TOGGLE ───────────────────────────── */
+const emailProviderSel = document.getElementById('cfg-email-provider');
+const mailtmKeyWrap    = document.getElementById('mailtm-key-wrap');
+
+function updateEmailProviderUI() {
+  const val = emailProviderSel.value;
+  if (val === 'tempmail') {
+    mailtmKeyWrap.classList.add('visible');
+  } else {
+    mailtmKeyWrap.classList.remove('visible');
+  }
+}
+emailProviderSel.addEventListener('change', updateEmailProviderUI);
+updateEmailProviderUI(); // estado inicial
+
 /* ─── CONFIG FORM ─────────────────────────────────────── */
 function loadConfigForm(config) {
   if (!config) return;
   configSnapshot = { ...config };
-  document.getElementById('cfg-url').value      = config.cadastroUrl      || '';
-  document.getElementById('cfg-apikey').value   = config.tempMailApiKey   || '';
-  document.getElementById('cfg-otp').value      = config.otpTimeout       ?? 30000;
-  document.getElementById('cfg-interval').value = config.cycleInterval    ?? 60000;
-  document.getElementById('cfg-delay').value    = config.extraDelay       ?? 2000;
-  document.getElementById('cfg-headless').value = config.headless === false ? 'false' : 'true';
+  document.getElementById('cfg-url').value            = config.cadastroUrl      || '';
+  document.getElementById('cfg-apikey').value         = config.tempMailApiKey   || '';
+  document.getElementById('cfg-otp').value            = config.otpTimeout       ?? 30000;
+  document.getElementById('cfg-interval').value       = config.cycleInterval    ?? 60000;
+  document.getElementById('cfg-delay').value          = config.extraDelay       ?? 2000;
+  document.getElementById('cfg-headless').value       = config.headless === false ? 'false' : 'true';
+  document.getElementById('cfg-email-provider').value = config.emailProvider    || 'tempmail';
+  document.getElementById('cfg-proxy-server').value   = config.proxyServer      || '';
+  document.getElementById('cfg-proxy-user').value     = config.proxyUser        || '';
+  document.getElementById('cfg-proxy-pass').value     = config.proxyPass        || '';
+  updateEmailProviderUI();
 }
 
 document.getElementById('config-form').addEventListener('submit', async () => {
   const btn = document.getElementById('btn-save-config');
   btn.disabled = true; btn.textContent = 'Salvando…';
   try {
+    const emailProvider = document.getElementById('cfg-email-provider').value;
     const payload = {
       cadastroUrl:    document.getElementById('cfg-url').value,
-      tempMailApiKey: document.getElementById('cfg-apikey').value,
+      tempMailApiKey: emailProvider === 'tempmail' ? document.getElementById('cfg-apikey').value : '',
+      emailProvider,
       otpTimeout:     parseInt(document.getElementById('cfg-otp').value),
       cycleInterval:  parseInt(document.getElementById('cfg-interval').value),
       extraDelay:     parseInt(document.getElementById('cfg-delay').value),
       headless:       document.getElementById('cfg-headless').value === 'true',
+      proxyServer:    document.getElementById('cfg-proxy-server').value.trim(),
+      proxyUser:      document.getElementById('cfg-proxy-user').value.trim(),
+      proxyPass:      document.getElementById('cfg-proxy-pass').value,
     };
     await apiFetch('/api/config', { method: 'POST', body: JSON.stringify(payload) });
     configSnapshot = payload;
