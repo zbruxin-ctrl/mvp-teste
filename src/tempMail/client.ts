@@ -375,11 +375,8 @@ export class MailTmClient implements IEmailClient {
 
 // ──────────────────────────────────────────────────────────────────────────────────
 // YOPmailClient  (easy-yopmail — aliases não-padrão)
-// Domínios: icimail.com, cool.fr, elitemail.org, courriel.fr.nf,
-//            moncourrier.fr.nf, monemail.fr.nf, monmail.fr.nf
 // ──────────────────────────────────────────────────────────────────────────────────
 
-// Aliases menos conhecidos do YOPmail (excluindo yopmail.com e yopmail.fr)
 const YOP_ALIASES = [
   'icimail.com',
   'cool.fr',
@@ -389,6 +386,12 @@ const YOP_ALIASES = [
   'monemail.fr.nf',
   'monmail.fr.nf',
 ];
+
+// Tipo retornado por getInbox() conforme documentação:
+// easyYopmail.getInbox('email').then(result => result.inbox) => Array<{id, from, subject, timestamp, page}>
+interface YopInboxResult {
+  inbox: Array<{ id: string; subject: string; from: string; timestamp?: string; page?: number }>;
+}
 
 export class YOPmailClient implements IEmailClient {
   private inbox: string = '';
@@ -415,11 +418,10 @@ export class YOPmailClient implements IEmailClient {
   }
 
   async waitForOTP(email: string, timeoutMs = 120_000, cycle?: number): Promise<string> {
-    // lazy-import para não quebrar build se lib não estiver instalada ainda
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const EasyYopmail = require('easy-yopmail') as {
       getMail: () => Promise<string>;
-      getInbox: (inbox: string) => Promise<Array<{ id: string; subject: string; from: string }>>;
+      getInbox: (inbox: string) => Promise<YopInboxResult>;
       readMessage: (inbox: string, id: string, format: string) => Promise<{ content?: string; data?: string }>;
     };
 
@@ -440,12 +442,14 @@ export class YOPmailClient implements IEmailClient {
       globalState.addLog('info', `🔄 [yopmail] Poll #${poll} — verificando inbox ${this.inbox}...`, cycle);
 
       try {
-        const messages = await withRetry(
+        // getInbox retorna { inbox: [...] } conforme documentação easy-yopmail
+        const result = await withRetry(
           'yopmail getInbox',
           () => EasyYopmail.getInbox(this.inbox),
           3, 2000
         );
 
+        const messages = Array.isArray(result.inbox) ? result.inbox : [];
         globalState.addLog('info', `📬 [yopmail] ${messages.length} mensagem(s) (anterior: ${lastCount})`, cycle);
 
         if (messages.length > lastCount) {
