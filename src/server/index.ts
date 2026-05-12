@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { globalState, parseProxyString } from '../state/globalState';
 import { MockPlaywrightFlow } from '../playwright/mockFlow';
+import { diagnoseUberForm } from '../playwright/diagnose';
 import * as accountStore from '../store/accountStore';
 import { Config } from '../types';
 
@@ -52,17 +53,14 @@ const VALID_EMAIL_PROVIDERS = ['tempmailc', 'temp-mail.io', 'mail.tm'];
 function validateConfig(body: Partial<Config> & { proxyServer?: string; proxyUser?: string; proxyPass?: string }): { ok: true; data: Partial<Config> } | { ok: false; error: string } {
   const errors: string[] = [];
 
-  // ── Converter campos soltos de proxy → array proxies ──────────────────────
   if (body.proxyServer !== undefined || body.proxyUser !== undefined || body.proxyPass !== undefined) {
     const server   = (body.proxyServer ?? '').trim();
     const username = (body.proxyUser   ?? '').trim() || undefined;
     const password = (body.proxyPass   ?? '').trim() || undefined;
 
     if (server) {
-      // tenta parsear a URL completa (ex: http://user:pass@host:port)
       const parsed = parseProxyString(server);
       if (parsed) {
-        // campos separados têm prioridade sobre os embutidos na URL
         body.proxies = [{
           server:   parsed.server,
           username: username ?? parsed.username,
@@ -127,7 +125,21 @@ app.get('/api/accounts', requireAuth, (_req, res) => {
   res.json({ accounts: accountStore.list() });
 });
 
-// POST clears (original)
+// ── Diagnóstico de seletores ───────────────────────────────
+app.post('/api/diagnose', requireAuth, async (req: Request, res: Response) => {
+  const url: string = req.body?.url ?? (globalState.getState().config as any)?.cadastroUrl ?? '';
+  if (!url) {
+    res.status(400).json({ ok: false, error: 'Forneça um campo "url" no body ou configure cadastroUrl' });
+    return;
+  }
+  try {
+    const result = await diagnoseUberForm(url);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 app.post('/api/logs/clear', requireAuth, (_req, res) => {
   globalState.clearLogs();
   res.json({ ok: true });
@@ -137,7 +149,6 @@ app.post('/api/kyc/clear', requireAuth, (_req, res) => {
   res.json({ ok: true });
 });
 
-// DELETE aliases — compatível com o frontend
 app.delete('/api/logs', requireAuth, (_req, res) => {
   globalState.clearLogs();
   res.json({ ok: true });
@@ -164,7 +175,6 @@ app.post('/api/start', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// alias para /api/run-once usado pelo frontend
 app.post('/api/run-once', requireAuth, (req, res) => {
   if (req.body?.config) {
     const result = validateConfig(req.body.config);
