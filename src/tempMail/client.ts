@@ -374,115 +374,176 @@ export class MailTmClient implements IEmailClient {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
-// YOPmailClient  (easy-yopmail — aliases sem @yopmail.com / @yopmail.fr)
+// YOPmailClient  (yopmail.com — via API scraping não-oficial)
+// Usa apenas aliases alternativos (NÃO usa @yopmail.com nem @yopmail.fr)
 // ────────────────────────────────────────────────────────────────────────────────
 
-// Aliases do YOPmail menos conhecidos / menos bloqueados
-const YOP_ALIASES = [
+const YOPMAIL_ALIAS_DOMAINS = [
   'cool.fr',
   'icimail.com',
   'laposte.net',
-  'lol.ovh',
-  'nospammail.net',
-  'ownmail.net',
-  'peekbe.com',
+  'nospam.ze.tc',
+  'nomail.xl.cx',
+  'spam4.me',
+  'speakmy.name',
+  'mega.zik.dj',
+  'bspamfree.org',
+  'tafmail.com',
+  'veryrealemail.com',
   'sogetthis.com',
-  'spamgourmet.com',
-  'thisisnotmyrealemail.com',
-  'zoemail.net',
 ];
 
 export class YOPmailClient implements IEmailClient {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private yop: any = null;
-  private _email: string | null = null;
-
-  private async getYop() {
-    if (!this.yop) {
-      // import dinâmico — easy-yopmail é ESM
-      const mod = await import('easy-yopmail');
-      this.yop = mod.default ?? mod;
-    }
-    return this.yop;
-  }
+  private baseUrl = 'https://yopmail.com';
+  private generatedEmail: string | null = null;
 
   private randomAlias(): string {
-    return YOP_ALIASES[Math.floor(Math.random() * YOP_ALIASES.length)]!;
+    return YOPMAIL_ALIAS_DOMAINS[Math.floor(Math.random() * YOPMAIL_ALIAS_DOMAINS.length)];
+  }
+
+  private randomUser(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let user = '';
+    const len = 8 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < len; i++) user += chars[Math.floor(Math.random() * chars.length)];
+    return user;
   }
 
   async createRandomEmail(): Promise<EmailAccount> {
-    globalState.addLog('info', '📧 [yopmail] Gerando email temporário...');
-    const yop = await this.getYop();
-
-    // getMail() retorna um email @yopmail.com — precisamos trocar o domínio
-    const base: string = await withRetry('yopmail getMail', () => yop.getMail());
-    const localPart = base.split('@')[0]!;
-    const alias = this.randomAlias();
-    this._email = `${localPart}@${alias}`;
-
-    globalState.addLog('info', `✅ [yopmail] Email criado: ${this._email}`);
-    return { email: this._email, token: this._email };
+    const user   = this.randomUser();
+    const domain = this.randomAlias();
+    const email  = `${user}@${domain}`;
+    this.generatedEmail = email;
+    globalState.addLog('info', `✅ [yopmail] Email criado: ${email}`);
+    return { email, token: email };
   }
 
-  async waitForOTP(email: string, timeoutMs = 120_000, cycle?: number): Promise<string> {
+  private async fetchInbox(user: string): Promise<Array<{ id: string; from: string; subject: string }>> {
+    // YOPmail usa apenas a parte local (antes do @) para consultar a inbox
+    const url = `${this.baseUrl}/en/inbox?login=${encodeURIComponent(user)}&p=1`;
+    const res = await safeFetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://yopmail.com/en/',
+      },
+      timeoutMs: 20000,
+    });
+
+    if (!res || !res.ok) {
+      throw new Error(`[yopmail] Erro ao buscar inbox: HTTP ${res?.status ?? 'timeout'}`);
+    }
+
+    const html = await res.text();
+    const msgs: Array<{ id: string; from: string; subject: string }> = [];
+
+    // Extrai IDs de mensagem do HTML da inbox
+    const msgRe = /id="([me][0-9a-zA-Z]+)"/g;
+    const subjectRe = /class="lms"[^>]*>([^<]+)</g;
+    const fromRe    = /class="lmf"[^>]*>([^<]+)</g;
+
+    const ids: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = msgRe.exec(html)) !== null) {
+      const id = m[1]!;
+      if (id.startsWith('m') && !ids.includes(id)) ids.push(id);
+    }
+
+    const subjects: string[] = [];
+    while ((m = subjectRe.exec(html)) !== null) subjects.push(m[1]!.trim());
+
+    const froms: string[] = [];
+    while ((m = fromRe.exec(html)) !== null) froms.push(m[1]!.trim());
+
+    for (let i = 0; i < ids.length; i++) {
+      msgs.push({
+        id:      ids[i]!,
+        from:    froms[i]   ?? '',
+        subject: subjects[i] ?? '',
+      });
+    }
+
+    return msgs;
+  }
+
+  private async fetchMessage(user: string, msgId: string): Promise<{ html: string; text: string }> {
+    const url = `${this.baseUrl}/en/mail?b=${encodeURIComponent(msgId)}&login=${encodeURIComponent(user)}&p=1`;
+    const res = await safeFetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': `https://yopmail.com/en/inbox?login=${encodeURIComponent(user)}`,
+      },
+      timeoutMs: 20000,
+    });
+
+    if (!res || !res.ok) {
+      throw new Error(`[yopmail] Erro ao buscar mensagem: HTTP ${res?.status ?? 'timeout'}`);
+    }
+
+    const html = await res.text();
+    // Extrai apenas o conteúdo dentro do div#mail
+    const bodyMatch = html.match(/<div[^>]+id=["']mail["'][^>]*>([\/\s\S]*?)<\/div>\s*<\/div>/i)
+      ?? html.match(/<div[^>]+id=["']mail["'][^>]*>([\/\s\S]*)/i);
+    const body = bodyMatch ? bodyMatch[1]! : html;
+
+    // Texto limpo removendo tags
+    const text = body
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&#[0-9]+;/g, ' ')
+      .replace(/&[a-z]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return { html: body, text };
+  }
+
+  async waitForOTP(email: string, timeoutMs = 90000, cycle?: number): Promise<string> {
     const startTime = Date.now();
-    let lastMessageCount = 0;
     const POLL_INTERVAL_MS = 7_000;
     const INITIAL_WAIT_MS  = 10_000;
+    const user = email.split('@')[0]!;
+    let lastCount = 0;
+    let pollNum = 0;
 
     globalState.addLog('info', `⏳ [yopmail] Aguardando OTP para ${email} (${Math.round(timeoutMs / 1000)}s)...`, cycle);
-
-    const yop = await this.getYop();
-    // yopmail usa só a parte local do email (antes do @)
-    const localPart = email.split('@')[0]!;
-
     globalState.addLog('info', `⏳ [yopmail] Espera inicial de ${INITIAL_WAIT_MS / 1000}s...`, cycle);
     await sleep(INITIAL_WAIT_MS);
 
-    let pollCount = 0;
     while (Date.now() - startTime < timeoutMs) {
       if (isStopped()) throw new Error('Parado pelo usuário');
 
-      pollCount++;
-      globalState.addLog('info', `🔄 [yopmail] Poll #${pollCount} — buscando mensagens...`, cycle);
+      pollNum++;
+      globalState.addLog('info', `🔄 [yopmail] Poll #${pollNum} — buscando inbox de ${email}...`, cycle);
 
       try {
-        // getInbox retorna lista de mensagens
-        const inbox: Array<{ id: string; from: string; subject: string; timestamp: string }> =
-          await withRetry('yopmail getInbox', () => yop.getInbox(localPart), 3, 2000);
+        const msgs = await withRetry('yopmail fetchInbox', () => this.fetchInbox(user), 3, 2000);
+        globalState.addLog('info', `📬 [yopmail] ${msgs.length} mensagem(s) (anterior: ${lastCount})`, cycle);
 
-        globalState.addLog('info', `📬 [yopmail] ${inbox.length} mensagem(s) (anterior: ${lastMessageCount})`, cycle);
+        if (msgs.length > lastCount) {
+          const novas = msgs.slice(lastCount);
+          globalState.addLog('info', `📨 [yopmail] ${novas.length} mensagem(s) nova(s)`, cycle);
 
-        if (inbox.length > lastMessageCount) {
-          const novas = inbox.slice(lastMessageCount);
-          globalState.addLog('info', `📨 [yopmail] ${novas.length} mensagem(s) nova(s) — verificando OTP...`, cycle);
-
-          for (const msg of novas.reverse()) {
+          for (const msg of novas) {
             globalState.addLog('info', `📧 [yopmail] Lendo: "${msg.subject}" de ${msg.from}`, cycle);
             try {
-              const full: { content?: string; data?: string; text?: string; html?: string } =
-                await withRetry('yopmail readMessage', () => yop.readMessage(localPart, msg.id, 'TXT'), 3, 2000);
-
-              const rawText = full.content ?? full.data ?? full.text ?? full.html ?? '';
-              globalState.addLog('info', `📄 [yopmail] conteúdo(300): ${String(rawText).slice(0, 300)}`, cycle);
-
-              // Tenta também versão HTML
-              let rawHtml = '';
-              try {
-                const fullHtml: { content?: string; data?: string; text?: string; html?: string } =
-                  await withRetry('yopmail readMessageHtml', () => yop.readMessage(localPart, msg.id, 'HTML'), 3, 2000);
-                rawHtml = fullHtml.content ?? fullHtml.data ?? fullHtml.html ?? '';
-              } catch { /* ignora erro de HTML */ }
+              const full = await withRetry('yopmail fetchMessage', () => this.fetchMessage(user, msg.id), 3, 2000);
+              globalState.addLog('info', `📄 [yopmail] text(300): ${full.text.slice(0, 300)}`, cycle);
 
               const mailMsg: MailMessage = {
-                mail_id: msg.id,
-                mail_from: msg.from,
-                mail_to: email,
+                mail_id:      msg.id,
+                mail_from:    msg.from,
+                mail_to:      email,
                 mail_subject: msg.subject,
                 mail_preview: '',
-                mail_html: String(rawHtml),
-                mail_text: String(rawText),
-                created_at: msg.timestamp,
+                mail_html:    full.html,
+                mail_text:    full.text,
+                created_at:   new Date().toISOString(),
               };
 
               const otp = await OTPParser.extractFromMessageAsync(mailMsg);
@@ -495,13 +556,13 @@ export class YOPmailClient implements IEmailClient {
               globalState.addLog('warn', `⚠️ [yopmail] Erro ao ler mensagem ${msg.id}: ${e instanceof Error ? e.message : e}`, cycle);
             }
           }
-          lastMessageCount = inbox.length;
+          lastCount = msgs.length;
         } else {
           globalState.addLog('info', `📭 [yopmail] Sem mensagens novas — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
-        globalState.addLog('warn', `⚠️ [yopmail] Erro no poll #${pollCount}: ${e instanceof Error ? e.message : e}`, cycle);
+        globalState.addLog('warn', `⚠️ [yopmail] Erro no poll #${pollNum}: ${e instanceof Error ? e.message : e}`, cycle);
       }
 
       await sleep(POLL_INTERVAL_MS);
@@ -510,15 +571,12 @@ export class YOPmailClient implements IEmailClient {
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────────────
-// Factory
-// ────────────────────────────────────────────────────────────────────────────────
 export function createEmailClient(
   provider: 'temp-mail.io' | 'mail.tm' | 'yopmail',
   apiKey?: string
 ): IEmailClient {
-  if (provider === 'mail.tm') return new MailTmClient();
-  if (provider === 'yopmail') return new YOPmailClient();
+  if (provider === 'mail.tm')  return new MailTmClient();
+  if (provider === 'yopmail')  return new YOPmailClient();
   if (!apiKey) throw new Error('temp-mail.io requer uma API key');
   return new TempMailClient(apiKey);
 }
