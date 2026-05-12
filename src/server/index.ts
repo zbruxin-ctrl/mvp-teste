@@ -11,6 +11,16 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = 'connect@10';
 
 app.use(express.json());
+
+// ── CORS ──────────────────────────────────────────────────
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-password');
+  if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, '../../src/frontend')));
 
 globalState.setExecutor(async (config, cycle) => {
