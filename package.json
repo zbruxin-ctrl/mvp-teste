@@ -1,7 +1,7 @@
 {
   "name": "mvp-local-automation",
   "version": "1.0.0",
-  "description": "MVP local para automa\u00e7\u00e3o com Playwright e Temp-Mail",
+  "description": "MVP local para automação com Playwright e Temp-Mail",
   "main": "dist/server/index.js",
   "scripts": {
     "dev": "concurrently \"npm run build:watch\" \"nodemon dist/server/index.js\"",
@@ -9,6 +9,7 @@
     "build:watch": "tsc -w",
     "serve": "node dist/server/index.js",
     "start": "npm run build && npm run serve",
+    "postinstall": "npx playwright install chromium --with-deps",
     "playwright:install": "npx playwright install chromium",
     "clean": "shx rm -rf dist"
   },
