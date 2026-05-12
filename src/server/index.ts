@@ -84,7 +84,7 @@ function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config
 app.get('/api/status',   (_req, res) => { res.json(globalState.getState()); });
 app.get('/api/logs',     (_req, res) => { res.json(globalState.getLogs()); });
 app.get('/api/kyc',      (_req, res) => { res.json(globalState.getKycState()); });
-app.get('/api/config',   requireAuth, (_req, res) => { res.json(globalState.getConfig()); });
+app.get('/api/config',   requireAuth, (_req, res) => { res.json(globalState.getState().config); });
 app.get('/api/accounts', requireAuth, (_req, res) => {
   res.json({ accounts: accountStore.list() });
 });
