@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
-import { globalState } from '../state/globalState';
+import { globalState, parseProxyString } from '../state/globalState';
 import { MockPlaywrightFlow } from '../playwright/mockFlow';
 import * as accountStore from '../store/accountStore';
 import { Config } from '../types';
@@ -49,8 +49,36 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 
 const VALID_EMAIL_PROVIDERS = ['temp-mail.io', 'mail.tm', 'yopmail'];
 
-function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config> } | { ok: false; error: string } {
+function validateConfig(body: Partial<Config> & { proxyServer?: string; proxyUser?: string; proxyPass?: string }): { ok: true; data: Partial<Config> } | { ok: false; error: string } {
   const errors: string[] = [];
+
+  // ── Converter campos soltos de proxy → array proxies ──────────────────────
+  if (body.proxyServer !== undefined || body.proxyUser !== undefined || body.proxyPass !== undefined) {
+    const server   = (body.proxyServer ?? '').trim();
+    const username = (body.proxyUser   ?? '').trim() || undefined;
+    const password = (body.proxyPass   ?? '').trim() || undefined;
+
+    if (server) {
+      // tenta parsear a URL completa (ex: http://user:pass@host:port)
+      const parsed = parseProxyString(server);
+      if (parsed) {
+        // campos separados têm prioridade sobre os embutidos na URL
+        body.proxies = [{
+          server:   parsed.server,
+          username: username ?? parsed.username,
+          password: password ?? parsed.password,
+        }];
+      } else {
+        body.proxies = [{ server, username, password }];
+      }
+    } else {
+      body.proxies = [];
+    }
+
+    delete (body as any).proxyServer;
+    delete (body as any).proxyUser;
+    delete (body as any).proxyPass;
+  }
 
   if ('emailProvider' in body) {
     if (!VALID_EMAIL_PROVIDERS.includes(body.emailProvider as string)) {
