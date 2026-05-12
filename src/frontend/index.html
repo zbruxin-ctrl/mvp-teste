@@ -947,7 +947,6 @@
       </div>
     </div>
 
-    <!-- KYC KPI summary -->
     <div class="kyc-level-bar">
       <div class="kyc-level-card weak">
         <div class="kyc-level-label">Fraco</div>
@@ -967,10 +966,7 @@
       </div>
     </div>
 
-    <!-- Cycle tabs -->
     <div id="kyc-cycle-tabs" class="kyc-cycle-tabs"></div>
-
-    <!-- Provider cards -->
     <div id="kyc-provider-list" class="kyc-provider-list">
       <div class="empty">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -1034,17 +1030,17 @@
       <div class="field">
         <label for="cfg-email-provider">Provedor de email temporário</label>
         <select id="cfg-email-provider" name="emailProvider">
-          <option value="temp-mail.io">TempMail (1secmail / temp-mail.io)</option>
-          <option value="mail.tm">Mail.tm (gratuito, sem API key)</option>
-          <option value="yopmail">YOPmail (aliases — gratuito, sem API key)</option>
+          <option value="tempmailc">TempMailC — private.tempmailc.com (requer API key)</option>
+          <option value="temp-mail.io">TempMail.io — temp-mail.io (requer API key)</option>
+          <option value="mail.tm">Mail.tm — gratuito, sem API key</option>
         </select>
-        <span class="field-hint">Mail.tm e YOPmail não precisam de API key. YOPmail usa aliases alternativos (não @yopmail.com).</span>
+        <span class="field-hint">TempMailC e TempMail.io exigem API key. Mail.tm é gratuito.</span>
       </div>
 
       <div class="field" id="apikey-wrap">
-        <label for="cfg-apikey">TempMail API Key</label>
+        <label for="cfg-apikey" id="apikey-label">API Key</label>
         <input type="password" id="cfg-apikey" name="tempMailApiKey" placeholder="Sua chave de API" autocomplete="off"/>
-        <span class="field-hint">Necessária apenas quando o provedor for TempMail.</span>
+        <span class="field-hint" id="apikey-hint">Necessária para o provedor selecionado.</span>
       </div>
 
       <!-- ── Proxy ── -->
@@ -1180,11 +1176,9 @@ function toast(msg, type = 'info') {
 }
 
 /* ─── CONNECTION CHECK ────────────────────────────────── */
-// Inicia como null para forçar a atualização visual no primeiro fetchStatus
 let isOnline = null;
 
 function setConnection(online) {
-  // Sempre atualiza na primeira chamada (isOnline === null) ou quando o estado muda
   if (online === isOnline) return;
   isOnline = online;
   const badge = document.getElementById('conn-badge');
@@ -1625,7 +1619,7 @@ async function loadConfig() {
     document.getElementById('cfg-interval').value     = data.cycleInterval || '';
     document.getElementById('cfg-delay').value        = data.extraDelay  || '';
     document.getElementById('cfg-headless').value     = String(data.headless ?? 'true');
-    document.getElementById('cfg-email-provider').value = data.emailProvider || 'temp-mail.io';
+    document.getElementById('cfg-email-provider').value = data.emailProvider || 'tempmailc';
     document.getElementById('cfg-apikey').value       = data.tempMailApiKey || '';
     document.getElementById('cfg-proxy-server').value = data.proxyServer || '';
     document.getElementById('cfg-proxy-user').value   = data.proxyUser   || '';
@@ -1634,9 +1628,18 @@ async function loadConfig() {
   } catch { /* silencia */ }
 }
 
+/* Mostra campo de API key para provedores que exigem chave */
 function toggleApiKeyField() {
   const provider = document.getElementById('cfg-email-provider').value;
-  document.getElementById('apikey-wrap').classList.toggle('visible', provider === 'temp-mail.io');
+  const needsKey = provider === 'tempmailc' || provider === 'temp-mail.io';
+  document.getElementById('apikey-wrap').classList.toggle('visible', needsKey);
+  if (provider === 'tempmailc') {
+    document.getElementById('apikey-label').textContent = 'TempMailC API Key';
+    document.getElementById('apikey-hint').textContent  = 'Chave da API do private.tempmailc.com.';
+  } else {
+    document.getElementById('apikey-label').textContent = 'TempMail.io API Key';
+    document.getElementById('apikey-hint').textContent  = 'Chave da API do temp-mail.io.';
+  }
 }
 document.getElementById('cfg-email-provider').addEventListener('change', toggleApiKeyField);
 
@@ -1666,7 +1669,7 @@ document.getElementById('btn-reset-config').addEventListener('click', () => {
     document.getElementById('cfg-interval').value     = configSnapshot.cycleInterval || '';
     document.getElementById('cfg-delay').value        = configSnapshot.extraDelay  || '';
     document.getElementById('cfg-headless').value     = String(configSnapshot.headless ?? 'true');
-    document.getElementById('cfg-email-provider').value = configSnapshot.emailProvider || 'temp-mail.io';
+    document.getElementById('cfg-email-provider').value = configSnapshot.emailProvider || 'tempmailc';
     document.getElementById('cfg-apikey').value       = configSnapshot.tempMailApiKey || '';
     document.getElementById('cfg-proxy-server').value = configSnapshot.proxyServer || '';
     document.getElementById('cfg-proxy-user').value   = configSnapshot.proxyUser   || '';
