@@ -356,8 +356,7 @@ export class MailTmClient implements IEmailClient {
 // A lib easy-yopmail só precisa do local part para consultar a inbox.
 // ──────────────────────────────────────────────────────────────────────────────────
 
-// Tipo retornado por getInbox() conforme documentação easy-yopmail:
-// easyYopmail.getInbox('localpart').then(result => result.inbox)
+// Tipo retornado por getInbox() conforme documentação easy-yopmail
 interface YopInboxResult {
   inbox: Array<{ id: string; subject: string; from: string; timestamp?: string; page?: number }>;
 }
@@ -468,9 +467,10 @@ export class YOPmailClient implements IEmailClient {
       globalState.addLog('info', `🔄 [yopmail] Poll #${poll} — verificando inbox ${this.inbox}...`, cycle);
 
       try {
-        const result = await withRetry(
+        // Cast explícito para YopInboxResult evita TS18046 ('result' is of type 'unknown')
+        const result = await withRetry<YopInboxResult>(
           'yopmail getInbox',
-          () => EasyYopmail.getInbox(this.inbox),
+          () => EasyYopmail.getInbox(this.inbox) as Promise<YopInboxResult>,
           3, 3000
         );
 
