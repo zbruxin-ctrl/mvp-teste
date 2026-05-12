@@ -196,6 +196,7 @@ export class MailTmClient implements IEmailClient {
     return pwd;
   }
 
+  // ─── request com log do status HTTP bruto ────────────────────────────────────
   private async request<T>(
     endpoint: string,
     method: 'GET' | 'POST' = 'GET',
@@ -214,8 +215,9 @@ export class MailTmClient implements IEmailClient {
 
     if (!res) throw new Error(`Mail.tm ${endpoint}: erro de rede/timeout`);
 
+    // 401 explícito — token rejeitado pela API
     if (res.status === 401 && auth) {
-      globalState.addLog('warn', '🔑 [mail.tm] Token expirado — reautenticando...');
+      globalState.addLog('warn', '🔑 [mail.tm] 401 recebido — reautenticando...');
       await this.relogin();
       const headers2: Record<string, string> = { 'Content-Type': 'application/json' };
       if (this.authToken) headers2['Authorization'] = `Bearer ${this.authToken}`;
@@ -252,7 +254,7 @@ export class MailTmClient implements IEmailClient {
       })
     );
     this.authToken = tokenResp.token;
-    globalState.addLog('info', '✅ [mail.tm] Reautenticado com sucesso');
+    globalState.addLog('info', '✅ [mail.tm] Token renovado com sucesso');
   }
 
   async createRandomEmail(): Promise<EmailAccount> {
@@ -286,17 +288,31 @@ export class MailTmClient implements IEmailClient {
     this.accountEmail = email;
     this.accountPassword = password;
 
-    globalState.addLog('info', `✅ [mail.tm] Email criado: ${email}`);
+    globalState.addLog('info', `✅ [mail.tm] Email criado: ${email} | token: ${this.authToken ? this.authToken.slice(0, 12) + '...' : 'NULL'}`);
     return { email, token: tokenResp.token };
   }
 
+  // ─── waitForOTP com relogin proativo ─────────────────────────────────────────
   async waitForOTP(email: string, timeoutMs = 90000, cycle?: number): Promise<string> {
     const startTime = Date.now();
     let lastMessageCount = 0;
+    let emptyPollStreak = 0;          // polls consecutivos com lista vazia
+    const EMPTY_STREAK_RELOGIN = 3;   // relogin após N polls vazios seguidos
     const POLL_INTERVAL_MS = 6_000;
     const INITIAL_WAIT_MS  = 8_000;
 
-    globalState.addLog('info', `⏳ [mail.tm] Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`, cycle);
+    // Debug: confirma o estado do token antes de começar
+    globalState.addLog('info',
+      `⏳ [mail.tm] Aguardando OTP (${Math.round(timeoutMs / 1000)}s) | token: ${
+        this.authToken ? this.authToken.slice(0, 12) + '...' : 'NULL ⚠️'
+      }`, cycle);
+
+    // Se por algum motivo o token for null, tenta relogin antes de começar
+    if (!this.authToken) {
+      globalState.addLog('warn', '⚠️ [mail.tm] Token nulo antes do poll — tentando relogin...', cycle);
+      await this.relogin();
+    }
+
     await sleep(INITIAL_WAIT_MS);
 
     while (Date.now() - startTime < timeoutMs) {
@@ -309,9 +325,14 @@ export class MailTmClient implements IEmailClient {
         );
         const messages = data['hydra:member'] ?? [];
 
+        globalState.addLog('info',
+          `📬 [mail.tm] ${messages.length} mensagem(s) na inbox (anterior: ${lastMessageCount})`, cycle);
+
         if (messages.length > lastMessageCount) {
-          globalState.addLog('info', `📨 [mail.tm] ${messages.length} mensagem(s) — verificando OTP...`, cycle);
+          emptyPollStreak = 0;
+          globalState.addLog('info', `📨 [mail.tm] ${messages.length - lastMessageCount} mensagem(s) nova(s) — verificando OTP...`, cycle);
           for (const msg of messages.slice(lastMessageCount).reverse()) {
+            globalState.addLog('info', `📧 [mail.tm] Lendo: "${msg.subject}" de ${msg.from?.address ?? 'desconhecido'}`, cycle);
             try {
               const full = await withRetry(
                 'mail.tm getMessage',
@@ -328,16 +349,35 @@ export class MailTmClient implements IEmailClient {
                 mail_text:    full.text ?? '',
                 created_at:   full.createdAt,
               };
+              globalState.addLog('info',
+                `📄 [mail.tm] Body (200): ${(mailMsg.mail_text || mailMsg.mail_html).slice(0, 200)}`, cycle);
               const otp = await OTPParser.extractFromMessageAsync(mailMsg);
               if (otp) {
                 globalState.addLog('success', `🎉 [mail.tm] OTP encontrado: ${otp}`, cycle);
                 return otp;
               }
-            } catch { /* mensagem individual falhou — continua */ }
+              globalState.addLog('warn', `⚠️ [mail.tm] Nenhum OTP em "${msg.subject}"`, cycle);
+            } catch (e) {
+              globalState.addLog('warn', `⚠️ [mail.tm] Erro ao ler msg ${msg.id}: ${e instanceof Error ? e.message : e}`, cycle);
+            }
           }
           lastMessageCount = messages.length;
         } else {
-          globalState.addLog('info', `💭 [mail.tm] Sem mensagens novas — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
+          emptyPollStreak++;
+          globalState.addLog('info',
+            `💭 [mail.tm] Sem novas mensagens (streak vazio: ${emptyPollStreak}) — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
+
+          // Relogin proativo: mail.tm retorna [] silenciosamente quando o token expira
+          if (emptyPollStreak > 0 && emptyPollStreak % EMPTY_STREAK_RELOGIN === 0) {
+            globalState.addLog('warn',
+              `🔑 [mail.tm] ${emptyPollStreak} polls vazios consecutivos — renovando token preventivamente...`, cycle);
+            try {
+              await this.relogin();
+              emptyPollStreak = 0;
+            } catch (e) {
+              globalState.addLog('warn', `⚠️ [mail.tm] Relogin proativo falhou: ${e instanceof Error ? e.message : e}`, cycle);
+            }
+          }
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
@@ -392,7 +432,6 @@ export class YOPmailClient implements IEmailClient {
     id: string,
     cycle?: number
   ): Promise<string> {
-    // Estratégia 1: format HTML + selector #mail (conteúdo principal)
     try {
       const r = await EasyYopmail.readMessage(this.inbox, id, { format: 'HTML', selector: '#mail' });
       const body = r?.content ?? r?.data ?? '';
@@ -404,8 +443,6 @@ export class YOPmailClient implements IEmailClient {
     } catch (e) {
       globalState.addLog('warn', `⚠️ [yopmail] readMessage HTML#mail falhou: ${e instanceof Error ? e.message : e}`, cycle);
     }
-
-    // Estratégia 2: format HTML sem selector (html completo)
     try {
       const r = await EasyYopmail.readMessage(this.inbox, id, { format: 'HTML' });
       const body = r?.content ?? r?.data ?? '';
@@ -417,8 +454,6 @@ export class YOPmailClient implements IEmailClient {
     } catch (e) {
       globalState.addLog('warn', `⚠️ [yopmail] readMessage HTML full falhou: ${e instanceof Error ? e.message : e}`, cycle);
     }
-
-    // Estratégia 3: format TXT via objeto options (API v5)
     try {
       const r = await EasyYopmail.readMessage(this.inbox, id, { format: 'TXT' });
       const body = r?.content ?? r?.data ?? '';
@@ -430,8 +465,6 @@ export class YOPmailClient implements IEmailClient {
     } catch (e) {
       globalState.addLog('warn', `⚠️ [yopmail] readMessage TXT-obj falhou: ${e instanceof Error ? e.message : e}`, cycle);
     }
-
-    // Estratégia 4: assinatura legada string (compatibilidade com versões antigas)
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const r = await (EasyYopmail.readMessage as any)(this.inbox, id, 'TXT');
@@ -442,7 +475,6 @@ export class YOPmailClient implements IEmailClient {
     } catch (e) {
       globalState.addLog('warn', `⚠️ [yopmail] readMessage TXT-str falhou: ${e instanceof Error ? e.message : e}`, cycle);
     }
-
     return '';
   }
 
@@ -467,7 +499,6 @@ export class YOPmailClient implements IEmailClient {
       globalState.addLog('info', `🔄 [yopmail] Poll #${poll} — verificando inbox ${this.inbox}...`, cycle);
 
       try {
-        // Cast explícito para YopInboxResult evita TS18046 ('result' is of type 'unknown')
         const result = await withRetry<YopInboxResult>(
           'yopmail getInbox',
           () => EasyYopmail.getInbox(this.inbox) as Promise<YopInboxResult>,
@@ -484,14 +515,12 @@ export class YOPmailClient implements IEmailClient {
           for (const msg of novas) {
             globalState.addLog('info', `📧 [yopmail] Lendo: "${msg.subject}" de ${msg.from}`, cycle);
 
-            // Estratégia 0: OTP direto no subject (evita chamar readMessage)
             const otpSubject = this.tryOtpFromSubject(msg.subject ?? '');
             if (otpSubject) {
               globalState.addLog('success', `🎉 [yopmail] OTP no subject: ${otpSubject}`, cycle);
               return otpSubject;
             }
 
-            // Estratégias 1-4: ler o corpo com retry e backoff maior
             try {
               const bodyStr = await withRetry(
                 'yopmail readBody',
