@@ -374,33 +374,20 @@ export class MailTmClient implements IEmailClient {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────
-// YOPmailClient  (easy-yopmail — aliases não-padrão)
+// YOPmailClient
+// Usa @yopmail.com diretamente — domínio principal aceito pelo site-alvo.
+// A lib easy-yopmail só precisa do local part para consultar a inbox.
 // ──────────────────────────────────────────────────────────────────────────────────
 
-const YOP_ALIASES = [
-  'icimail.com',
-  'cool.fr',
-  'elitemail.org',
-  'courriel.fr.nf',
-  'moncourrier.fr.nf',
-  'monemail.fr.nf',
-  'monmail.fr.nf',
-];
-
-// Tipo retornado por getInbox() conforme documentação:
-// easyYopmail.getInbox('email').then(result => result.inbox) => Array<{id, from, subject, timestamp, page}>
+// Tipo retornado por getInbox() conforme documentação easy-yopmail:
+// easyYopmail.getInbox('localpart').then(result => result.inbox)
 interface YopInboxResult {
   inbox: Array<{ id: string; subject: string; from: string; timestamp?: string; page?: number }>;
 }
 
 export class YOPmailClient implements IEmailClient {
   private inbox: string = '';
-  private domain: string = '';
   private email: string = '';
-
-  private pickAlias(): string {
-    return YOP_ALIASES[Math.floor(Math.random() * YOP_ALIASES.length)];
-  }
 
   private generateInbox(): string {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -410,9 +397,10 @@ export class YOPmailClient implements IEmailClient {
   }
 
   async createRandomEmail(): Promise<EmailAccount> {
-    this.domain = this.pickAlias();
-    this.inbox  = this.generateInbox();
-    this.email  = `${this.inbox}@${this.domain}`;
+    this.inbox = this.generateInbox();
+    // Usa @yopmail.com diretamente — domínio principal, não alias.
+    // Aliases como elitemail.org, cool.fr etc. são bloqueados pelo site-alvo.
+    this.email = `${this.inbox}@yopmail.com`;
     globalState.addLog('info', `📧 [yopmail] Email criado: ${this.email}`);
     return { email: this.email, token: this.inbox };
   }
@@ -442,7 +430,8 @@ export class YOPmailClient implements IEmailClient {
       globalState.addLog('info', `🔄 [yopmail] Poll #${poll} — verificando inbox ${this.inbox}...`, cycle);
 
       try {
-        // getInbox retorna { inbox: [...] } conforme documentação easy-yopmail
+        // getInbox() recebe apenas o local part (sem @dominio)
+        // e retorna { inbox: [...] } conforme documentação
         const result = await withRetry(
           'yopmail getInbox',
           () => EasyYopmail.getInbox(this.inbox),
