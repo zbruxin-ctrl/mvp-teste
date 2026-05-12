@@ -37,12 +37,14 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+const VALID_EMAIL_PROVIDERS = ['temp-mail.io', 'mail.tm', 'yopmail'];
+
 function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config> } | { ok: false; error: string } {
   const errors: string[] = [];
 
   if ('emailProvider' in body) {
-    if (body.emailProvider !== 'temp-mail.io' && body.emailProvider !== 'mail.tm') {
-      errors.push('emailProvider deve ser "temp-mail.io" ou "mail.tm"');
+    if (!VALID_EMAIL_PROVIDERS.includes(body.emailProvider as string)) {
+      errors.push(`emailProvider deve ser um de: ${VALID_EMAIL_PROVIDERS.join(', ')}`);
     }
   }
   if ('otpTimeout' in body) {
@@ -82,12 +84,28 @@ function validateConfig(body: Partial<Config>): { ok: true; data: Partial<Config
 app.get('/api/status',   (_req, res) => { res.json(globalState.getState()); });
 app.get('/api/logs',     (_req, res) => { res.json(globalState.getLogs()); });
 app.get('/api/kyc',      (_req, res) => { res.json(globalState.getKycState()); });
+app.get('/api/config',   requireAuth, (_req, res) => { res.json(globalState.getConfig()); });
 app.get('/api/accounts', requireAuth, (_req, res) => {
   res.json({ accounts: accountStore.list() });
 });
 
+// POST clears (original)
 app.post('/api/logs/clear', requireAuth, (_req, res) => {
   globalState.clearLogs();
+  res.json({ ok: true });
+});
+app.post('/api/kyc/clear', requireAuth, (_req, res) => {
+  globalState.clearKycState();
+  res.json({ ok: true });
+});
+
+// DELETE aliases — compatível com o frontend
+app.delete('/api/logs', requireAuth, (_req, res) => {
+  globalState.clearLogs();
+  res.json({ ok: true });
+});
+app.delete('/api/kyc', requireAuth, (_req, res) => {
+  globalState.clearKycState();
   res.json({ ok: true });
 });
 
@@ -108,6 +126,17 @@ app.post('/api/start', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// alias para /api/run-once usado pelo frontend
+app.post('/api/run-once', requireAuth, (req, res) => {
+  if (req.body?.config) {
+    const result = validateConfig(req.body.config);
+    if (!result.ok) { res.status(400).json({ ok: false, error: result.error }); return; }
+    globalState.updateConfig(result.data);
+  }
+  globalState.startOnce();
+  res.json({ ok: true });
+});
+
 app.post('/api/start-once', requireAuth, (req, res) => {
   if (req.body?.config) {
     const result = validateConfig(req.body.config);
@@ -120,11 +149,6 @@ app.post('/api/start-once', requireAuth, (req, res) => {
 
 app.post('/api/stop', requireAuth, (_req, res) => {
   globalState.stop();
-  res.json({ ok: true });
-});
-
-app.post('/api/kyc/clear', requireAuth, (_req, res) => {
-  globalState.clearKycState();
   res.json({ ok: true });
 });
 
