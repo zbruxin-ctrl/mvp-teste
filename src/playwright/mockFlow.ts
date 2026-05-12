@@ -11,23 +11,23 @@ import * as accountStore from '../store/accountStore';
 
 chromiumExtra.use(StealthPlugin());
 
+// ─── Detecção de ambiente ─────────────────────────────────────────────────────
+// No Railway (Linux) usamos Chromium headless do Playwright.
+// No Windows local usamos o Brave instalado.
+
+const IS_LINUX = process.platform === 'linux';
+const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
+
 // ─── Instâncias de browser (uma por configuração de proxy de launch) ───────────
-// Mantemos um browser por "assinatura de proxy de launch" para que ciclos com
-// proxies diferentes usem browsers separados (e para não ter problema de
-// "browser já rodando com proxy X, ciclo Y quer proxy Z").
-// Para simplificar: mantemos 1 browser por proxy de launch. Quando não há proxy
-// configurado o browser herda a VPN/sistema via --proxy-server="".
 
 let browser: Browser | null = null;
 let browserLaunching = false;
-let currentLaunchProxy: string | null = null; // proxy usado no último launch
+let currentLaunchProxy: string | null = null;
 
 const contextosPorCiclo = new Map<number, BrowserContext>();
 
 /** Timeout máximo de um ciclo completo (10 minutos). */
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
-
-const BRAVE_PATH = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
 
 const MOBILE_DEVICE = devices['iPhone 14'];
 
@@ -898,11 +898,6 @@ function registrarListenersPage(page: Page, cycle: number): void {
   }).catch(() => {});
 }
 
-// ─── Determina proxy para o launch do browser ─────────────────────────────────
-// Usamos o proxy do PRIMEIRO ciclo disponível como proxy de launch.
-// Isso garante que todo o tráfego do browser (incluindo DNS) passe pelo proxy.
-// Cada contexto pode sobrescrever com seu próprio proxy.
-
 function getFirstAvailableProxy(): { server: string; username?: string; password?: string } | null {
   const proxies = (globalState.getState().config as any).proxies as Array<{server:string;username?:string;password?:string}> | undefined;
   if (!proxies || proxies.length === 0) return null;
@@ -917,18 +912,9 @@ async function criarContextoIsolado(
   const proxy = globalState.getProxyForCycle(cycle);
 
   if (proxy) {
-    globalState.addLog(
-      'info',
-      `🌐 [Proxy] Ciclo #${cycle} → usando proxy: ${proxy.server}` +
-      (proxy.username ? ` | usuário: ${proxy.username}` : ''),
-      cycle
-    );
+    globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → usando proxy: ${proxy.server}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
   } else {
-    globalState.addLog(
-      'warn',
-      `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado (usando conexão do sistema / VPN)`,
-      cycle
-    );
+    globalState.addLog('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
   }
 
   const context = await browser!.newContext({
@@ -937,10 +923,7 @@ async function criarContextoIsolado(
     timezoneId: 'America/Sao_Paulo',
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
-    extraHTTPHeaders: {
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-    },
-    // Proxy por contexto: sobrescreve o proxy de launch para este ciclo específico
+    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
     ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
   });
 
@@ -956,41 +939,19 @@ async function criarContextoIsolado(
 
   const page = await context.newPage();
 
-  // ── FIX: Interceptar novas abas abertas PELO SITE (popup com window.open) ───
-  // ATENÇÃO: só fechamos a aba se ela tiver um "opener" (ou seja, foi aberta
-  // via window.open / target="_blank" pelo próprio site controlado).
-  // Abas abertas manualmente pelo usuário (nova guia, menu do browser) NÃO
-  // possuem opener e NÃO devem ser fechadas — são abas independentes do usuário.
   context.on('page', async (novaPage) => {
     try {
-      // Verifica se a nova página tem opener (foi aberta pelo site via JS)
       const temOpener = await novaPage.evaluate(() => window.opener !== null).catch(() => false);
-
       if (!temOpener) {
-        // Aba aberta pelo usuário manualmente — não interferir
-        globalState.addLog(
-          'info',
-          `🪟 Nova aba detectada sem opener (aberta pelo usuário) — ignorando`,
-          cycle
-        );
+        globalState.addLog('info', `🪟 Nova aba sem opener — ignorando`, cycle);
         return;
       }
-
-      // É um popup do site (window.open) — interceptar e fechar
       const url = novaPage.url();
-      globalState.addLog(
-        'info',
-        `📌 Popup do site interceptado (url: ${url || 'about:blank'}) — fechando automaticamente`,
-        cycle
-      );
-      // Registra listeners KYC antes de fechar (pode ter KYC signal)
+      globalState.addLog('info', `📌 Popup interceptado (${url || 'about:blank'}) — fechando`, cycle);
       registrarListenersPage(novaPage, cycle);
-      // Aguarda um instante para capturar qualquer signal de rede antes de fechar
       await new Promise<void>((r) => setTimeout(r, 800));
       await novaPage.close().catch(() => {});
-    } catch {
-      // Se não conseguir verificar o opener, não fecha a aba (mais seguro)
-    }
+    } catch { /* não fecha se não conseguir verificar */ }
   });
 
   try {
@@ -1008,17 +969,15 @@ async function criarContextoIsolado(
       acceptLanguage: 'pt-BR,pt;q=0.9',
       platform: 'iPhone',
     });
-    globalState.addLog('info', `📱 CDP mobile ativado (${MOBILE_DEVICE.viewport?.width}x${MOBILE_DEVICE.viewport?.height})`, cycle);
+    globalState.addLog('info', `📱 CDP mobile ativado`, cycle);
   } catch (e) {
-    globalState.addLog('warn', `⚠️ CDP mobile falhou, usando contexto padrão: ${e}`, cycle);
+    globalState.addLog('warn', `⚠️ CDP mobile falhou: ${e}`, cycle);
   }
 
   registrarListenersPage(page, cycle);
   contextosPorCiclo.set(cycle, context);
   return { context, page };
 }
-
-// ─── Fecha contexto de um ciclo (sem afetar outros) ───────────────────────────
 
 async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void> {
   const ctx = contextosPorCiclo.get(cycle);
@@ -1033,32 +992,17 @@ async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void>
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
-  /**
-   * Inicia o browser (Brave).
-   *
-   * Regras de proxy no launch:
-   * - Se há proxies configurados → lança com --proxy-server=<primeiro proxy>
-   *   para que TODO o tráfego (incluindo DNS e requests fora dos contextos)
-   *   passe pelo proxy. Cada contexto ainda pode sobrescrever com seu próprio.
-   * - Se NÃO há proxies → lança com --proxy-server="" para que o Brave herde
-   *   a configuração de rede do sistema operacional (inclui VPN ativa).
-   *
-   * Se a configuração de proxy mudar entre calls, o browser anterior é destruído
-   * e um novo é lançado com as novas configurações.
-   */
   static async init(headless = false): Promise<void> {
     const firstProxy = getFirstAvailableProxy();
     const launchProxyKey = firstProxy ? firstProxy.server : '__system__';
 
-    // Se o browser já existe com o mesmo proxy de launch, reutiliza
     if (browser && currentLaunchProxy === launchProxyKey) {
-      globalState.addLog('info', '🦁 Browser já está rodando — próximo ciclo abrirá nova aba');
+      globalState.addLog('info', '🌐 Browser já está rodando — reutilizando');
       return;
     }
 
-    // Se o browser existe mas com proxy diferente, destrói e recria
     if (browser && currentLaunchProxy !== launchProxyKey) {
-      globalState.addLog('warn', '🔄 Proxy de launch mudou — reiniciando browser...');
+      globalState.addLog('warn', '🔄 Proxy mudou — reiniciando browser...');
       await browser.close().catch(() => {});
       browser = null;
       currentLaunchProxy = null;
@@ -1066,53 +1010,58 @@ export class MockPlaywrightFlow {
     }
 
     if (browserLaunching) {
-      globalState.addLog('info', '⏳ Aguardando browser iniciar (outro ciclo já está subindo)...');
+      globalState.addLog('info', '⏳ Aguardando browser iniciar...');
       const deadline = Date.now() + 30_000;
-      while (!browser && Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 200));
-      }
+      while (!browser && Date.now() < deadline) await new Promise<void>((r) => setTimeout(r, 200));
       if (!browser) throw new Error('Timeout aguardando browser iniciar');
       return;
     }
 
     browserLaunching = true;
     try {
-      // Determina o argumento de proxy para o launch
-      let proxyArg: string;
-      if (firstProxy) {
-        proxyArg = firstProxy.server;
-        globalState.addLog('info', `🌐 [Browser Launch] Proxy de launch: ${proxyArg}`);
+      let proxyArg = firstProxy ? firstProxy.server : '';
+
+      // ── Detecta ambiente ──────────────────────────────────────────────────
+      // Linux (Railway/servidor) → Chromium headless do Playwright (sem executablePath)
+      // Windows (local) → Brave instalado em BRAVE_PATH
+      if (IS_LINUX) {
+        globalState.addLog('info', '🐧 Linux detectado → usando Chromium headless do Playwright');
+        browser = await chromiumExtra.launch({
+          headless: true,
+          slowMo: 0,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-infobars',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-default-browser-check',
+            ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
+          ],
+        }) as unknown as Browser;
       } else {
-        // Sem proxy configurado → herda VPN/sistema.
-        // String vazia faz o Chromium usar as configurações de proxy do SO.
-        proxyArg = '';
-        globalState.addLog('info', '🌐 [Browser Launch] Sem proxy — usando conexão do sistema (VPN se ativa)');
+        globalState.addLog('info', '🦁 Windows detectado → usando Brave');
+        browser = await chromiumExtra.launch({
+          headless,
+          executablePath: BRAVE_PATH,
+          slowMo: 0,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-infobars',
+            '--disable-dev-shm-usage',
+            '--no-first-run',
+            '--no-default-browser-check',
+            ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
+          ],
+        }) as unknown as Browser;
       }
 
-      globalState.addLog('info', '🦁 Iniciando Brave...');
-      browser = await chromiumExtra.launch({
-        headless,
-        executablePath: BRAVE_PATH,
-        slowMo: 0,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-infobars',
-          '--disable-dev-shm-usage',
-          '--no-first-run',
-          '--no-default-browser-check',
-          // ── PROXY DE LAUNCH ──────────────────────────────────────────────────
-          // Força TODO tráfego pelo proxy (inclui DNS-over-HTTPS, WebSockets etc.)
-          // Quando proxyArg === '' o Chromium lê as configurações do SO (VPN).
-          ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
-          // ── SEM PROXY: deixa o SO controlar (VPN funciona) ───────────────────
-          // Sem --proxy-server o Brave usa wpad/sistema → VPN é respeitada.
-        ],
-      }) as unknown as Browser;
-
       currentLaunchProxy = launchProxyKey;
-      globalState.addLog('info', '✅ Browser pronto — cada ciclo abrirá uma aba com emulação iPhone 14 via CDP');
+      globalState.addLog('info', '✅ Browser pronto!');
     } finally {
       browserLaunching = false;
     }
@@ -1141,7 +1090,6 @@ export class MockPlaywrightFlow {
     try {
       await Promise.race([timeoutPromise, MockPlaywrightFlow._executarCiclo(cadastroUrl, config, cycle)]);
     } catch (error) {
-      // FIX: fecha APENAS o contexto deste ciclo — não afeta outros ciclos/abas
       await fecharContextoCiclo(cycle, String(error));
       throw error;
     }
@@ -1158,9 +1106,8 @@ export class MockPlaywrightFlow {
     },
     cycle: number
   ): Promise<void> {
-    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba (sessão isolada, mobile iPhone 14)`, cycle);
+    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba`, cycle);
     const { context, page: p } = await criarContextoIsolado(cycle);
-
     const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
 
     try {
@@ -1183,14 +1130,11 @@ export class MockPlaywrightFlow {
         codigoIndicacao: payload.codigoIndicacao,
       });
 
-      // 1. EMAIL
-      globalState.addLog('info', '📧 Preenchendo email (force mode)...', cycle);
+      globalState.addLog('info', '📧 Preenchendo email...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '📧 Email preenchido → Continuar', cycle);
 
-      // 2. OTP
       globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
       const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
       globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
@@ -1203,40 +1147,30 @@ export class MockPlaywrightFlow {
       }
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '✅ OTP preenchido → Avançar', cycle);
 
-      // 3. TELEFONE
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', `📱 Telefone: ${payload.telefone}`, cycle);
 
-      // 4. SENHA
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PASSWORD', payload.senha);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', '🔒 Senha preenchida', cycle);
 
-      // 5. NOME
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#FIRST_NAME', payload.nome);
       await humanPause(randInt(sp(200), sp(400)));
       await humanType(p, '#LAST_NAME', payload.sobrenome);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
       await humanClick(p, '#forward-button');
-      globalState.addLog('info', `👤 Nome: ${payload.nome} ${payload.sobrenome}`, cycle);
 
-      // 6. TERMOS
       await aceitarTermos(p);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await humanClick(p, '#forward-button');
 
-      // Pós-cadastro
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(sp(700), sp(1400)));
-      globalState.addLog('info', '🔄 Redirecionado para bonjour', cycle);
 
       await dispensarCookies(p);
       await selecionarCidade(p, payload.localizacao, cycle);
@@ -1246,22 +1180,19 @@ export class MockPlaywrightFlow {
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
       await dispensarCookies(p);
       await humanClick(p, '[data-testid="submit-button"]');
-      globalState.addLog('info', `📍 Cidade: ${payload.localizacao} | Convite: ${payload.codigoIndicacao}`, cycle);
 
       await dispensarWhatsApp(p, cycle);
       await clicarFotoPerfil(p, cycle, context);
 
       const aindaAberta = contextosPorCiclo.has(cycle);
-      if (aindaAberta) {
-        globalState.addLog('success', `🎉 Ciclo #${cycle} COMPLETO! Aba mantida aberta.`, cycle);
-      } else {
-        globalState.addLog('info', `✅ Ciclo #${cycle} concluído!`, cycle);
-      }
-
+      globalState.addLog(
+        aindaAberta ? 'success' : 'info',
+        `${aindaAberta ? '🎉' : '✅'} Ciclo #${cycle} concluído!`,
+        cycle
+      );
     } catch (error) {
       globalState.clearPayload(cycle);
-      await ArtifactsManager.saveScreenshot(p, cycle, 'error').catch(() => {});
-      await ArtifactsManager.saveHTML(p, cycle, 'error').catch(() => {});
+      await ArtifactsManager.saveErrorArtifacts(p, cycle);
       throw error;
     }
   }
