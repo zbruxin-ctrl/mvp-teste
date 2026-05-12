@@ -552,12 +552,217 @@ export class YOPmailClient implements IEmailClient {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────────
+// TempMailCClient  (private.tempmailc.com — API key: gC9_VSMh5_s)
+// Endpoints inferidos da doc: #auth #code #inbox #html #domains
+// Base URL: https://private.tempmailc.com/api
+// Auth: header  Authorization: Bearer <apiKey>
+// ──────────────────────────────────────────────────────────────────────────────────
+
+interface TempMailCInboxItem {
+  id: string;
+  from: string;
+  subject: string;
+  date: string;
+  read: boolean;
+}
+
+interface TempMailCEmailResp {
+  email: string;
+  domain: string;
+  token?: string;
+}
+
+export class TempMailCClient implements IEmailClient {
+  private readonly BASE = 'https://private.tempmailc.com/api';
+  private readonly apiKey: string;
+  private emailAddr: string = '';
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+  }
+
+  private get authHeaders(): Record<string, string> {
+    return {
+      'Authorization': `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private async apiGet<T>(path: string): Promise<T> {
+    const res = await safeFetch(`${this.BASE}${path}`, {
+      method: 'GET',
+      headers: this.authHeaders,
+      timeoutMs: 15000,
+    });
+    if (!res) throw new Error(`[tempmailc] GET ${path}: timeout/rede`);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => String(res.status));
+      throw new Error(`[tempmailc] GET ${path} → ${res.status}: ${txt}`);
+    }
+    const txt = await res.text();
+    return txt ? JSON.parse(txt) as T : {} as T;
+  }
+
+  private async apiPost<T>(path: string, body?: unknown): Promise<T> {
+    const res = await safeFetch(`${this.BASE}${path}`, {
+      method: 'POST',
+      headers: this.authHeaders,
+      body: body ? JSON.stringify(body) : undefined,
+      timeoutMs: 15000,
+    });
+    if (!res) throw new Error(`[tempmailc] POST ${path}: timeout/rede`);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => String(res.status));
+      throw new Error(`[tempmailc] POST ${path} → ${res.status}: ${txt}`);
+    }
+    const txt = await res.text();
+    return txt ? JSON.parse(txt) as T : {} as T;
+  }
+
+  async createRandomEmail(): Promise<EmailAccount> {
+    globalState.addLog('info', '📧 [tempmailc] Buscando domínios disponíveis...');
+
+    // GET /domains — lista domínios disponíveis
+    const domains = await withRetry(
+      'tempmailc getDomains',
+      () => this.apiGet<string[] | { domains: string[] }>('/domains')
+    );
+    const domainList: string[] = Array.isArray(domains)
+      ? domains
+      : (domains as { domains: string[] }).domains ?? [];
+
+    if (!domainList.length) throw new Error('[tempmailc] Nenhum domínio disponível');
+
+    const domain = domainList[Math.floor(Math.random() * domainList.length)]!;
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let localPart = '';
+    for (let i = 0; i < 10; i++) localPart += chars[Math.floor(Math.random() * chars.length)];
+
+    globalState.addLog('info', `📧 [tempmailc] Criando email: ${localPart}@${domain}`);
+
+    // POST /auth — cria/registra o email
+    const resp = await withRetry(
+      'tempmailc createEmail',
+      () => this.apiPost<TempMailCEmailResp>('/auth', { email: `${localPart}@${domain}` })
+    );
+
+    this.emailAddr = resp.email ?? `${localPart}@${domain}`;
+    globalState.addLog('info', `✅ [tempmailc] Email criado: ${this.emailAddr}`);
+    return { email: this.emailAddr, token: this.emailAddr };
+  }
+
+  private async getInbox(email: string): Promise<TempMailCInboxItem[]> {
+    // GET /inbox?email=<email> — lista mensagens
+    const data = await this.apiGet<TempMailCInboxItem[] | { messages: TempMailCInboxItem[] }>(
+      `/inbox?email=${encodeURIComponent(email)}`
+    );
+    return Array.isArray(data) ? data : (data as { messages: TempMailCInboxItem[] }).messages ?? [];
+  }
+
+  private async getHtml(email: string, id: string): Promise<string> {
+    // GET /html?email=<email>&id=<id> — corpo HTML da mensagem
+    const data = await this.apiGet<{ html?: string; body?: string; content?: string } | string>(
+      `/html?email=${encodeURIComponent(email)}&id=${encodeURIComponent(id)}`
+    );
+    if (typeof data === 'string') return data;
+    return data.html ?? data.body ?? data.content ?? '';
+  }
+
+  async waitForOTP(email: string, timeoutMs = 90_000, cycle?: number): Promise<string> {
+    const startTime = Date.now();
+    const POLL_INTERVAL_MS = 6_000;
+    const INITIAL_WAIT_MS  = 8_000;
+    let lastCount = 0;
+    let poll = 0;
+
+    globalState.addLog('info', `⏳ [tempmailc] Aguardando OTP (${Math.round(timeoutMs / 1000)}s)...`, cycle);
+    await sleep(INITIAL_WAIT_MS);
+
+    while (Date.now() - startTime < timeoutMs) {
+      if (isStopped()) throw new Error('Parado pelo usuário');
+      poll++;
+
+      try {
+        const messages = await withRetry(
+          'tempmailc getInbox',
+          () => this.getInbox(email),
+          3, 2000
+        );
+
+        globalState.addLog('info', `📬 [tempmailc] Poll #${poll}: ${messages.length} mensagem(s) (anterior: ${lastCount})`, cycle);
+
+        if (messages.length > lastCount) {
+          const novas = messages.slice(lastCount);
+          globalState.addLog('info', `📨 [tempmailc] ${novas.length} mensagem(s) nova(s) — verificando OTP...`, cycle);
+
+          for (const msg of novas) {
+            globalState.addLog('info', `📧 [tempmailc] Lendo: "${msg.subject}" de ${msg.from}`, cycle);
+
+            // Tenta OTP no subject primeiro
+            const otpSubject = msg.subject?.match(/\b(\d{4,8})\b/)?.[1] ?? null;
+            if (otpSubject) {
+              globalState.addLog('success', `🎉 [tempmailc] OTP no subject: ${otpSubject}`, cycle);
+              return otpSubject;
+            }
+
+            try {
+              const html = await withRetry(
+                'tempmailc getHtml',
+                () => this.getHtml(email, msg.id),
+                3, 2000
+              );
+              globalState.addLog('info', `📄 [tempmailc] Body (200): ${html.slice(0, 200)}`, cycle);
+
+              const mailMsg: MailMessage = {
+                mail_id:      msg.id,
+                mail_from:    msg.from,
+                mail_to:      email,
+                mail_subject: msg.subject ?? '',
+                mail_preview: '',
+                mail_html:    html,
+                mail_text:    html,
+                created_at:   msg.date ?? new Date().toISOString(),
+              };
+
+              const otp = await OTPParser.extractFromMessageAsync(mailMsg);
+              if (otp) {
+                globalState.addLog('success', `🎉 [tempmailc] OTP encontrado: ${otp}`, cycle);
+                return otp;
+              }
+              globalState.addLog('warn', `⚠️ [tempmailc] Nenhum OTP em "${msg.subject}"`, cycle);
+            } catch (e) {
+              globalState.addLog('warn', `⚠️ [tempmailc] Erro ao ler msg ${msg.id}: ${e instanceof Error ? e.message : e}`, cycle);
+            }
+          }
+          lastCount = messages.length;
+        } else {
+          globalState.addLog('info', `💭 [tempmailc] Sem mensagens novas — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Parado')) throw e;
+        globalState.addLog('warn', `⚠️ [tempmailc] Erro no poll #${poll}: ${e instanceof Error ? e.message : e}`, cycle);
+      }
+
+      await sleep(POLL_INTERVAL_MS);
+    }
+    throw new Error(`⏰ Timeout aguardando OTP tempmailc (${Math.round(timeoutMs / 1000)}s)`);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────
+// Factory
+// ──────────────────────────────────────────────────────────────────────────────────
 export function createEmailClient(
-  provider: 'temp-mail.io' | 'mail.tm' | 'yopmail',
+  provider: 'temp-mail.io' | 'mail.tm' | 'yopmail' | 'tempmailc',
   apiKey?: string
 ): IEmailClient {
-  if (provider === 'mail.tm')  return new MailTmClient();
-  if (provider === 'yopmail')  return new YOPmailClient();
+  if (provider === 'mail.tm')   return new MailTmClient();
+  if (provider === 'yopmail')   return new YOPmailClient();
+  if (provider === 'tempmailc') {
+    if (!apiKey) throw new Error('tempmailc requer uma API key');
+    return new TempMailCClient(apiKey);
+  }
   if (!apiKey) throw new Error('temp-mail.io requer uma API key');
   return new TempMailClient(apiKey);
 }
