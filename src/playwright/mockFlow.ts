@@ -20,7 +20,7 @@ const contextosPorCiclo = new Map<number, BrowserContext>();
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-// ─── Logger com espelho no stdout (visível no Railway) ───────────────────────
+// ─── Logger ───────────────────────────────────────────────────────────────────
 
 function log(level: 'info' | 'warn' | 'success' | 'error', msg: string, cycle?: number): void {
   globalState.addLog(level, msg, cycle);
@@ -28,9 +28,7 @@ function log(level: 'info' | 'warn' | 'success' | 'error', msg: string, cycle?: 
   console.log(`${new Date().toISOString()} ${prefix} [${level.toUpperCase()}] ${msg}`);
 }
 
-// ─── Normaliza proxy para http://host:porta (SEM credenciais) ────────────────
-// O Chromium NÃO aceita credenciais inline no --proxy-server.
-// Retorna apenas o host:porta normalizado com protocolo http://.
+// ─── Proxy helper ─────────────────────────────────────────────────────────────
 
 function buildProxyServerArg(server: string): string {
   let normalized = server.trim();
@@ -59,10 +57,14 @@ function sp(normal: number): number {
   return isSpeedMode() ? Math.max(530, Math.round(normal * 0.4) + 500) : normal;
 }
 
-// ─── Helpers humanos ──────────────────────────────────────────────────────────
+// ─── Primitivas humanas ───────────────────────────────────────────────────────
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randFloat(min: number, max: number): number {
+  return min + Math.random() * (max - min);
 }
 
 async function humanPause(baseMs: number): Promise<void> {
@@ -71,30 +73,104 @@ async function humanPause(baseMs: number): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, Math.max(30, effective + jitter)));
 }
 
+// Pausa com distribuição log-normal — imita pausas cognitivas humanas reais
+async function cogPause(minMs: number, maxMs: number): Promise<void> {
+  const base = randInt(minMs, maxMs);
+  // 15% chance de pausa extra longa ("usuário distraído")
+  const extra = Math.random() < 0.15 ? randInt(600, 1800) : 0;
+  await humanPause(base + extra);
+}
+
+// ─── Movimento de mouse realista (curva Bézier cúbica + velocidade não-uniforme) ─
+
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
-  const steps = isSpeedMode() ? randInt(2, 4) : randInt(5, 10);
-  const startX = randInt(50, 300);
-  const startY = randInt(100, 400);
-  const cpX = startX + (x - startX) * 0.4 + randInt(-20, 20);
-  const cpY = startY + (y - startY) * 0.4 + randInt(-15, 15);
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const bx = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * cpX + t * t * x);
-    const by = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * cpY + t * t * y);
+  const fast = isSpeedMode();
+  // Ponto de partida: posição atual aproximada (aleatorizada)
+  const startX = randInt(30, 360);
+  const startY = randInt(80, 500);
+
+  // Dois pontos de controle para curva cúbica mais orgânica
+  const cp1X = startX + (x - startX) * randFloat(0.2, 0.4) + randInt(-30, 30);
+  const cp1Y = startY + (y - startY) * randFloat(0.2, 0.4) + randInt(-20, 20);
+  const cp2X = startX + (x - startX) * randFloat(0.6, 0.8) + randInt(-20, 20);
+  const cp2Y = startY + (y - startY) * randFloat(0.6, 0.8) + randInt(-15, 15);
+
+  const totalSteps = fast ? randInt(6, 10) : randInt(14, 22);
+
+  for (let i = 0; i <= totalSteps; i++) {
+    // Curva de ease: lenta no início, rápida no meio, lenta no final
+    const rawT = i / totalSteps;
+    // ease-in-out cúbica
+    const t = rawT < 0.5
+      ? 4 * rawT * rawT * rawT
+      : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
+
+    const bx = Math.round(
+      Math.pow(1 - t, 3) * startX +
+      3 * Math.pow(1 - t, 2) * t * cp1X +
+      3 * (1 - t) * t * t * cp2X +
+      t * t * t * x
+    );
+    const by = Math.round(
+      Math.pow(1 - t, 3) * startY +
+      3 * Math.pow(1 - t, 2) * t * cp1Y +
+      3 * (1 - t) * t * t * cp2Y +
+      t * t * t * y
+    );
+
     await p.mouse.move(bx, by);
-    await humanPause(randInt(3, isSpeedMode() ? 6 : 12));
+
+    // Velocidade não-uniforme: mais devagar no início e no fim
+    const speedFactor = Math.sin(Math.PI * rawT); // 0→1→0
+    const stepDelay = fast
+      ? Math.max(2, Math.round(5 * (1 - speedFactor * 0.7)))
+      : Math.max(4, Math.round(randInt(8, 18) * (1 - speedFactor * 0.6)));
+    await new Promise<void>((r) => setTimeout(r, stepDelay));
+  }
+
+  // Micro-tremor pós-chegada (mão humana não para instantaneamente)
+  if (!fast) {
+    for (let j = 0; j < randInt(1, 3); j++) {
+      await p.mouse.move(x + randInt(-2, 2), y + randInt(-2, 2));
+      await new Promise<void>((r) => setTimeout(r, randInt(30, 80)));
+    }
+    await p.mouse.move(x, y);
   }
 }
 
+// ─── Scroll idle — simula usuário lendo a página antes de interagir ───────────
+
+async function scrollIdle(p: Page): Promise<void> {
+  if (isSpeedMode()) return;
+  // Rola levemente para baixo e volta — padrão de leitura humana
+  const amount = randInt(40, 180);
+  await humanPause(randInt(400, 900));
+  await p.mouse.wheel(0, amount);
+  await humanPause(randInt(300, 700));
+  await p.mouse.wheel(0, -amount);
+  await humanPause(randInt(200, 500));
+}
+
+// ─── Hover realista no elemento antes de clicar ───────────────────────────────
+
+async function hoverElement(p: Page, selector: string): Promise<void> {
+  try {
+    const box = await p.locator(selector).boundingBox().catch(() => null);
+    if (!box) return;
+    // Move para perto do elemento mas não exatamente no centro
+    const nearX = Math.round(box.x + box.width * randFloat(0.3, 0.7));
+    const nearY = Math.round(box.y + box.height * randFloat(0.3, 0.7));
+    await humanMouseMove(p, nearX, nearY);
+    // Pausa de hover: usuário vê o botão antes de clicar
+    await humanPause(randInt(sp(180), sp(380)));
+  } catch { /* ignora */ }
+}
+
+// ─── Digitação humana ─────────────────────────────────────────────────────────
+
 async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  const box = await p.locator(selector).boundingBox();
-  if (box) {
-    const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
-    const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
-    await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(sp(50), sp(100)));
-  }
+  await hoverElement(p, selector);
   await p.click(selector);
   await p.fill(selector, '');
   await humanPause(randInt(sp(60), sp(150)));
@@ -108,36 +184,26 @@ async function humanType(p: Page, selector: string, value: string): Promise<void
       await p.keyboard.press('Backspace');
       await humanPause(randInt(40, 90));
     }
-    const charDelay = fast ? randInt(15, 40) : randInt(35, 90);
+    const charDelay = fast ? randInt(15, 40) : randInt(40, 100);
     await p.keyboard.type(ch, { delay: charDelay });
     if (!fast) {
-      if (ch === ' ' || ch === '@' || ch === '.') await humanPause(randInt(80, 200));
-      else if (Math.random() < 0.05) await humanPause(randInt(100, 300));
+      if (ch === ' ' || ch === '@' || ch === '.') await humanPause(randInt(90, 220));
+      else if (Math.random() < 0.06) await humanPause(randInt(120, 350));
     }
   }
 }
 
 async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  const box = await p.locator(selector).boundingBox();
-  if (box) {
-    const tx = Math.round(box.x + box.width * (0.3 + Math.random() * 0.4));
-    const ty = Math.round(box.y + box.height * (0.3 + Math.random() * 0.4));
-    await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(sp(50), sp(100)));
-  }
-  // Clica no campo
+  await hoverElement(p, selector);
   await p.click(selector, { force: true });
   await humanPause(randInt(sp(80), sp(160)));
-  // Seleciona tudo e deleta sem usar fill() — evita eventos sintéticos que React detecta
   await p.keyboard.press('ControlOrMeta+a');
   await humanPause(randInt(30, 60));
   await p.keyboard.press('Delete');
   await humanPause(randInt(sp(60), sp(150)));
-  // Lê o valor atual do campo para garantir que está vazio
   const currentVal = await p.locator(selector).inputValue().catch(() => '');
   if (currentVal.length > 0) {
-    // Fallback: triple-click + Backspace por caractere
     await p.click(selector, { clickCount: 3 });
     await humanPause(randInt(30, 60));
     for (let i = 0; i < currentVal.length; i++) {
@@ -155,17 +221,18 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
       await p.keyboard.press('Backspace');
       await humanPause(randInt(40, 90));
     }
-    const charDelay = fast ? randInt(15, 40) : randInt(35, 90);
+    const charDelay = fast ? randInt(15, 40) : randInt(40, 100);
     await p.keyboard.type(ch, { delay: charDelay });
     if (!fast) {
-      if (ch === ' ' || ch === '@' || ch === '.') await humanPause(randInt(80, 200));
-      else if (Math.random() < 0.05) await humanPause(randInt(100, 300));
+      if (ch === ' ' || ch === '@' || ch === '.') await humanPause(randInt(90, 220));
+      else if (Math.random() < 0.06) await humanPause(randInt(120, 350));
     }
   }
-  // Verifica o que ficou no campo após digitar
   const finalVal = await p.locator(selector).inputValue().catch(() => '??');
   log('info', `🔍 [DEBUG] Campo "${selector}" após digitação: "${finalVal}"`);
 }
+
+// ─── Click humano ─────────────────────────────────────────────────────────────
 
 async function humanClick(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
@@ -174,23 +241,65 @@ async function humanClick(p: Page, selector: string): Promise<void> {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
-    await humanPause(randInt(sp(40), sp(100)));
-    await p.mouse.click(tx, ty);
+    // Hover antes de pressionar — crítico para o Arkose não marcar como bot
+    await humanPause(randInt(sp(120), sp(280)));
+    await p.mouse.down();
+    await humanPause(randInt(40, 110)); // duração do press (humano não é instantâneo)
+    await p.mouse.up();
   } else {
     await p.click(selector);
   }
 }
 
-// ─── Click seguro no forward-button: aguarda estar habilitado ────────────────
+// ─── Forward button: aguarda habilitado + pausa pensativa pré-clique ──────────
 
 async function clickForwardButton(p: Page, cycle: number): Promise<void> {
   log('info', '⏳ Aguardando #forward-button habilitado...', cycle);
   await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 15000 }).catch(async () => {
-    log('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando clicar mesmo assim...', cycle);
+    log('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando mesmo assim...', cycle);
   });
+
+  // Pausa pensativa antes do clique — como se o usuário revisasse o que digitou
+  if (!isSpeedMode()) {
+    await cogPause(600, 1600);
+  }
+
   await humanClick(p, '#forward-button');
   log('info', '🖱️ #forward-button clicado', cycle);
 }
+
+// ─── Aquecimento de página — interações leves para construir histórico ─────────
+// O Arkose analisa o padrão de interação ANTES do clique no botão.
+// Mover o mouse, fazer scroll, focar/desfocar elementos aumenta o score de humanidade.
+
+async function pageWarmup(p: Page, cycle: number): Promise<void> {
+  if (isSpeedMode()) {
+    await humanPause(randInt(400, 800));
+    return;
+  }
+  log('info', '🔥 Aquecendo página (simulando leitura)...', cycle);
+
+  // 1. Movimentos de mouse aleatórios simulando leitura do formulário
+  const pontos = [
+    { x: randInt(80, 300), y: randInt(100, 250) },
+    { x: randInt(50, 340), y: randInt(200, 380) },
+    { x: randInt(100, 280), y: randInt(300, 500) },
+  ];
+  for (const pt of pontos) {
+    await humanMouseMove(p, pt.x, pt.y);
+    await humanPause(randInt(200, 500));
+  }
+
+  // 2. Scroll leve de leitura
+  await scrollIdle(p);
+
+  // 3. Pausa "lendo o formulário"
+  await humanPause(randInt(800, 1800));
+
+  log('info', '✅ Aquecimento concluído', cycle);
+}
+
+// ─── Dispensar cookies ────────────────────────────────────────────────────────
 
 async function dispensarCookies(p: Page): Promise<void> {
   const candidatos = [
@@ -225,6 +334,8 @@ async function dispensarCookies(p: Page): Promise<void> {
     } catch { /* ignora */ }
   }
 }
+
+// ─── Aceitar termos ───────────────────────────────────────────────────────────
 
 async function aceitarTermos(p: Page): Promise<void> {
   await humanPause(randInt(sp(500), sp(900)));
@@ -499,6 +610,292 @@ const KYC_INIT_SCRIPT = `
   })();
 `;
 
+// ─── Stealth script melhorado ─────────────────────────────────────────────────
+// Adiciona spoofing de AudioContext, Date.now jitter e Permissions API
+
+const stealthScript = `
+  (function() {
+    // Navigator
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'platform',          { get: () => 'iPhone' });
+    Object.defineProperty(navigator, 'maxTouchPoints',    { get: () => 5 });
+    Object.defineProperty(navigator, 'languages',         { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+    Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 6 });
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const arr = Object.create(PluginArray.prototype);
+        Object.defineProperty(arr, 'length', { value: 0 });
+        arr.item = () => null;
+        arr.namedItem = () => null;
+        arr.refresh = () => {};
+        return arr;
+      }
+    });
+
+    // Connection
+    if (navigator.connection) {
+      Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
+      Object.defineProperty(navigator.connection, 'rtt',           { get: () => 80 });
+      Object.defineProperty(navigator.connection, 'downlink',      { get: () => 8 });
+      Object.defineProperty(navigator.connection, 'saveData',      { get: () => false });
+    }
+
+    // Screen
+    Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+    Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+    // Permissions
+    const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
+    window.navigator.permissions.query = (p) =>
+      p.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission, onchange: null })
+        : _origQuery(p);
+
+    // Canvas fingerprint noise
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type) {
+      const ctx = this.getContext('2d');
+      if (ctx) {
+        const noise = ctx.createImageData(1, 1);
+        noise.data[0] = Math.floor(Math.random() * 3);
+        ctx.putImageData(noise, Math.random() * this.width | 0, Math.random() * this.height | 0);
+      }
+      return origToDataURL.apply(this, arguments);
+    };
+
+    // WebGL
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(param) {
+      if (param === 37445) return 'Apple Inc.';
+      if (param === 37446) return 'Apple GPU';
+      return getParameter.call(this, param);
+    };
+
+    // AudioContext fingerprint noise
+    try {
+      const _AC = window.AudioContext || window.webkitAudioContext;
+      if (_AC) {
+        const _createBuffer = _AC.prototype.createBuffer;
+        _AC.prototype.createBuffer = function(channels, length, sampleRate) {
+          const buf = _createBuffer.call(this, channels, length, sampleRate);
+          const noise = 0.0001;
+          for (let c = 0; c < buf.numberOfChannels; c++) {
+            const data = buf.getChannelData(c);
+            for (let i = 0; i < data.length; i++) {
+              data[i] += (Math.random() * 2 - 1) * noise;
+            }
+          }
+          return buf;
+        };
+      }
+    } catch(e) {}
+
+    // Date.now jitter — dificulta detecção de timing exato de automação
+    const _dateNow = Date.now;
+    Date.now = function() {
+      return _dateNow() + Math.floor(Math.random() * 3);
+    };
+
+    // Oculta automation flag no chrome object
+    if (window.chrome) {
+      try {
+        Object.defineProperty(window.chrome, 'runtime', {
+          get: () => ({
+            connect: () => {},
+            sendMessage: () => {},
+            id: undefined,
+          }),
+          configurable: true,
+        });
+      } catch(e) {}
+    }
+  })();
+`;
+
+// ─── KYC patterns ─────────────────────────────────────────────────────────────
+
+const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
+  { pattern: /socure/i,              provider: 'Socure'  },
+  { pattern: /devicer\.io/i,         provider: 'Socure'  },
+  { pattern: /sigma\.socure/i,       provider: 'Socure'  },
+  { pattern: /verify\.socure/i,      provider: 'Socure'  },
+  { pattern: /veriff/i,              provider: 'Veriff'  },
+  { pattern: /magic\.veriff/i,       provider: 'Veriff'  },
+  { pattern: /api\.veriff\.me/i,     provider: 'Veriff'  },
+  { pattern: /cdn\.veriff/i,         provider: 'Veriff'  },
+  { pattern: /jumio/i,               provider: 'Jumio'   },
+  { pattern: /lon\.jumio/i,          provider: 'Jumio'   },
+  { pattern: /netverify/i,           provider: 'Jumio'   },
+  { pattern: /onfido/i,              provider: 'Onfido'  },
+  { pattern: /sdk\.onfido/i,         provider: 'Onfido'  },
+  { pattern: /withpersona/i,         provider: 'Persona' },
+  { pattern: /persona\.id/i,         provider: 'Persona' },
+  { pattern: /identity\.stripe/i,    provider: 'Stripe'  },
+  { pattern: /au10tix/i,             provider: 'Au10tix' },
+  { pattern: /miteksystems/i,        provider: 'Mitek'   },
+];
+
+function detectKycProvider(url: string): string | null {
+  for (const { pattern, provider } of KYC_PATTERNS) {
+    if (pattern.test(url)) return provider;
+  }
+  return null;
+}
+
+// ─── Listeners ────────────────────────────────────────────────────────────────
+
+function registrarListenersFrame(frame: Frame, cycle: number): void {
+  try {
+    const url = frame.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'frame-url', 5, cycle, url);
+  } catch { /* ignora */ }
+}
+
+function registrarListenersPage(page: Page, cycle: number): void {
+  try {
+    for (const frame of page.frames()) registrarListenersFrame(frame, cycle);
+  } catch { /* ignora */ }
+
+  page.on('frameattached',  (frame) => registrarListenersFrame(frame, cycle));
+  page.on('framenavigated', (frame) => {
+    const url = frame.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
+  });
+  page.on('websocket', (ws) => {
+    const url = ws.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
+  });
+  page.on('request', (req) => {
+    const url = req.url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
+  });
+  page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
+    globalState.addKycSignal(provider, source, weight, cycle, url);
+  }).catch(() => {});
+}
+
+function getFirstAvailableProxy(): { server: string; username?: string; password?: string } | null {
+  const proxies = (globalState.getState().config as any).proxies as Array<{server:string;username?:string;password?:string}> | undefined;
+  if (!proxies || proxies.length === 0) return null;
+  return proxies[0] ?? null;
+}
+
+// ─── Cria contexto isolado ────────────────────────────────────────────────────
+
+async function criarContextoIsolado(
+  cycle: number
+): Promise<{ context: BrowserContext; page: Page }> {
+  const proxy = getFirstAvailableProxy();
+
+  if (proxy) {
+    try {
+      const p = new URL(buildProxyServerArg(proxy.server));
+      log('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
+    } catch {
+      log('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
+    }
+  } else {
+    log('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
+  }
+
+  const proxyConfig = proxy
+    ? {
+        server: buildProxyServerArg(proxy.server),
+        ...(proxy.username ? { username: proxy.username } : {}),
+        ...(proxy.password ? { password: proxy.password } : {}),
+      }
+    : undefined;
+
+  const context = await browser!.newContext({
+    ...MOBILE_DEVICE,
+    locale: 'pt-BR',
+    timezoneId: 'America/Sao_Paulo',
+    geolocation: { latitude: -23.5505, longitude: -46.6333 },
+    permissions: ['geolocation'],
+    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
+    ...(proxyConfig ? { proxy: proxyConfig } : {}),
+  });
+
+  await context.addInitScript({ content: stealthScript });
+  await context.addInitScript({ content: KYC_INIT_SCRIPT });
+
+  await context.route('**/*', (route) => {
+    const url = route.request().url();
+    const provider = detectKycProvider(url);
+    if (provider) globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
+    route.continue();
+  });
+
+  const page = await context.newPage();
+
+  page.on('request', (req) => {
+    if (req.method() === 'POST') {
+      const url = req.url();
+      const body = req.postData() ?? '';
+      if (
+        url.includes('auth') || url.includes('login') || url.includes('signup') ||
+        url.includes('otp') || url.includes('email') || url.includes('uber') ||
+        url.includes('identity') || url.includes('forward')
+      ) {
+        log('info', `📡 [NET] POST ${url.split('?')[0]} | body: ${body.slice(0, 300)}`, cycle);
+      }
+    }
+  });
+
+  context.on('page', async (novaPage) => {
+    try {
+      const temOpener = await novaPage.evaluate(() => window.opener !== null).catch(() => false);
+      if (!temOpener) {
+        log('info', `🪟 Nova aba sem opener — ignorando`, cycle);
+        return;
+      }
+      const url = novaPage.url();
+      log('info', `📌 Popup interceptado (${url || 'about:blank'}) — fechando`, cycle);
+      registrarListenersPage(novaPage, cycle);
+      await new Promise<void>((r) => setTimeout(r, 800));
+      await novaPage.close().catch(() => {});
+    } catch { /* não fecha se não conseguir verificar */ }
+  });
+
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      mobile: true,
+      width: MOBILE_DEVICE.viewport?.width ?? 390,
+      height: MOBILE_DEVICE.viewport?.height ?? 844,
+      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
+      screenOrientation: { angle: 0, type: 'portraitPrimary' },
+    });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: MOBILE_DEVICE.userAgent ?? '',
+      acceptLanguage: 'pt-BR,pt;q=0.9',
+      platform: 'iPhone',
+    });
+    log('info', `📱 CDP mobile ativado`, cycle);
+  } catch (e) {
+    log('warn', `⚠️ CDP mobile falhou: ${e}`, cycle);
+  }
+
+  registrarListenersPage(page, cycle);
+  contextosPorCiclo.set(cycle, context);
+  return { context, page };
+}
+
+async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void> {
+  const ctx = contextosPorCiclo.get(cycle);
+  if (ctx) {
+    log('warn', `🧹 Fechando aba do ciclo #${cycle} — motivo: ${motivo}`, cycle);
+    await ctx.close().catch(() => {});
+    contextosPorCiclo.delete(cycle);
+  }
+  globalState.clearPayload(cycle);
+}
+
 // ─── WhatsApp ─────────────────────────────────────────────────────────────────
 
 async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
@@ -633,7 +1030,6 @@ async function pollingBotaoTirarFoto(
       try {
         const scrollY = tentativa % 4 === 0 ? 0 : 300;
         await p.evaluate(`window.scrollBy(0, ${scrollY})`);
-        log('info', `📌 [TirarFoto] Poll #${tentativa} — scroll aplicado (${scrollY > 0 ? '+' + scrollY : 'topo'})`, cycle);
         await humanPause(randInt(sp(300), sp(600)));
         for (const sel of seletoresBotao) {
           try {
@@ -829,242 +1225,6 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   log('warn', '⚠️ KYC não detectado após 50s total. Aba mantida aberta para inspeção.', cycle);
 }
 
-// ─── Stealth script ───────────────────────────────────────────────────────────
-
-const stealthScript = `
-  (function() {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'platform',          { get: () => 'iPhone' });
-    Object.defineProperty(navigator, 'maxTouchPoints',    { get: () => 5 });
-    Object.defineProperty(navigator, 'languages',         { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
-    Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 6 });
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => {
-        const arr = Object.create(PluginArray.prototype);
-        Object.defineProperty(arr, 'length', { value: 0 });
-        arr.item = () => null;
-        arr.namedItem = () => null;
-        arr.refresh = () => {};
-        return arr;
-      }
-    });
-    if (navigator.connection) {
-      Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
-      Object.defineProperty(navigator.connection, 'rtt',           { get: () => 80 });
-      Object.defineProperty(navigator.connection, 'downlink',      { get: () => 8 });
-      Object.defineProperty(navigator.connection, 'saveData',      { get: () => false });
-    }
-    Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-    Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-    const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
-    window.navigator.permissions.query = (p) =>
-      p.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission, onchange: null })
-        : _origQuery(p);
-    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(type) {
-      const ctx = this.getContext('2d');
-      if (ctx) {
-        const noise = ctx.createImageData(1, 1);
-        noise.data[0] = Math.floor(Math.random() * 3);
-        ctx.putImageData(noise, Math.random() * this.width | 0, Math.random() * this.height | 0);
-      }
-      return origToDataURL.apply(this, arguments);
-    };
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(param) {
-      if (param === 37445) return 'Apple Inc.';
-      if (param === 37446) return 'Apple GPU';
-      return getParameter.call(this, param);
-    };
-  })();
-`;
-
-// ─── KYC patterns ─────────────────────────────────────────────────────────────
-
-const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
-  { pattern: /socure/i,              provider: 'Socure'  },
-  { pattern: /devicer\.io/i,         provider: 'Socure'  },
-  { pattern: /sigma\.socure/i,       provider: 'Socure'  },
-  { pattern: /verify\.socure/i,      provider: 'Socure'  },
-  { pattern: /veriff/i,              provider: 'Veriff'  },
-  { pattern: /magic\.veriff/i,       provider: 'Veriff'  },
-  { pattern: /api\.veriff\.me/i,     provider: 'Veriff'  },
-  { pattern: /cdn\.veriff/i,         provider: 'Veriff'  },
-  { pattern: /jumio/i,               provider: 'Jumio'   },
-  { pattern: /lon\.jumio/i,          provider: 'Jumio'   },
-  { pattern: /netverify/i,           provider: 'Jumio'   },
-  { pattern: /onfido/i,              provider: 'Onfido'  },
-  { pattern: /sdk\.onfido/i,         provider: 'Onfido'  },
-  { pattern: /withpersona/i,         provider: 'Persona' },
-  { pattern: /persona\.id/i,         provider: 'Persona' },
-  { pattern: /identity\.stripe/i,    provider: 'Stripe'  },
-  { pattern: /au10tix/i,             provider: 'Au10tix' },
-  { pattern: /miteksystems/i,        provider: 'Mitek'   },
-];
-
-function detectKycProvider(url: string): string | null {
-  for (const { pattern, provider } of KYC_PATTERNS) {
-    if (pattern.test(url)) return provider;
-  }
-  return null;
-}
-
-// ─── Listeners ────────────────────────────────────────────────────────────────
-
-function registrarListenersFrame(frame: Frame, cycle: number): void {
-  try {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'frame-url', 5, cycle, url);
-  } catch { /* ignora */ }
-}
-
-function registrarListenersPage(page: Page, cycle: number): void {
-  try {
-    for (const frame of page.frames()) registrarListenersFrame(frame, cycle);
-  } catch { /* ignora */ }
-
-  page.on('frameattached',  (frame) => registrarListenersFrame(frame, cycle));
-  page.on('framenavigated', (frame) => {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
-  });
-  page.on('websocket', (ws) => {
-    const url = ws.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
-  });
-  page.on('request', (req) => {
-    const url = req.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
-  });
-  page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
-    globalState.addKycSignal(provider, source, weight, cycle, url);
-  }).catch(() => {});
-}
-
-function getFirstAvailableProxy(): { server: string; username?: string; password?: string } | null {
-  const proxies = (globalState.getState().config as any).proxies as Array<{server:string;username?:string;password?:string}> | undefined;
-  if (!proxies || proxies.length === 0) return null;
-  return proxies[0] ?? null;
-}
-
-// ─── Cria contexto isolado ────────────────────────────────────────────────────
-
-async function criarContextoIsolado(
-  cycle: number
-): Promise<{ context: BrowserContext; page: Page }> {
-  const proxy = getFirstAvailableProxy();
-
-  if (proxy) {
-    try {
-      const p = new URL(buildProxyServerArg(proxy.server));
-      log('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
-    } catch {
-      log('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
-    }
-  } else {
-    log('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
-  }
-
-  const proxyConfig = proxy
-    ? {
-        server: buildProxyServerArg(proxy.server),
-        ...(proxy.username ? { username: proxy.username } : {}),
-        ...(proxy.password ? { password: proxy.password } : {}),
-      }
-    : undefined;
-
-  const context = await browser!.newContext({
-    ...MOBILE_DEVICE,
-    locale: 'pt-BR',
-    timezoneId: 'America/Sao_Paulo',
-    geolocation: { latitude: -23.5505, longitude: -46.6333 },
-    permissions: ['geolocation'],
-    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
-    ...(proxyConfig ? { proxy: proxyConfig } : {}),
-  });
-
-  await context.addInitScript({ content: stealthScript });
-  await context.addInitScript({ content: KYC_INIT_SCRIPT });
-
-  await context.route('**/*', (route) => {
-    const url = route.request().url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
-    route.continue();
-  });
-
-  const page = await context.newPage();
-
-  // ─── Intercepta requests POST para logar o body (debug OTP) ──────────────
-  page.on('request', (req) => {
-    if (req.method() === 'POST') {
-      const url = req.url();
-      const body = req.postData() ?? '';
-      if (
-        url.includes('auth') || url.includes('login') || url.includes('signup') ||
-        url.includes('otp') || url.includes('email') || url.includes('uber') ||
-        url.includes('identity') || url.includes('forward')
-      ) {
-        log('info', `📡 [NET] POST ${url.split('?')[0]} | body: ${body.slice(0, 300)}`, cycle);
-      }
-    }
-  });
-
-  context.on('page', async (novaPage) => {
-    try {
-      const temOpener = await novaPage.evaluate(() => window.opener !== null).catch(() => false);
-      if (!temOpener) {
-        log('info', `🪟 Nova aba sem opener — ignorando`, cycle);
-        return;
-      }
-      const url = novaPage.url();
-      log('info', `📌 Popup interceptado (${url || 'about:blank'}) — fechando`, cycle);
-      registrarListenersPage(novaPage, cycle);
-      await new Promise<void>((r) => setTimeout(r, 800));
-      await novaPage.close().catch(() => {});
-    } catch { /* não fecha se não conseguir verificar */ }
-  });
-
-  try {
-    const cdp = await context.newCDPSession(page);
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      mobile: true,
-      width: MOBILE_DEVICE.viewport?.width ?? 390,
-      height: MOBILE_DEVICE.viewport?.height ?? 844,
-      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
-      screenOrientation: { angle: 0, type: 'portraitPrimary' },
-    });
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-    await cdp.send('Emulation.setUserAgentOverride', {
-      userAgent: MOBILE_DEVICE.userAgent ?? '',
-      acceptLanguage: 'pt-BR,pt;q=0.9',
-      platform: 'iPhone',
-    });
-    log('info', `📱 CDP mobile ativado`, cycle);
-  } catch (e) {
-    log('warn', `⚠️ CDP mobile falhou: ${e}`, cycle);
-  }
-
-  registrarListenersPage(page, cycle);
-  contextosPorCiclo.set(cycle, context);
-  return { context, page };
-}
-
-async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void> {
-  const ctx = contextosPorCiclo.get(cycle);
-  if (ctx) {
-    log('warn', `🧹 Fechando aba do ciclo #${cycle} — motivo: ${motivo}`, cycle);
-    await ctx.close().catch(() => {});
-    contextosPorCiclo.delete(cycle);
-  }
-  globalState.clearPayload(cycle);
-}
-
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
@@ -1118,6 +1278,12 @@ export class MockPlaywrightFlow {
           '--disable-gpu',
           '--no-first-run',
           '--no-default-browser-check',
+          // Flags adicionais anti-fingerprint
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-site-isolation-trials',
+          '--disable-web-security',
+          '--allow-running-insecure-content',
+          '--disable-extensions',
           ...(firstProxy ? [`--proxy-server=${proxyServerArg}`, '--proxy-bypass-list=<-loopback>'] : []),
         ],
       }) as unknown as Browser;
@@ -1174,9 +1340,12 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-      await humanPause(randInt(sp(800), sp(1600)));
+      // Aguarda networkidle com fallback — dá tempo ao Arkose de carregar e registrar eventos
+      await p.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
       log('info', '🌐 Página de cadastro aberta', cycle);
+
+      // Aquecimento — constrói histórico de interação ANTES de tocar no formulário
+      await pageWarmup(p, cycle);
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
@@ -1194,15 +1363,16 @@ export class MockPlaywrightFlow {
 
       log('info', '📧 Preenchendo email...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
 
-      // FIX 1: Loga o valor do campo e aguarda botão habilitado antes de clicar
+      // Pausa após digitar — usuário confere o email antes de continuar
+      await cogPause(config.extraDelay, config.extraDelay + 600);
+
       const emailNocampo = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').inputValue().catch(() => '??');
       log('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocampo}"`, cycle);
 
       await clickForwardButton(p, cycle);
 
-      // FIX 2: Aguarda a tela de OTP aparecer antes de disparar waitForOTP
+      // Aguarda tela de OTP
       log('info', '⏳ Aguardando tela de OTP (#EMAIL_OTP_CODE-0)...', cycle);
       await p.waitForSelector('#EMAIL_OTP_CODE-0', { state: 'visible', timeout: 30000 });
       log('info', `🔑 Tela de OTP detectada! Aguardando código (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
@@ -1214,30 +1384,30 @@ export class MockPlaywrightFlow {
       const digits = otp.replace(/\D/g, '').split('');
       for (let i = 0; i < digits.length; i++) {
         await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-        await humanPause(randInt(sp(50), sp(120)));
+        await humanPause(randInt(sp(60), sp(140)));
       }
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await cogPause(config.extraDelay, config.extraDelay + 400);
       await clickForwardButton(p, cycle);
 
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await cogPause(config.extraDelay, config.extraDelay + 400);
       await clickForwardButton(p, cycle);
 
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PASSWORD', payload.senha);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await cogPause(config.extraDelay, config.extraDelay + 400);
       await clickForwardButton(p, cycle);
 
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(sp(200), sp(400)));
+      await humanPause(randInt(sp(250), sp(500)));
       await humanType(p, '#LAST_NAME', payload.sobrenome);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
+      await cogPause(config.extraDelay, config.extraDelay + 400);
       await clickForwardButton(p, cycle);
 
       await aceitarTermos(p);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await cogPause(config.extraDelay, config.extraDelay + 500);
       await clickForwardButton(p, cycle);
 
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
@@ -1248,7 +1418,7 @@ export class MockPlaywrightFlow {
       await dispensarCookies(p);
 
       await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
-      await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+      await cogPause(config.extraDelay, config.extraDelay + 500);
       await dispensarCookies(p);
       await humanClick(p, '[data-testid="submit-button"]');
 
