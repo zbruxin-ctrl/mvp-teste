@@ -986,7 +986,6 @@ async function criarContextoIsolado(
     if (req.method() === 'POST') {
       const url = req.url();
       const body = req.postData() ?? '';
-      // Loga apenas requests relevantes ao fluxo de login/OTP
       if (
         url.includes('auth') || url.includes('login') || url.includes('signup') ||
         url.includes('otp') || url.includes('email') || url.includes('uber') ||
@@ -1180,7 +1179,7 @@ export class MockPlaywrightFlow {
 
       // Loga o valor do campo imediatamente antes de clicar
       const emailNocampo = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').inputValue().catch(() => '??');
-      globalState.addLog('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocamp}"`, cycle);
+      globalState.addLog('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocampo}"`, cycle);
 
       await humanClick(p, '#forward-button');
 
