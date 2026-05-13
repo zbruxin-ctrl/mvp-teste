@@ -85,11 +85,10 @@ async function cogPause(minMs: number, maxMs: number): Promise<void> {
 
 async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   const fast = isSpeedMode();
-  // Ponto de partida: posição atual aproximada (aleatorizada)
   const startX = randInt(30, 360);
   const startY = randInt(80, 500);
 
-  // Dois pontos de controle para curva cúbica mais orgânica
+  // Dois pontos de controle → curva cúbica mais orgânica
   const cp1X = startX + (x - startX) * randFloat(0.2, 0.4) + randInt(-30, 30);
   const cp1Y = startY + (y - startY) * randFloat(0.2, 0.4) + randInt(-20, 20);
   const cp2X = startX + (x - startX) * randFloat(0.6, 0.8) + randInt(-20, 20);
@@ -98,9 +97,8 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   const totalSteps = fast ? randInt(6, 10) : randInt(14, 22);
 
   for (let i = 0; i <= totalSteps; i++) {
-    // Curva de ease: lenta no início, rápida no meio, lenta no final
     const rawT = i / totalSteps;
-    // ease-in-out cúbica
+    // Ease-in-out cúbica — lento no início e no fim, rápido no meio
     const t = rawT < 0.5
       ? 4 * rawT * rawT * rawT
       : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
@@ -120,8 +118,8 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
 
     await p.mouse.move(bx, by);
 
-    // Velocidade não-uniforme: mais devagar no início e no fim
-    const speedFactor = Math.sin(Math.PI * rawT); // 0→1→0
+    // Velocidade não-uniforme via sin: mais devagar no início/fim
+    const speedFactor = Math.sin(Math.PI * rawT);
     const stepDelay = fast
       ? Math.max(2, Math.round(5 * (1 - speedFactor * 0.7)))
       : Math.max(4, Math.round(randInt(8, 18) * (1 - speedFactor * 0.6)));
@@ -142,7 +140,6 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
 
 async function scrollIdle(p: Page): Promise<void> {
   if (isSpeedMode()) return;
-  // Rola levemente para baixo e volta — padrão de leitura humana
   const amount = randInt(40, 180);
   await humanPause(randInt(400, 900));
   await p.mouse.wheel(0, amount);
@@ -151,17 +148,16 @@ async function scrollIdle(p: Page): Promise<void> {
   await humanPause(randInt(200, 500));
 }
 
-// ─── Hover realista no elemento antes de clicar ───────────────────────────────
+// ─── Hover realista antes de clicar ──────────────────────────────────────────
 
 async function hoverElement(p: Page, selector: string): Promise<void> {
   try {
     const box = await p.locator(selector).boundingBox().catch(() => null);
     if (!box) return;
-    // Move para perto do elemento mas não exatamente no centro
     const nearX = Math.round(box.x + box.width * randFloat(0.3, 0.7));
     const nearY = Math.round(box.y + box.height * randFloat(0.3, 0.7));
     await humanMouseMove(p, nearX, nearY);
-    // Pausa de hover: usuário vê o botão antes de clicar
+    // Hover dwell: usuário olha antes de clicar
     await humanPause(randInt(sp(180), sp(380)));
   } catch { /* ignora */ }
 }
@@ -232,7 +228,7 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
   log('info', `🔍 [DEBUG] Campo "${selector}" após digitação: "${finalVal}"`);
 }
 
-// ─── Click humano ─────────────────────────────────────────────────────────────
+// ─── Click humano (mouse.down + dwell + mouse.up) ──────────────────────────────
 
 async function humanClick(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
@@ -241,10 +237,10 @@ async function humanClick(p: Page, selector: string): Promise<void> {
     const tx = Math.round(box.x + box.width * (0.25 + Math.random() * 0.5));
     const ty = Math.round(box.y + box.height * (0.25 + Math.random() * 0.5));
     await humanMouseMove(p, tx, ty);
-    // Hover antes de pressionar — crítico para o Arkose não marcar como bot
+    // Hover dwell crítico para Arkose — simula usuário avaliando o botão
     await humanPause(randInt(sp(120), sp(280)));
     await p.mouse.down();
-    await humanPause(randInt(40, 110)); // duração do press (humano não é instantâneo)
+    await humanPause(randInt(40, 120)); // duração do press — humano não é instantâneo
     await p.mouse.up();
   } else {
     await p.click(selector);
@@ -258,19 +254,15 @@ async function clickForwardButton(p: Page, cycle: number): Promise<void> {
   await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 15000 }).catch(async () => {
     log('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando mesmo assim...', cycle);
   });
-
-  // Pausa pensativa antes do clique — como se o usuário revisasse o que digitou
-  if (!isSpeedMode()) {
-    await cogPause(600, 1600);
-  }
-
+  // Pausa pensativa — como se o usuário revisasse o que digitou
+  if (!isSpeedMode()) await cogPause(600, 1600);
   await humanClick(p, '#forward-button');
   log('info', '🖱️ #forward-button clicado', cycle);
 }
 
-// ─── Aquecimento de página — interações leves para construir histórico ─────────
-// O Arkose analisa o padrão de interação ANTES do clique no botão.
-// Mover o mouse, fazer scroll, focar/desfocar elementos aumenta o score de humanidade.
+// ─── Aquecimento de página — interações leves para construir histórico ────────
+// O Arkose analisa o histórico de interação ANTES do clique no botão submit.
+// Mover o mouse, scroll, focar elementos → aumenta score de humanidade.
 
 async function pageWarmup(p: Page, cycle: number): Promise<void> {
   if (isSpeedMode()) {
@@ -293,9 +285,25 @@ async function pageWarmup(p: Page, cycle: number): Promise<void> {
   // 2. Scroll leve de leitura
   await scrollIdle(p);
 
-  // 3. Pausa "lendo o formulário"
-  await humanPause(randInt(800, 1800));
+  // 3. Hover no campo de email sem clicar — foco visual humano
+  try {
+    const inputBox = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').boundingBox().catch(() => null);
+    if (inputBox) {
+      await humanMouseMove(p, inputBox.x + inputBox.width * 0.5, inputBox.y + inputBox.height * 0.5);
+      await humanPause(randInt(300, 700));
+      // Move para o botão e volta — padrão de hesitação humana
+      const btnBox = await p.locator('#forward-button').boundingBox().catch(() => null);
+      if (btnBox) {
+        await humanMouseMove(p, btnBox.x + btnBox.width * 0.5, btnBox.y + btnBox.height * 0.5);
+        await humanPause(randInt(200, 500));
+        await humanMouseMove(p, inputBox.x + inputBox.width * 0.5, inputBox.y + inputBox.height * 0.5);
+        await humanPause(randInt(300, 600));
+      }
+    }
+  } catch { /* ignora */ }
 
+  // 4. Pausa final "lendo o formulário"
+  await cogPause(800, 2000);
   log('info', '✅ Aquecimento concluído', cycle);
 }
 
@@ -611,11 +619,10 @@ const KYC_INIT_SCRIPT = `
 `;
 
 // ─── Stealth script melhorado ─────────────────────────────────────────────────
-// Adiciona spoofing de AudioContext, Date.now jitter e Permissions API
+// + AudioContext noise, Date.now jitter, chrome.runtime masking
 
 const stealthScript = `
   (function() {
-    // Navigator
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     Object.defineProperty(navigator, 'platform',          { get: () => 'iPhone' });
     Object.defineProperty(navigator, 'maxTouchPoints',    { get: () => 5 });
@@ -625,33 +632,23 @@ const stealthScript = `
       get: () => {
         const arr = Object.create(PluginArray.prototype);
         Object.defineProperty(arr, 'length', { value: 0 });
-        arr.item = () => null;
-        arr.namedItem = () => null;
-        arr.refresh = () => {};
+        arr.item = () => null; arr.namedItem = () => null; arr.refresh = () => {};
         return arr;
       }
     });
-
-    // Connection
     if (navigator.connection) {
       Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
       Object.defineProperty(navigator.connection, 'rtt',           { get: () => 80 });
       Object.defineProperty(navigator.connection, 'downlink',      { get: () => 8 });
       Object.defineProperty(navigator.connection, 'saveData',      { get: () => false });
     }
-
-    // Screen
     Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
     Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-    // Permissions
     const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
     window.navigator.permissions.query = (p) =>
       p.name === 'notifications'
         ? Promise.resolve({ state: Notification.permission, onchange: null })
         : _origQuery(p);
-
-    // Canvas fingerprint noise
     const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
     HTMLCanvasElement.prototype.toDataURL = function(type) {
       const ctx = this.getContext('2d');
@@ -662,15 +659,12 @@ const stealthScript = `
       }
       return origToDataURL.apply(this, arguments);
     };
-
-    // WebGL
     const getParameter = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(param) {
       if (param === 37445) return 'Apple Inc.';
       if (param === 37446) return 'Apple GPU';
       return getParameter.call(this, param);
     };
-
     // AudioContext fingerprint noise
     try {
       const _AC = window.AudioContext || window.webkitAudioContext;
@@ -689,22 +683,14 @@ const stealthScript = `
         };
       }
     } catch(e) {}
-
     // Date.now jitter — dificulta detecção de timing exato de automação
     const _dateNow = Date.now;
-    Date.now = function() {
-      return _dateNow() + Math.floor(Math.random() * 3);
-    };
-
-    // Oculta automation flag no chrome object
+    Date.now = function() { return _dateNow() + Math.floor(Math.random() * 3); };
+    // Mascara chrome.runtime (Arkose verifica presença)
     if (window.chrome) {
       try {
         Object.defineProperty(window.chrome, 'runtime', {
-          get: () => ({
-            connect: () => {},
-            sendMessage: () => {},
-            id: undefined,
-          }),
+          get: () => ({ connect: () => {}, sendMessage: () => {}, id: undefined }),
           configurable: true,
         });
       } catch(e) {}
@@ -1278,11 +1264,8 @@ export class MockPlaywrightFlow {
           '--disable-gpu',
           '--no-first-run',
           '--no-default-browser-check',
-          // Flags adicionais anti-fingerprint
           '--disable-features=IsolateOrigins,site-per-process',
           '--disable-site-isolation-trials',
-          '--disable-web-security',
-          '--allow-running-insecure-content',
           '--disable-extensions',
           ...(firstProxy ? [`--proxy-server=${proxyServerArg}`, '--proxy-bypass-list=<-loopback>'] : []),
         ],
@@ -1340,7 +1323,7 @@ export class MockPlaywrightFlow {
 
     try {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      // Aguarda networkidle com fallback — dá tempo ao Arkose de carregar e registrar eventos
+      // networkidle dá tempo ao Arkose de carregar e registrar os primeiros eventos
       await p.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
       log('info', '🌐 Página de cadastro aberta', cycle);
 
@@ -1364,7 +1347,7 @@ export class MockPlaywrightFlow {
       log('info', '📧 Preenchendo email...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
 
-      // Pausa após digitar — usuário confere o email antes de continuar
+      // Pausa pós-digitação — usuário confere o email antes de continuar
       await cogPause(config.extraDelay, config.extraDelay + 600);
 
       const emailNocampo = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').inputValue().catch(() => '??');
@@ -1372,9 +1355,9 @@ export class MockPlaywrightFlow {
 
       await clickForwardButton(p, cycle);
 
-      // Aguarda tela de OTP
+      // Aguarda a tela de OTP aparecer — não dispara waitForOTP antes da navegação
       log('info', '⏳ Aguardando tela de OTP (#EMAIL_OTP_CODE-0)...', cycle);
-      await p.waitForSelector('#EMAIL_OTP_CODE-0', { state: 'visible', timeout: 30000 });
+      await p.waitForSelector('#EMAIL_OTP_CODE-0', { state: 'visible', timeout: 40000 });
       log('info', `🔑 Tela de OTP detectada! Aguardando código (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
 
       const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
