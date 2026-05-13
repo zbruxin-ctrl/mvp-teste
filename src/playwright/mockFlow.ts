@@ -20,6 +20,14 @@ const contextosPorCiclo = new Map<number, BrowserContext>();
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const MOBILE_DEVICE = devices['iPhone 14'];
 
+// ─── Logger com espelho no stdout (visível no Railway) ───────────────────────
+
+function log(level: 'info' | 'warn' | 'success' | 'error', msg: string, cycle?: number): void {
+  globalState.addLog(level, msg, cycle);
+  const prefix = cycle !== undefined ? `[C#${cycle}]` : '[GLOBAL]';
+  console.log(`${new Date().toISOString()} ${prefix} [${level.toUpperCase()}] ${msg}`);
+}
+
 // ─── Normaliza proxy para http://host:porta (SEM credenciais) ────────────────
 // O Chromium NÃO aceita credenciais inline no --proxy-server.
 // Retorna apenas o host:porta normalizado com protocolo http://.
@@ -156,7 +164,7 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
   }
   // Verifica o que ficou no campo após digitar
   const finalVal = await p.locator(selector).inputValue().catch(() => '??');
-  globalState.addLog('info', `🔍 [DEBUG] Campo "${selector}" após digitação: "${finalVal}"`);
+  log('info', `🔍 [DEBUG] Campo "${selector}" após digitação: "${finalVal}"`);
 }
 
 async function humanClick(p: Page, selector: string): Promise<void> {
@@ -171,6 +179,17 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   } else {
     await p.click(selector);
   }
+}
+
+// ─── Click seguro no forward-button: aguarda estar habilitado ────────────────
+
+async function clickForwardButton(p: Page, cycle: number): Promise<void> {
+  log('info', '⏳ Aguardando #forward-button habilitado...', cycle);
+  await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 15000 }).catch(async () => {
+    log('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando clicar mesmo assim...', cycle);
+  });
+  await humanClick(p, '#forward-button');
+  log('info', '🖱️ #forward-button clicado', cycle);
 }
 
 async function dispensarCookies(p: Page): Promise<void> {
@@ -262,7 +281,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   const nomeBusca = cidade.split(',')[0]!.trim();
   const nomeBuscaNorm = norm(nomeBusca);
 
-  globalState.addLog('info', `📍 Digitando cidade: "${nomeBusca}"`, cycle);
+  log('info', `📍 Digitando cidade: "${nomeBusca}"`, cycle);
   await p.waitForSelector(INPUT_SEL, { state: 'visible', timeout: 15000 });
   const box = await p.locator(INPUT_SEL).boundingBox().catch(() => null);
   if (box) {
@@ -278,7 +297,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
     if (!isSpeedMode() && Math.random() < 0.08) await humanPause(randInt(80, 200));
   }
 
-  globalState.addLog('info', '⏳ Aguardando dropdown de cidade...', cycle);
+  log('info', '⏳ Aguardando dropdown de cidade...', cycle);
   let itemSel: string | null = null;
   const pollMs = isSpeedMode() ? 200 : 500;
   const fimDropdown = Date.now() + 8_000;
@@ -297,7 +316,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   }
 
   if (!itemSel) {
-    globalState.addLog('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter', cycle);
+    log('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter', cycle);
     await humanPause(randInt(sp(300), sp(600)));
     await p.keyboard.press('ArrowDown');
     await humanPause(randInt(sp(150), sp(300)));
@@ -308,7 +327,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await humanPause(randInt(sp(300), sp(600)));
   const opcoes = p.locator(itemSel);
   const total = await opcoes.count();
-  globalState.addLog('info', `📍 Dropdown aberto com ${total} opções`, cycle);
+  log('info', `📍 Dropdown aberto com ${total} opções`, cycle);
 
   let clicou = false;
   for (let i = 0; i < total; i++) {
@@ -322,7 +341,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
           await humanPause(randInt(sp(150), sp(300)));
         }
         await opcao.click({ timeout: 5000 });
-        globalState.addLog('info', `✅ Cidade selecionada: "${texto.trim()}"`, cycle);
+        log('info', `✅ Cidade selecionada: "${texto.trim()}"`, cycle);
         clicou = true;
         break;
       }
@@ -330,7 +349,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   }
 
   if (!clicou) {
-    globalState.addLog('warn', `⚠️ Nenhuma opção com "${nomeBusca}", clicando na primeira`, cycle);
+    log('warn', `⚠️ Nenhuma opção com "${nomeBusca}", clicando na primeira`, cycle);
     try {
       const primeiraBox = await opcoes.first().boundingBox().catch(() => null);
       if (primeiraBox) {
@@ -498,7 +517,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     const inicio = Date.now();
     let detectado = false;
 
-    globalState.addLog('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
+    log('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
     while (Date.now() - inicio < TIMEOUT_MS) {
       for (const sel of SELETORES_WHATSAPP) {
         try {
@@ -511,11 +530,11 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
     }
 
     if (!detectado) {
-      globalState.addLog('warn', '⚠️ Tela WhatsApp não detectada após 30s, pulando...', cycle);
+      log('warn', '⚠️ Tela WhatsApp não detectada após 30s, pulando...', cycle);
       return;
     }
 
-    globalState.addLog('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
+    log('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
     await humanPause(randInt(sp(400), sp(800)));
 
     for (const sel of ['button:has-text("NÃO ATIVAR")', 'button:has-text("Nao ativar")', 'button:has-text("Not now")', 'button:has-text("Agora não")']) {
@@ -529,7 +548,7 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
             await humanPause(randInt(sp(150), sp(300)));
           }
           await el.click({ timeout: 5000 });
-          globalState.addLog('info', `🔕 WhatsApp: NÃO ATIVAR clicado (${sel})`, cycle);
+          log('info', `🔕 WhatsApp: NÃO ATIVAR clicado (${sel})`, cycle);
           await humanPause(randInt(sp(400), sp(800)));
           return;
         }
@@ -538,17 +557,17 @@ async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
 
     try {
       const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
-      if (clicou) { globalState.addLog('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle); return; }
+      if (clicou) { log('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle); return; }
     } catch { /* ignora */ }
 
     try {
       const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
-      if (clicou) { globalState.addLog('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback)`, cycle); return; }
+      if (clicou) { log('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback)`, cycle); return; }
     } catch { /* ignora */ }
 
-    globalState.addLog('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR — continuando...', cycle);
+    log('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR — continuando...', cycle);
   } catch (err) {
-    globalState.addLog('warn', `⚠️ dispensarWhatsApp erro inesperado (ignorado): ${err}`, cycle);
+    log('warn', `⚠️ dispensarWhatsApp erro inesperado (ignorado): ${err}`, cycle);
   }
 }
 
@@ -585,11 +604,11 @@ async function pollingBotaoTirarFoto(
   const inicio = Date.now();
   let tentativa = 0;
 
-  globalState.addLog('info', `📸 [TirarFoto] Iniciando polling (timeout: ${timeoutMs / 1000}s, intervalo: ${POLL_INTERVAL_MS / 1000}s)`, cycle);
+  log('info', `📸 [TirarFoto] Iniciando polling (timeout: ${timeoutMs / 1000}s, intervalo: ${POLL_INTERVAL_MS / 1000}s)`, cycle);
 
   while (Date.now() - inicio < timeoutMs) {
     tentativa++;
-    globalState.addLog('info', `🔄 [TirarFoto] Poll #${tentativa} — buscando botão...`, cycle);
+    log('info', `🔄 [TirarFoto] Poll #${tentativa} — buscando botão...`, cycle);
 
     for (const sel of seletoresBotao) {
       try {
@@ -602,19 +621,19 @@ async function pollingBotaoTirarFoto(
             await humanPause(randInt(sp(200), sp(400)));
           }
           await el.click({ force: true, timeout: 5000 });
-          globalState.addLog('info', `✅ [TirarFoto] Poll #${tentativa} — botão clicado! (${sel})`, cycle);
+          log('info', `✅ [TirarFoto] Poll #${tentativa} — botão clicado! (${sel})`, cycle);
           return true;
         }
       } catch { /* tenta próximo seletor */ }
     }
 
-    globalState.addLog('info', `📌 [TirarFoto] Poll #${tentativa} — botão não encontrado ainda`, cycle);
+    log('info', `📌 [TirarFoto] Poll #${tentativa} — botão não encontrado ainda`, cycle);
 
     if (tentativa % 2 === 0) {
       try {
         const scrollY = tentativa % 4 === 0 ? 0 : 300;
         await p.evaluate(`window.scrollBy(0, ${scrollY})`);
-        globalState.addLog('info', `📌 [TirarFoto] Poll #${tentativa} — scroll aplicado (${scrollY > 0 ? '+' + scrollY : 'topo'})`, cycle);
+        log('info', `📌 [TirarFoto] Poll #${tentativa} — scroll aplicado (${scrollY > 0 ? '+' + scrollY : 'topo'})`, cycle);
         await humanPause(randInt(sp(300), sp(600)));
         for (const sel of seletoresBotao) {
           try {
@@ -627,18 +646,18 @@ async function pollingBotaoTirarFoto(
                 await humanPause(randInt(sp(200), sp(400)));
               }
               await el.click({ force: true, timeout: 5000 });
-              globalState.addLog('info', `✅ [TirarFoto] Poll #${tentativa} (pós-scroll) — botão clicado! (${sel})`, cycle);
+              log('info', `✅ [TirarFoto] Poll #${tentativa} (pós-scroll) — botão clicado! (${sel})`, cycle);
               return true;
             }
           } catch { /* ignora */ }
         }
       } catch (e) {
-        globalState.addLog('warn', `⚠️ [TirarFoto] Poll #${tentativa} — erro no scroll: ${e}`, cycle);
+        log('warn', `⚠️ [TirarFoto] Poll #${tentativa} — erro no scroll: ${e}`, cycle);
       }
     }
 
     if (tentativa % 3 === 0) {
-      globalState.addLog('info', `🔁 [TirarFoto] Poll #${tentativa} — re-clicando em "Foto do perfil"...`, cycle);
+      log('info', `🔁 [TirarFoto] Poll #${tentativa} — re-clicando em "Foto do perfil"...`, cycle);
       try {
         await p.evaluate('window.scrollTo(0, 0)');
         await humanPause(randInt(sp(400), sp(700)));
@@ -653,32 +672,32 @@ async function pollingBotaoTirarFoto(
                 await humanPause(randInt(sp(200), sp(400)));
               }
               await el.click({ force: true, timeout: 5000 });
-              globalState.addLog('info', `📸 [TirarFoto] Poll #${tentativa} — "Foto do perfil" re-clicado (${sel})`, cycle);
+              log('info', `📸 [TirarFoto] Poll #${tentativa} — "Foto do perfil" re-clicado (${sel})`, cycle);
               await humanPause(randInt(sp(1000), sp(2000)));
               break;
             }
           } catch { /* ignora */ }
         }
       } catch (e) {
-        globalState.addLog('warn', `⚠️ [TirarFoto] Poll #${tentativa} — erro no re-clique: ${e}`, cycle);
+        log('warn', `⚠️ [TirarFoto] Poll #${tentativa} — erro no re-clique: ${e}`, cycle);
       }
     }
 
     const restante = timeoutMs - (Date.now() - inicio);
     if (restante > 0) {
-      globalState.addLog('info', `⏳ [TirarFoto] Poll #${tentativa} — aguardando ${POLL_INTERVAL_MS / 1000}s (restam ${Math.round(restante / 1000)}s)...`, cycle);
+      log('info', `⏳ [TirarFoto] Poll #${tentativa} — aguardando ${POLL_INTERVAL_MS / 1000}s (restam ${Math.round(restante / 1000)}s)...`, cycle);
       await humanPause(POLL_INTERVAL_MS);
     }
   }
 
-  globalState.addLog('warn', `❌ [TirarFoto] Timeout após ${tentativa} polls (${timeoutMs / 1000}s) — botão não encontrado`, cycle);
+  log('warn', `❌ [TirarFoto] Timeout após ${tentativa} polls (${timeoutMs / 1000}s) — botão não encontrado`, cycle);
   return false;
 }
 
 // ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
 
 async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
-  globalState.addLog('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
+  log('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
 
   const SELETORES_ITEM = [
     '[data-testid="stepItem profilePhoto"]',
@@ -722,7 +741,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
             await humanPause(randInt(sp(200), sp(400)));
           }
           await el.click({ force: true, timeout: 5000 });
-          globalState.addLog('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
+          log('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
           clicouItem = true;
           break;
         }
@@ -733,7 +752,7 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   }
 
   if (!clicouItem) {
-    globalState.addLog('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle);
+    log('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle);
     return;
   }
 
@@ -742,12 +761,12 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
   const botaoClicado = await pollingBotaoTirarFoto(p, SELETORES_ITEM, SELETORES_BOTAO_FOTO, cycle, 60_000);
 
   if (!botaoClicado) {
-    globalState.addLog('warn', '⚠️ Botão de foto não encontrado após polling completo', cycle);
+    log('warn', '⚠️ Botão de foto não encontrado após polling completo', cycle);
   }
 
   const salvarContaSocure = async (): Promise<void> => {
     const payload = globalState.getPayload(cycle);
-    if (!payload) { globalState.addLog('warn', '⚠️ Payload não encontrado — conta não salva', cycle); return; }
+    if (!payload) { log('warn', '⚠️ Payload não encontrado — conta não salva', cycle); return; }
     try {
       const cookies = await context.cookies();
       const saved = accountStore.save({
@@ -762,9 +781,9 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
         codigoIndicacao: payload.codigoIndicacao,
         cookies,
       });
-      globalState.addLog('success', `💾 Conta salva! id=${saved.id} | ${payload.email}`, cycle);
+      log('success', `💾 Conta salva! id=${saved.id} | ${payload.email}`, cycle);
     } catch (e) {
-      globalState.addLog('warn', `⚠️ Erro ao salvar conta: ${e}`, cycle);
+      log('warn', `⚠️ Erro ao salvar conta: ${e}`, cycle);
     } finally {
       globalState.clearPayload(cycle);
     }
@@ -772,42 +791,42 @@ async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext)
 
   const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
     if (provider === 'Veriff') {
-      globalState.addLog('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
+      log('info', `🗑️ Veriff detectado (score=${score}) → fechando aba para liberar RAM`, cycle);
       await humanPause(randInt(sp(500), sp(1000)));
       await context.close().catch(() => {});
       contextosPorCiclo.delete(cycle);
       globalState.clearPayload(cycle);
     } else {
-      globalState.addLog('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida aberta`, cycle);
+      log('success', `🟢 ${provider} detectado (score=${score}, url=${url}) → aba mantida aberta`, cycle);
       if (provider === 'Socure') await salvarContaSocure();
     }
   };
 
-  globalState.addLog('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
+  log('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
   const fimKyc1 = Date.now() + 30_000;
   while (Date.now() < fimKyc1) {
     const dominante = resolverProviderDominante(cycle, 4);
     if (dominante) {
-      globalState.addLog('info', `✅ KYC detectado: ${dominante.provider} (score=${dominante.score})`, cycle);
+      log('info', `✅ KYC detectado: ${dominante.provider} (score=${dominante.score})`, cycle);
       await detectarEFechar(dominante.provider, dominante.score, dominante.url);
       return;
     }
     await humanPause(isSpeedMode() ? 500 : 1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após 30s — aguardando mais 20s (re-poll)...', cycle);
+  log('warn', '⚠️ KYC não detectado após 30s — aguardando mais 20s (re-poll)...', cycle);
   const fimKyc2 = Date.now() + 20_000;
   while (Date.now() < fimKyc2) {
     const dominante = resolverProviderDominante(cycle, 4);
     if (dominante) {
-      globalState.addLog('info', `✅ KYC detectado (re-poll): ${dominante.provider} (score=${dominante.score})`, cycle);
+      log('info', `✅ KYC detectado (re-poll): ${dominante.provider} (score=${dominante.score})`, cycle);
       await detectarEFechar(dominante.provider, dominante.score, dominante.url);
       return;
     }
     await humanPause(isSpeedMode() ? 500 : 1000);
   }
 
-  globalState.addLog('warn', '⚠️ KYC não detectado após 50s total. Aba mantida aberta para inspeção.', cycle);
+  log('warn', '⚠️ KYC não detectado após 50s total. Aba mantida aberta para inspeção.', cycle);
 }
 
 // ─── Stealth script ───────────────────────────────────────────────────────────
@@ -943,12 +962,12 @@ async function criarContextoIsolado(
   if (proxy) {
     try {
       const p = new URL(buildProxyServerArg(proxy.server));
-      globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
+      log('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
     } catch {
-      globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
+      log('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
     }
   } else {
-    globalState.addLog('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
+    log('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
   }
 
   const proxyConfig = proxy
@@ -991,7 +1010,7 @@ async function criarContextoIsolado(
         url.includes('otp') || url.includes('email') || url.includes('uber') ||
         url.includes('identity') || url.includes('forward')
       ) {
-        globalState.addLog('info', `📡 [NET] POST ${url.split('?')[0]} | body: ${body.slice(0, 300)}`, cycle);
+        log('info', `📡 [NET] POST ${url.split('?')[0]} | body: ${body.slice(0, 300)}`, cycle);
       }
     }
   });
@@ -1000,11 +1019,11 @@ async function criarContextoIsolado(
     try {
       const temOpener = await novaPage.evaluate(() => window.opener !== null).catch(() => false);
       if (!temOpener) {
-        globalState.addLog('info', `🪟 Nova aba sem opener — ignorando`, cycle);
+        log('info', `🪟 Nova aba sem opener — ignorando`, cycle);
         return;
       }
       const url = novaPage.url();
-      globalState.addLog('info', `📌 Popup interceptado (${url || 'about:blank'}) — fechando`, cycle);
+      log('info', `📌 Popup interceptado (${url || 'about:blank'}) — fechando`, cycle);
       registrarListenersPage(novaPage, cycle);
       await new Promise<void>((r) => setTimeout(r, 800));
       await novaPage.close().catch(() => {});
@@ -1026,9 +1045,9 @@ async function criarContextoIsolado(
       acceptLanguage: 'pt-BR,pt;q=0.9',
       platform: 'iPhone',
     });
-    globalState.addLog('info', `📱 CDP mobile ativado`, cycle);
+    log('info', `📱 CDP mobile ativado`, cycle);
   } catch (e) {
-    globalState.addLog('warn', `⚠️ CDP mobile falhou: ${e}`, cycle);
+    log('warn', `⚠️ CDP mobile falhou: ${e}`, cycle);
   }
 
   registrarListenersPage(page, cycle);
@@ -1039,7 +1058,7 @@ async function criarContextoIsolado(
 async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void> {
   const ctx = contextosPorCiclo.get(cycle);
   if (ctx) {
-    globalState.addLog('warn', `🧹 Fechando aba do ciclo #${cycle} — motivo: ${motivo}`, cycle);
+    log('warn', `🧹 Fechando aba do ciclo #${cycle} — motivo: ${motivo}`, cycle);
     await ctx.close().catch(() => {});
     contextosPorCiclo.delete(cycle);
   }
@@ -1054,12 +1073,12 @@ export class MockPlaywrightFlow {
     const proxyServerArg = firstProxy ? buildProxyServerArg(firstProxy.server) : '__system__';
 
     if (browser && currentLaunchProxy === proxyServerArg) {
-      globalState.addLog('info', '🌐 Browser já está rodando — reutilizando');
+      log('info', '🌐 Browser já está rodando — reutilizando');
       return;
     }
 
     if (browser && currentLaunchProxy !== proxyServerArg) {
-      globalState.addLog('warn', '🔄 Proxy mudou — reiniciando browser...');
+      log('warn', '🔄 Proxy mudou — reiniciando browser...');
       await browser.close().catch(() => {});
       browser = null;
       currentLaunchProxy = null;
@@ -1067,7 +1086,7 @@ export class MockPlaywrightFlow {
     }
 
     if (browserLaunching) {
-      globalState.addLog('info', '⏳ Aguardando browser iniciar...');
+      log('info', '⏳ Aguardando browser iniciar...');
       const deadline = Date.now() + 30_000;
       while (!browser && Date.now() < deadline) await new Promise<void>((r) => setTimeout(r, 200));
       if (!browser) throw new Error('Timeout aguardando browser iniciar');
@@ -1079,12 +1098,12 @@ export class MockPlaywrightFlow {
       if (firstProxy) {
         try {
           const p = new URL(proxyServerArg);
-          globalState.addLog('info', `🐧 Iniciando Chromium headless (Railway) | proxy: ${p.host}`);
+          log('info', `🐧 Iniciando Chromium headless (Railway) | proxy: ${p.host}`);
         } catch {
-          globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway) | proxy: ativo');
+          log('info', '🐧 Iniciando Chromium headless (Railway) | proxy: ativo');
         }
       } else {
-        globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway) | sem proxy');
+        log('info', '🐧 Iniciando Chromium headless (Railway) | sem proxy');
       }
 
       browser = await chromiumExtra.launch({
@@ -1104,7 +1123,7 @@ export class MockPlaywrightFlow {
       }) as unknown as Browser;
 
       currentLaunchProxy = proxyServerArg;
-      globalState.addLog('info', firstProxy ? '✅ Browser pronto! (proxy ativo)' : '✅ Browser pronto! (sem proxy)');
+      log('info', firstProxy ? '✅ Browser pronto! (proxy ativo)' : '✅ Browser pronto! (sem proxy)');
     } finally {
       browserLaunching = false;
     }
@@ -1149,7 +1168,7 @@ export class MockPlaywrightFlow {
     },
     cycle: number
   ): Promise<void> {
-    globalState.addLog('info', `🆕 Ciclo #${cycle}: abrindo nova aba`, cycle);
+    log('info', `🆕 Ciclo #${cycle}: abrindo nova aba`, cycle);
     const { context, page: p } = await criarContextoIsolado(cycle);
     const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
 
@@ -1157,11 +1176,11 @@ export class MockPlaywrightFlow {
       await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
       await humanPause(randInt(sp(800), sp(1600)));
-      globalState.addLog('info', '🌐 Página de cadastro aberta', cycle);
+      log('info', '🌐 Página de cadastro aberta', cycle);
 
       const emailAccount = await client.createRandomEmail();
       const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
-      globalState.addLog('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
+      log('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
 
       globalState.setPayload(cycle, {
         nome: payload.nome,
@@ -1173,19 +1192,23 @@ export class MockPlaywrightFlow {
         codigoIndicacao: payload.codigoIndicacao,
       });
 
-      globalState.addLog('info', '📧 Preenchendo email...', cycle);
+      log('info', '📧 Preenchendo email...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
 
-      // Loga o valor do campo imediatamente antes de clicar
+      // FIX 1: Loga o valor do campo e aguarda botão habilitado antes de clicar
       const emailNocampo = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').inputValue().catch(() => '??');
-      globalState.addLog('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocampo}"`, cycle);
+      log('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocampo}"`, cycle);
 
-      await humanClick(p, '#forward-button');
+      await clickForwardButton(p, cycle);
 
-      globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
+      // FIX 2: Aguarda a tela de OTP aparecer antes de disparar waitForOTP
+      log('info', '⏳ Aguardando tela de OTP (#EMAIL_OTP_CODE-0)...', cycle);
+      await p.waitForSelector('#EMAIL_OTP_CODE-0', { state: 'visible', timeout: 30000 });
+      log('info', `🔑 Tela de OTP detectada! Aguardando código (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
+
       const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
-      globalState.addLog('info', `🔑 OTP recebido: ${otp}`, cycle);
+      log('info', `🔑 OTP recebido: ${otp}`, cycle);
 
       await humanPause(randInt(sp(800), sp(1400)));
       const digits = otp.replace(/\D/g, '').split('');
@@ -1194,28 +1217,28 @@ export class MockPlaywrightFlow {
         await humanPause(randInt(sp(50), sp(120)));
       }
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
+      await clickForwardButton(p, cycle);
 
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PHONE_NUMBER', payload.telefone);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
+      await clickForwardButton(p, cycle);
 
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#PASSWORD', payload.senha);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
+      await clickForwardButton(p, cycle);
 
       await humanPause(randInt(sp(400), sp(900)));
       await humanType(p, '#FIRST_NAME', payload.nome);
       await humanPause(randInt(sp(200), sp(400)));
       await humanType(p, '#LAST_NAME', payload.sobrenome);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 300));
-      await humanClick(p, '#forward-button');
+      await clickForwardButton(p, cycle);
 
       await aceitarTermos(p);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
-      await humanClick(p, '#forward-button');
+      await clickForwardButton(p, cycle);
 
       await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
       await humanPause(randInt(sp(700), sp(1400)));
@@ -1233,7 +1256,7 @@ export class MockPlaywrightFlow {
       await clicarFotoPerfil(p, cycle, context);
 
       const aindaAberta = contextosPorCiclo.has(cycle);
-      globalState.addLog(
+      log(
         aindaAberta ? 'success' : 'info',
         `${aindaAberta ? '🎉' : '✅'} Ciclo #${cycle} concluído!`,
         cycle
@@ -1248,12 +1271,12 @@ export class MockPlaywrightFlow {
   static async cleanup(): Promise<void> {
     for (const [cycle, ctx] of contextosPorCiclo.entries()) {
       await ctx.close().catch(() => {});
-      globalState.addLog('info', `🗑️ Aba do ciclo #${cycle} fechada`);
+      log('info', `🗑️ Aba do ciclo #${cycle} fechada`);
     }
     contextosPorCiclo.clear();
     await browser?.close().catch(() => {});
     browser = null;
     currentLaunchProxy = null;
-    globalState.addLog('info', '🧹 Browser fechado');
+    log('info', '🧹 Browser fechado');
   }
 }
