@@ -20,23 +20,20 @@ const contextosPorCiclo = new Map<number, BrowserContext>();
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-// ─── Normaliza URL de proxy para http:// (SEM credenciais embutidas) ──────────
+// ─── Normaliza proxy para http://host:porta (SEM credenciais) ────────────────
 // O Chromium NÃO aceita credenciais inline no --proxy-server.
 // Retorna apenas o host:porta normalizado com protocolo http://.
 
 function buildProxyServerArg(server: string): string {
   let normalized = server.trim();
-  // Remove credenciais se vieram embutidas (segurança)
   try {
     const parsed = new URL(
       normalized.startsWith('http://') || normalized.startsWith('https://')
         ? normalized
         : 'http://' + normalized
     );
-    // Garante protocolo http:// e remove credenciais
     return `http://${parsed.host}`;
   } catch {
-    // Fallback manual: troca https → http e remove user:pass@
     normalized = normalized.replace(/^https:\/\//, 'http://');
     normalized = normalized.replace(/^http:\/\/[^@]+@/, 'http://');
     if (!normalized.startsWith('http://')) normalized = 'http://' + normalized;
@@ -919,8 +916,8 @@ function getFirstAvailableProxy(): { server: string; username?: string; password
 
 // ─── Cria contexto isolado ────────────────────────────────────────────────────
 // O browser é lançado com --proxy-server=http://host:porta (SEM credenciais).
-// As credenciais são passadas via context.authenticate() que é o método
-// correto do Playwright para autenticação de proxy HTTP.
+// As credenciais são passadas via proxy: { username, password } no newContext(),
+// que é a API oficial do Playwright 1.x para autenticação de proxy HTTP.
 
 async function criarContextoIsolado(
   cycle: number
@@ -938,6 +935,15 @@ async function criarContextoIsolado(
     globalState.addLog('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
   }
 
+  // Monta o objeto proxy para o context (com username/password se houver)
+  const proxyConfig = proxy
+    ? {
+        server: buildProxyServerArg(proxy.server),
+        ...(proxy.username ? { username: proxy.username } : {}),
+        ...(proxy.password ? { password: proxy.password } : {}),
+      }
+    : undefined;
+
   const context = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -945,15 +951,10 @@ async function criarContextoIsolado(
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
     extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
+    // proxy no context sobrescreve o proxy do browser para este contexto
+    // e aceita username/password nativamente (Playwright 1.x)
+    ...(proxyConfig ? { proxy: proxyConfig } : {}),
   });
-
-  // ── Autenticação de proxy via Playwright (método correto) ──────────────────
-  // context.authenticate() é a API oficial do Playwright para credenciais de
-  // proxy HTTP. Funciona independente do --proxy-server ter ou não credenciais.
-  if (proxy?.username && proxy?.password) {
-    await context.authenticate({ username: proxy.username, password: proxy.password });
-    globalState.addLog('info', `🔐 Credenciais de autenticação injetadas no contexto #${cycle}`, cycle);
-  }
 
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
@@ -1022,7 +1023,6 @@ async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void>
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
     const firstProxy = getFirstAvailableProxy();
-    // Chave de comparação usa apenas host (sem credenciais)
     const proxyServerArg = firstProxy ? buildProxyServerArg(firstProxy.server) : '__system__';
 
     if (browser && currentLaunchProxy === proxyServerArg) {
@@ -1071,7 +1071,8 @@ export class MockPlaywrightFlow {
           '--disable-gpu',
           '--no-first-run',
           '--no-default-browser-check',
-          // APENAS host:porta — sem credenciais. Auth é feita via context.authenticate()
+          // Apenas host:porta no --proxy-server (sem credenciais)
+          // Credenciais são passadas via proxy: { username, password } no newContext()
           ...(firstProxy ? [`--proxy-server=${proxyServerArg}`, '--proxy-bypass-list=<-loopback>'] : []),
         ],
       }) as unknown as Browser;
