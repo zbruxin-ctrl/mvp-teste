@@ -563,6 +563,45 @@ export class YOPmailClient implements IEmailClient {
 // GET /html?email=&code=                → { status, html }
 // ──────────────────────────────────────────────────────────────────────────────────
 
+// Domínios conhecidos por serem bloqueados por serviços como Uber, iFood, etc.
+// A Uber rejeita silenciosamente emails para domínios "jovens" ou TLDs incomuns.
+// Domínios com TLD .it.com, .us.com, .br.com, .hu.com etc. costumam ser bloqueados.
+const BLOCKED_DOMAIN_PATTERNS = [
+  /\.it\.com$/i,
+  /\.us\.com$/i,
+  /\.br\.com$/i,
+  /\.hu\.com$/i,
+  /\.gb\.com$/i,
+  /\.de\.com$/i,
+  /\.eu\.com$/i,
+  /\.sa\.com$/i,
+  /\.jpn\.com$/i,
+  /\.kr\.com$/i,
+  /\.cn\.com$/i,
+  /\.ae\.org$/i,
+  /\.qc\.com$/i,
+  /\.uy\.com$/i,
+  /\.ar\.com$/i,
+  /grr\.la$/i,
+  /guerrillamail/i,
+  /sharklasers/i,
+  /guerrillamailblock/i,
+  /spam4\.me/i,
+  /trashmail/i,
+  /dispostable/i,
+  /mailnull/i,
+  /spamgourmet/i,
+  /deadaddress/i,
+  /spamhole/i,
+  /mytrashmail/i,
+  /throwam\.com/i,
+  /throwam/i,
+];
+
+function isDomainBlocked(domain: string): boolean {
+  return BLOCKED_DOMAIN_PATTERNS.some(p => p.test(domain));
+}
+
 interface TempMailCCodeResp {
   status: 'ok' | 'empty' | string;
   code: string;
@@ -626,7 +665,18 @@ export class TempMailCClient implements IEmailClient {
     globalState.addLog('info', '📧 [tempmailc] Buscando domínios...');
 
     if (!this.domains.length) {
-      this.domains = await this.fetchDomains();
+      const allDomains = await this.fetchDomains();
+      // Filtra domínios conhecidos por serem bloqueados pela Uber
+      this.domains = allDomains.filter(d => !isDomainBlocked(d));
+
+      if (!this.domains.length) {
+        // Fallback: usa todos se todos forem filtrados
+        globalState.addLog('warn', '⚠️ [tempmailc] Todos os domínios foram filtrados — usando lista completa');
+        this.domains = allDomains;
+      } else {
+        globalState.addLog('info',
+          `📋 [tempmailc] ${this.domains.length}/${allDomains.length} domínios disponíveis após filtro`);
+      }
     }
     if (!this.domains.length) throw new Error('[tempmailc] Nenhum domínio disponível');
 
@@ -642,7 +692,6 @@ export class TempMailCClient implements IEmailClient {
 
   async waitForOTP(email: string, timeoutMs = 90_000, cycle?: number): Promise<string> {
     const startTime = Date.now();
-    // A doc recomenda poll a cada 3-5s; usamos 4s
     const POLL_INTERVAL_MS = 4_000;
     const INITIAL_WAIT_MS  = 6_000;
     let poll = 0;
