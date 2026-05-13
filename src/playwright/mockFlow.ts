@@ -347,7 +347,6 @@ async function etapa_aguardarOTP(
   otpTimeoutMs = 120_000
 ): Promise<string> {
   log('info', '📨 Aguardando OTP no email...', cycle);
-  // IEmailClient expõe waitForOTP — não getMessages()
   const otp = await emailClient.waitForOTP(email, otpTimeoutMs, cycle);
   log('success', `✅ OTP recebido: ${otp}`, cycle);
   return otp;
@@ -408,11 +407,18 @@ async function _executarCiclo(
     page = await ctx.newPage();
     page.setDefaultTimeout(30_000);
 
-    const payload = gerarPayloadCompleto(undefined, opts.inviteCode);
+    // ⭐ 1. Criar email via provider ANTES de qualquer navegação
+    //    Isso garante que o domínio do email pertence à conta do tempmailc
+    //    e evita o erro 403 "domain_not_allowed".
     const emailClient: IEmailClient = createEmailClient(
       opts.emailProvider as any,
       opts.tempMailApiKey
     );
+    const emailAccount = await emailClient.createRandomEmail();
+    log('info', `📬 Email criado pelo provider: ${emailAccount.email}`, cycle);
+
+    // ⭐ 2. Montar payload usando o email real do provider
+    const payload = gerarPayloadCompleto(emailAccount, opts.inviteCode);
 
     log('info', `🌐 Navegando para ${opts.cadastroUrl}`, cycle);
     await page.goto(opts.cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
@@ -420,7 +426,7 @@ async function _executarCiclo(
 
     await dispensarCookies(page);
 
-    // ⭐ Aquecer página ANTES de qualquer interação com formulário
+    // ⭐ 3. Aquecer página ANTES de qualquer interação com formulário
     await pageWarmup(page, cycle);
 
     // Etapa 1: email
@@ -473,7 +479,6 @@ async function _executarCiclo(
     const sucesso = url.includes('myaccount') || url.includes('home') || url.includes('dashboard');
     if (sucesso) {
       log('success', `🎉 Conta criada com sucesso! URL: ${url}`, cycle);
-      // accountStore.save() espera Omit<Account, 'id' | 'createdAt'>
       accountStore.save({
         cycle,
         provider: opts.emailProvider,
@@ -486,7 +491,6 @@ async function _executarCiclo(
         codigoIndicacao: payload.codigoIndicacao,
         cookies: [],
       });
-      // ArtifactsManager é 100% static — sem new, sem .save()
       await ArtifactsManager.saveErrorArtifacts(page, cycle);
     } else {
       log('warn', `⚠️ Flow concluído mas URL inesperada: ${url}`, cycle);
@@ -501,7 +505,7 @@ async function _executarCiclo(
   }
 }
 
-// ─── Classe MockPlaywrightFlow (mantida para compatibilidade com server/index.ts) ──
+// ─── Classe MockPlaywrightFlow ────────────────────────────────────────────────
 
 type FlowOpts = {
   emailProvider: EmailProvider;
@@ -540,7 +544,7 @@ export class MockPlaywrightFlow {
   }
 }
 
-// ─── Executor legado (usado se alguém importar executarMockFlow diretamente) ───
+// ─── Executor legado ──────────────────────────────────────────────────────────
 
 export async function executarMockFlow(
   cycle: number,

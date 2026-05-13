@@ -95,13 +95,19 @@ function gerarDataNascimento(): { mes: string; dia: string; ano: string } {
   };
 }
 
+/**
+ * Gera o payload completo de cadastro.
+ * REQUER um EmailAccount válido — o email DEVE vir do provider (tempmailc, mail.tm, etc.)
+ * para que o domínio seja reconhecido pela API de email.
+ * Nunca use o fallback hardcoded em produção.
+ */
 export function gerarPayloadCompleto(
-  emailAccount?: EmailAccount,
+  emailAccount: EmailAccount,
   inviteCode?: string
 ): RegistrationPayload {
   const { mes, dia, ano } = gerarDataNascimento();
   return {
-    email: emailAccount?.email ?? `test${Math.floor(Math.random() * 10000)}@tempmail.lol`,
+    email: emailAccount.email,
     telefone: gerarTelefone(),
     senha: 'connect@10',
     nome: gerarNome(),
@@ -116,5 +122,7 @@ export function gerarPayloadCompleto(
 }
 
 export function gerarPayloads(qtd = 5): RegistrationPayload[] {
-  return Array.from({ length: qtd }, () => gerarPayloadCompleto());
+  // Sem emailAccount disponível aqui — usado apenas para testes/preview
+  const placeholder = { email: 'placeholder@example.com', token: '' };
+  return Array.from({ length: qtd }, () => gerarPayloadCompleto(placeholder));
 }
