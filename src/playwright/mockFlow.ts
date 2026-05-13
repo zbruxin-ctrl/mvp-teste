@@ -118,9 +118,25 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
     await humanMouseMove(p, tx, ty);
     await humanPause(randInt(sp(50), sp(100)));
   }
+  // Clica no campo
   await p.click(selector, { force: true });
-  await p.fill(selector, '');
+  await humanPause(randInt(sp(80), sp(160)));
+  // Seleciona tudo e deleta sem usar fill() — evita eventos sintéticos que React detecta
+  await p.keyboard.press('ControlOrMeta+a');
+  await humanPause(randInt(30, 60));
+  await p.keyboard.press('Delete');
   await humanPause(randInt(sp(60), sp(150)));
+  // Lê o valor atual do campo para garantir que está vazio
+  const currentVal = await p.locator(selector).inputValue().catch(() => '');
+  if (currentVal.length > 0) {
+    // Fallback: triple-click + Backspace por caractere
+    await p.click(selector, { clickCount: 3 });
+    await humanPause(randInt(30, 60));
+    for (let i = 0; i < currentVal.length; i++) {
+      await p.keyboard.press('Backspace');
+    }
+    await humanPause(randInt(30, 60));
+  }
   const fast = isSpeedMode();
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
@@ -138,6 +154,9 @@ async function humanTypeForce(p: Page, selector: string, value: string): Promise
       else if (Math.random() < 0.05) await humanPause(randInt(100, 300));
     }
   }
+  // Verifica o que ficou no campo após digitar
+  const finalVal = await p.locator(selector).inputValue().catch(() => '??');
+  globalState.addLog('info', `🔍 [DEBUG] Campo "${selector}" após digitação: "${finalVal}"`);
 }
 
 async function humanClick(p: Page, selector: string): Promise<void> {
@@ -915,9 +934,6 @@ function getFirstAvailableProxy(): { server: string; username?: string; password
 }
 
 // ─── Cria contexto isolado ────────────────────────────────────────────────────
-// O browser é lançado com --proxy-server=http://host:porta (SEM credenciais).
-// As credenciais são passadas via proxy: { username, password } no newContext(),
-// que é a API oficial do Playwright 1.x para autenticação de proxy HTTP.
 
 async function criarContextoIsolado(
   cycle: number
@@ -935,7 +951,6 @@ async function criarContextoIsolado(
     globalState.addLog('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
   }
 
-  // Monta o objeto proxy para o context (com username/password se houver)
   const proxyConfig = proxy
     ? {
         server: buildProxyServerArg(proxy.server),
@@ -951,8 +966,6 @@ async function criarContextoIsolado(
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
     extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
-    // proxy no context sobrescreve o proxy do browser para este contexto
-    // e aceita username/password nativamente (Playwright 1.x)
     ...(proxyConfig ? { proxy: proxyConfig } : {}),
   });
 
@@ -967,6 +980,22 @@ async function criarContextoIsolado(
   });
 
   const page = await context.newPage();
+
+  // ─── Intercepta requests POST para logar o body (debug OTP) ──────────────
+  page.on('request', (req) => {
+    if (req.method() === 'POST') {
+      const url = req.url();
+      const body = req.postData() ?? '';
+      // Loga apenas requests relevantes ao fluxo de login/OTP
+      if (
+        url.includes('auth') || url.includes('login') || url.includes('signup') ||
+        url.includes('otp') || url.includes('email') || url.includes('uber') ||
+        url.includes('identity') || url.includes('forward')
+      ) {
+        globalState.addLog('info', `📡 [NET] POST ${url.split('?')[0]} | body: ${body.slice(0, 300)}`, cycle);
+      }
+    }
+  });
 
   context.on('page', async (novaPage) => {
     try {
@@ -1071,8 +1100,6 @@ export class MockPlaywrightFlow {
           '--disable-gpu',
           '--no-first-run',
           '--no-default-browser-check',
-          // Apenas host:porta no --proxy-server (sem credenciais)
-          // Credenciais são passadas via proxy: { username, password } no newContext()
           ...(firstProxy ? [`--proxy-server=${proxyServerArg}`, '--proxy-bypass-list=<-loopback>'] : []),
         ],
       }) as unknown as Browser;
@@ -1150,6 +1177,11 @@ export class MockPlaywrightFlow {
       globalState.addLog('info', '📧 Preenchendo email...', cycle);
       await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
       await humanPause(randInt(config.extraDelay, config.extraDelay + 400));
+
+      // Loga o valor do campo imediatamente antes de clicar
+      const emailNocampo = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').inputValue().catch(() => '??');
+      globalState.addLog('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocamp}"`, cycle);
+
       await humanClick(p, '#forward-button');
 
       globalState.addLog('info', `🔑 Aguardando OTP (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
