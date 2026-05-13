@@ -11,20 +11,47 @@ import * as accountStore from '../store/accountStore';
 
 chromiumExtra.use(StealthPlugin());
 
-// ─── Sempre headless — rodando em servidor/celular ────────────────────────────
-// Não há desktop local; o app mobile exibe o painel via WebView apontando para
-// o Railway. O Playwright roda no Railway (Linux) sempre headless.
-
 let browser: Browser | null = null;
 let browserLaunching = false;
 let currentLaunchProxy: string | null = null;
 
 const contextosPorCiclo = new Map<number, BrowserContext>();
 
-/** Timeout máximo de um ciclo completo (10 minutos). */
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
-
 const MOBILE_DEVICE = devices['iPhone 14'];
+
+// ─── Normaliza URL de proxy para http:// e embute credenciais ────────────────
+// O Chromium exige http:// (não https://) no --proxy-server.
+// Credenciais devem estar embutidas: http://user:pass@host:port
+
+function buildProxyUrl(server: string, username?: string, password?: string): string {
+  // Garante protocolo http://
+  let normalized = server.trim();
+  if (normalized.startsWith('https://')) {
+    normalized = 'http://' + normalized.slice('https://'.length);
+  } else if (!normalized.startsWith('http://') && !normalized.startsWith('socks5://') && !normalized.startsWith('socks4://')) {
+    normalized = 'http://' + normalized;
+  }
+
+  // Embute credenciais na URL se fornecidas e ainda não presentes
+  if (username && password) {
+    try {
+      const parsed = new URL(normalized);
+      if (!parsed.username) {
+        parsed.username = encodeURIComponent(username);
+        parsed.password = encodeURIComponent(password);
+        return parsed.toString();
+      }
+    } catch {
+      // URL inválida — insere manualmente
+      const proto = normalized.split('://')[0]!;
+      const rest  = normalized.split('://')[1]!;
+      return `${proto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${rest}`;
+    }
+  }
+
+  return normalized;
+}
 
 // ─── Speed helpers ────────────────────────────────────────────────────────────
 
@@ -899,20 +926,24 @@ function getFirstAvailableProxy(): { server: string; username?: string; password
   return proxies[0] ?? null;
 }
 
-// ─── Cria contexto isolado ─────────────────────────────────────────────────────
-// NOTA: O proxy é aplicado no nível do browser via --proxy-server (ver init()).
-// O newContext NÃO repassa proxy para evitar conflito com o proxy do launch.
-// Credenciais de autenticação do proxy são injetadas via setHTTPCredentials.
+// ─── Cria contexto isolado ────────────────────────────────────────────────────
+// O proxy é gerenciado inteiramente no launch() via --proxy-server com
+// credenciais embutidas na URL (http://user:pass@host:port).
+// O newContext NÃO recebe proxy para evitar conflito com o browser-level proxy.
 
 async function criarContextoIsolado(
   cycle: number
 ): Promise<{ context: BrowserContext; page: Page }> {
-  // Usa sempre o primeiro proxy (mesmo que getProxyForCycle retorne outro),
-  // pois o --proxy-server do launch é fixo no proxies[0].
   const proxy = getFirstAvailableProxy();
 
   if (proxy) {
-    globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo: ${proxy.server}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
+    // Loga apenas host:port — sem expor credenciais no log
+    try {
+      const p = new URL(buildProxyUrl(proxy.server));
+      globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
+    } catch {
+      globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
+    }
   } else {
     globalState.addLog('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
   }
@@ -924,15 +955,8 @@ async function criarContextoIsolado(
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
     extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
-    // Proxy NÃO é passado aqui — o browser já foi lançado com --proxy-server.
-    // Passar proxy no contexto quando o browser foi lançado sem proxy não funciona no Chromium.
+    // Proxy NÃO é passado aqui: browser foi lançado com --proxy-server=http://user:pass@host:port
   });
-
-  // Injeta credenciais de autenticação do proxy (funciona mesmo sem proxy no newContext)
-  if (proxy?.username && proxy?.password) {
-    await context.setHTTPCredentials({ username: proxy.username, password: proxy.password });
-    globalState.addLog('info', `🔐 [Proxy] Credenciais de autenticação injetadas no contexto #${cycle}`, cycle);
-  }
 
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
@@ -999,10 +1023,10 @@ async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void>
 // ─── Flow principal ───────────────────────────────────────────────────────────
 
 export class MockPlaywrightFlow {
-  // headless sempre true — servidor Railway/produção, sem desktop local
   static async init(headless = true): Promise<void> {
     const firstProxy = getFirstAvailableProxy();
-    const launchProxyKey = firstProxy ? firstProxy.server : '__system__';
+    // Usa apenas o host como chave de comparação (sem credenciais)
+    const launchProxyKey = firstProxy ? buildProxyUrl(firstProxy.server) : '__system__';
 
     if (browser && currentLaunchProxy === launchProxyKey) {
       globalState.addLog('info', '🌐 Browser já está rodando — reutilizando');
@@ -1027,9 +1051,23 @@ export class MockPlaywrightFlow {
 
     browserLaunching = true;
     try {
-      const proxyArg = firstProxy ? firstProxy.server : '';
+      // Constrói URL com protocolo correto (http://) e credenciais embutidas
+      const proxyUrl = firstProxy
+        ? buildProxyUrl(firstProxy.server, firstProxy.username, firstProxy.password)
+        : '';
 
-      globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway/produção)');
+      if (proxyUrl) {
+        // Loga sem credenciais
+        try {
+          const p = new URL(proxyUrl);
+          globalState.addLog('info', `🐧 Iniciando Chromium headless (Railway) | proxy: ${p.host}`);
+        } catch {
+          globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway) | proxy: ativo');
+        }
+      } else {
+        globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway) | sem proxy');
+      }
+
       browser = await chromiumExtra.launch({
         headless: true,
         slowMo: 0,
@@ -1042,12 +1080,14 @@ export class MockPlaywrightFlow {
           '--disable-gpu',
           '--no-first-run',
           '--no-default-browser-check',
-          ...(proxyArg ? [`--proxy-server=${proxyArg}`, '--proxy-bypass-list=<-loopback>'] : []),
+          // Credenciais embutidas na URL: http://user:pass@host:port
+          // Protocolo garantido como http:// (nunca https://)
+          ...(proxyUrl ? [`--proxy-server=${proxyUrl}`, '--proxy-bypass-list=<-loopback>'] : []),
         ],
       }) as unknown as Browser;
 
       currentLaunchProxy = launchProxyKey;
-      globalState.addLog('info', proxyArg ? `✅ Browser pronto! (proxy: ${proxyArg})` : '✅ Browser pronto! (sem proxy)');
+      globalState.addLog('info', proxyUrl ? '✅ Browser pronto! (proxy ativo)' : '✅ Browser pronto! (sem proxy)');
     } finally {
       browserLaunching = false;
     }
