@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
-import { globalState, parseProxyString } from '../state/globalState';
+import { globalState, parseProxyString, CADASTRO_URL } from '../state/globalState';
 import { MockPlaywrightFlow } from '../playwright/mockFlow';
 import { diagnoseUberForm } from '../playwright/diagnose';
 import * as accountStore from '../store/accountStore';
@@ -27,7 +27,7 @@ app.use(express.static(path.join(__dirname, '../../src/frontend')));
 globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.init(config.headless);
   await MockPlaywrightFlow.execute(
-    config.cadastroUrl,
+    CADASTRO_URL,
     {
       emailProvider:  config.emailProvider  ?? 'tempmailc',
       tempMailApiKey: config.tempMailApiKey ?? '',
@@ -78,6 +78,9 @@ function validateConfig(body: Partial<Config> & { proxyServer?: string; proxyUse
     delete (body as any).proxyPass;
   }
 
+  // cadastroUrl é ignorada — sempre usa CADASTRO_URL fixo
+  delete (body as any).cadastroUrl;
+
   if ('emailProvider' in body) {
     if (!VALID_EMAIL_PROVIDERS.includes(body.emailProvider as string)) {
       errors.push(`emailProvider deve ser um de: ${VALID_EMAIL_PROVIDERS.join(', ')}`);
@@ -106,9 +109,6 @@ function validateConfig(body: Partial<Config> & { proxyServer?: string; proxyUse
   if ('headless' in body && typeof body.headless !== 'boolean') {
     body.headless = body.headless === 'true' || (body.headless as unknown) === true;
   }
-  if ('cadastroUrl' in body && body.cadastroUrl && typeof body.cadastroUrl !== 'string') {
-    errors.push('cadastroUrl deve ser string');
-  }
   if ('proxies' in body && body.proxies !== undefined && !Array.isArray(body.proxies)) {
     errors.push('proxies deve ser array');
   }
@@ -127,11 +127,7 @@ app.get('/api/accounts', requireAuth, (_req, res) => {
 
 // ── Diagnóstico de seletores ───────────────────────────────
 app.post('/api/diagnose', requireAuth, async (req: Request, res: Response) => {
-  const url: string = req.body?.url ?? (globalState.getState().config as any)?.cadastroUrl ?? '';
-  if (!url) {
-    res.status(400).json({ ok: false, error: 'Forneça um campo "url" no body ou configure cadastroUrl' });
-    return;
-  }
+  const url: string = req.body?.url ?? CADASTRO_URL;
   try {
     const result = await diagnoseUberForm(url);
     res.json({ ok: true, ...result });

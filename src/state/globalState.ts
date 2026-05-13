@@ -4,6 +4,9 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export type CycleExecutor = (config: Config, cycle: number) => Promise<void>;
 
+// URL de cadastro fixa — não pode ser alterada pelo frontend
+export const CADASTRO_URL = 'https://bonjour.uber.com/';
+
 // ─── KYC State ────────────────────────────────────────────────────────────────
 
 export interface KycSignal {
@@ -44,21 +47,10 @@ export interface CyclePayload {
 
 // ─── Helpers de proxy ─────────────────────────────────────────────────────────
 
-/**
- * Parseia uma string de proxy nos formatos:
- *   http://user:pass@host:port          ← formato principal (DataImpulse etc.)
- *   socks5://user:pass@host:port
- *   host:port
- *   host:port:user:pass
- *
- * Usa regex própria para extrair user/pass — evita bugs do new URL() com
- * usernames que contêm '__', '.' ou outros caracteres especiais.
- */
 export function parseProxyString(raw: string): ProxyConfig | null {
   raw = raw.trim();
   if (!raw) return null;
 
-  // Formato: scheme://user:pass@host:port  ou  scheme://host:port
   const schemeMatch = raw.match(
     /^(https?|socks[45]):\/\/(?:([^:@]+):([^@]*)@)?([^:/]+):(\d+)\s*$/i
   );
@@ -71,7 +63,6 @@ export function parseProxyString(raw: string): ProxyConfig | null {
     };
   }
 
-  // Formato legado: host:port  ou  host:port:user:pass
   const parts = raw.split(':');
   if (parts.length === 2) {
     return { server: `http://${parts[0]}:${parts[1]}` };
@@ -98,7 +89,7 @@ class GlobalState {
     activeParallel: 0,
     status: 'STOPPED',
     config: {
-      cadastroUrl: '',
+      cadastroUrl: CADASTRO_URL,
       tempMailApiKey: '',
       emailProvider: 'mail.tm',
       inviteCode: '',
@@ -116,13 +107,8 @@ class GlobalState {
   private currentCycle = 0;
   private executor: CycleExecutor | null = null;
 
-  // KYC isolado por ciclo
   private kycByCycle: KycByCycle = {};
-
-  // Payload de cadastro por ciclo
   private payloadByCycle: Record<number, CyclePayload> = {};
-
-  // ─── Payload API ─────────────────────────────────────────────────────────────
 
   setPayload(cycle: number, payload: CyclePayload): void {
     this.payloadByCycle[cycle] = payload;
@@ -136,8 +122,6 @@ class GlobalState {
     delete this.payloadByCycle[cycle];
   }
 
-  // ─── Proxy API ───────────────────────────────────────────────────────────────
-
   getProxyForCycle(cycle: number): ProxyConfig | undefined {
     const proxies = this.state.config.proxies;
     if (!proxies || proxies.length === 0) return undefined;
@@ -150,8 +134,6 @@ class GlobalState {
     );
     return proxy;
   }
-
-  // ─── KYC API ─────────────────────────────────────────────────────────────────
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
     if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
@@ -197,8 +179,6 @@ class GlobalState {
     this.kycByCycle = {};
   }
 
-  // ─── Core API ────────────────────────────────────────────────────────────────
-
   setExecutor(fn: CycleExecutor): void {
     this.executor = fn;
   }
@@ -216,7 +196,9 @@ class GlobalState {
   }
 
   updateConfig(config: Partial<Config>): void {
-    this.state.config = { ...this.state.config, ...config };
+    // cadastroUrl é sempre fixa — ignora qualquer valor enviado pelo frontend
+    const { cadastroUrl: _ignored, ...rest } = config as any;
+    this.state.config = { ...this.state.config, ...rest, cadastroUrl: CADASTRO_URL };
     this.addLog('info', 'Configuração atualizada');
   }
 
