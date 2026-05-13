@@ -67,12 +67,14 @@ function randFloat(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-// Box-Muller: distribuição normal — mais realista que uniforme
+// Box-Muller com clamp: evita valores extremos que desviam demais da média
 function randNormal(mean: number, stdDev: number): number {
   const u1 = Math.random();
   const u2 = Math.random();
   const z = Math.sqrt(-2.0 * Math.log(u1 + 1e-10)) * Math.cos(2 * Math.PI * u2);
-  return Math.round(mean + z * stdDev);
+  const raw = mean + z * stdDev;
+  // Clamp em ±2.5 desvios para evitar delays absurdos
+  return Math.round(Math.max(mean - 2.5 * stdDev, Math.min(mean + 2.5 * stdDev, raw)));
 }
 
 // ─── Pausas ───────────────────────────────────────────────────────────────────
@@ -83,11 +85,26 @@ async function humanPause(baseMs: number): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, Math.max(30, effective + jitter)));
 }
 
-// Pausa cognitiva: imita leitura/decisão + 15% chance de distração longa
+// Pausa cognitiva aprimorada:
+// – 15% distração curta (leitura lenta)
+// – 5% distração longa (usuário sai do foco, volta)
 async function cogPause(minMs: number, maxMs: number): Promise<void> {
   const base = randInt(minMs, maxMs);
-  const extra = Math.random() < 0.15 ? randInt(700, 2200) : 0;
+  let extra = 0;
+  const roll = Math.random();
+  if (roll < 0.05) {
+    // Distração longa: usuário abriu outra coisa (2-5s)
+    extra = randInt(2000, 5000);
+  } else if (roll < 0.20) {
+    // Distração curta: releitura rápida (700-2200ms)
+    extra = randInt(700, 2200);
+  }
   await humanPause(base + extra);
+}
+
+// Pausa de "micro-reflexo" — delay humano mínimo entre ações sequenciais
+async function reflexPause(): Promise<void> {
+  await new Promise<void>((r) => setTimeout(r, randNormal(55, 18)));
 }
 
 // ─── Movimento de mouse: Bézier cúbica + ease-in-out + micro-tremor ───────────
@@ -99,14 +116,15 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   const startX = randInt(30, 360);
   const startY = randInt(80, 500);
 
-  const cp1X = startX + (x - startX) * randFloat(0.15, 0.38) + randInt(-35, 35);
-  const cp1Y = startY + (y - startY) * randFloat(0.15, 0.38) + randInt(-25, 25);
-  const cp2X = startX + (x - startX) * randFloat(0.62, 0.85) + randInt(-25, 25);
-  const cp2Y = startY + (y - startY) * randFloat(0.62, 0.85) + randInt(-18, 18);
+  // Pontos de controle com variação orgânica maior — curvas irregulares
+  const cp1X = startX + (x - startX) * randFloat(0.12, 0.40) + randInt(-45, 45);
+  const cp1Y = startY + (y - startY) * randFloat(0.12, 0.40) + randInt(-30, 30);
+  const cp2X = startX + (x - startX) * randFloat(0.60, 0.88) + randInt(-35, 35);
+  const cp2Y = startY + (y - startY) * randFloat(0.60, 0.88) + randInt(-22, 22);
 
   const dist = Math.hypot(x - startX, y - startY);
-  const baseSteps = fast ? randInt(5, 8) : randInt(12, 20);
-  const totalSteps = Math.max(baseSteps, Math.floor(dist / 30));
+  const baseSteps = fast ? randInt(5, 8) : randInt(14, 24);
+  const totalSteps = Math.max(baseSteps, Math.floor(dist / 28));
 
   for (let i = 0; i <= totalSteps; i++) {
     const rawT = i / totalSteps;
@@ -133,19 +151,23 @@ async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
     const speedFactor = Math.sin(Math.PI * rawT);
     const stepDelay = fast
       ? Math.max(1, Math.round(4 * (1 - speedFactor * 0.7)))
-      : Math.max(3, Math.round(randNormal(12, 4) * (1 - speedFactor * 0.6)));
+      : Math.max(3, Math.round(randNormal(14, 5) * (1 - speedFactor * 0.6)));
     await new Promise<void>((r) => setTimeout(r, stepDelay));
   }
 
-  // Micro-tremor pós-chegada
+  // Micro-tremor pós-chegada com intensidade variável
   if (!fast) {
-    const tremors = randInt(2, 5);
+    const tremors = randInt(2, 6);
+    const intensity = randFloat(1.5, 4.0); // intensidade orgânica
     for (let j = 0; j < tremors; j++) {
-      await p.mouse.move(x + randInt(-3, 3), y + randInt(-3, 3));
-      await new Promise<void>((r) => setTimeout(r, randInt(20, 60)));
+      await p.mouse.move(
+        x + Math.round(randFloat(-intensity, intensity)),
+        y + Math.round(randFloat(-intensity, intensity))
+      );
+      await new Promise<void>((r) => setTimeout(r, randInt(18, 65)));
     }
     await p.mouse.move(x, y);
-    await new Promise<void>((r) => setTimeout(r, randInt(40, 100)));
+    await new Promise<void>((r) => setTimeout(r, randInt(40, 110)));
   }
 }
 
@@ -155,21 +177,23 @@ async function hoverElement(p: Page, selector: string): Promise<void> {
   try {
     const box = await p.locator(selector).boundingBox().catch(() => null);
     if (!box) return;
-    const nearX = Math.round(box.x + box.width * randFloat(0.1, 0.3));
-    const nearY = Math.round(box.y + box.height * randFloat(0.3, 0.7));
+    // Aproximação por borda — simula olho encontrando o elemento
+    const nearX = Math.round(box.x + box.width * randFloat(0.08, 0.28));
+    const nearY = Math.round(box.y + box.height * randFloat(0.25, 0.75));
     await humanMouseMove(p, nearX, nearY);
-    await new Promise<void>((r) => setTimeout(r, randInt(80, 200)));
-    const clickX = Math.round(box.x + box.width * randFloat(0.35, 0.65));
-    const clickY = Math.round(box.y + box.height * randFloat(0.35, 0.65));
+    await new Promise<void>((r) => setTimeout(r, randInt(60, 180)));
+    // Centraliza no elemento — decisão de clicar
+    const clickX = Math.round(box.x + box.width * randFloat(0.32, 0.68));
+    const clickY = Math.round(box.y + box.height * randFloat(0.32, 0.68));
     await humanMouseMove(p, clickX, clickY);
-    await humanPause(randInt(sp(200), sp(450)));
+    await humanPause(randInt(sp(180), sp(420)));
   } catch { /* ignora */ }
 }
 
 // ─── Scroll inercial ──────────────────────────────────────────────────────────
 
 async function scrollInercial(p: Page, totalDelta: number): Promise<void> {
-  const steps = randInt(4, 9);
+  const steps = randInt(4, 10);
   const deltas: number[] = [];
   let remaining = totalDelta;
   for (let i = 0; i < steps; i++) {
@@ -177,47 +201,44 @@ async function scrollInercial(p: Page, totalDelta: number): Promise<void> {
     const eased = Math.sin(progress * Math.PI / 2);
     const portion = i === steps - 1
       ? remaining
-      : Math.round(totalDelta * (eased / steps) * randFloat(0.7, 1.3));
+      : Math.round(totalDelta * (eased / steps) * randFloat(0.65, 1.35));
     deltas.push(Math.min(portion, remaining));
     remaining -= deltas[deltas.length - 1]!;
   }
   for (const d of deltas) {
     if (d !== 0) await p.mouse.wheel(0, d);
-    await new Promise<void>((r) => setTimeout(r, randInt(16, 48)));
+    await new Promise<void>((r) => setTimeout(r, randInt(14, 52)));
   }
 }
 
 async function scrollIdle(p: Page): Promise<void> {
   if (isSpeedMode()) return;
-  const amount = randInt(60, 200);
-  await humanPause(randInt(500, 1000));
+  const amount = randInt(70, 220);
+  await humanPause(randInt(500, 1100));
   await scrollInercial(p, amount);
-  await humanPause(randInt(400, 900));
+  await humanPause(randInt(350, 850));
   await scrollInercial(p, -amount);
-  await humanPause(randInt(200, 600));
+  await humanPause(randInt(180, 550));
 }
 
 // ─── Click com touch events reais (anti-Arkose) ───────────────────────────────
 // O Arkose valida a cadeia de eventos: pointerenter → pointermove → pointerdown
 // → touchstart → touchend → pointerup → click.
-// Usar apenas mouse.down/up não gera touchstart/touchend, o que é detectável.
-// Esta função injeta os eventos touch via CDP evaluate para complementar o mouse.
 
 async function dispatchTouchClick(p: Page, x: number, y: number): Promise<void> {
-  // Emite touchstart + touchend no ponto exato com variação de radius
   await p.evaluate(({ cx, cy }: { cx: number; cy: number }) => {
-    const radiusX = 10 + Math.random() * 8;
-    const radiusY = 10 + Math.random() * 8;
-    const force   = 0.4 + Math.random() * 0.4;
-    const angle   = Math.random() * 30 - 15;
+    const radiusX = 9 + Math.random() * 10;
+    const radiusY = 9 + Math.random() * 10;
+    const force   = 0.35 + Math.random() * 0.45;
+    const angle   = Math.random() * 35 - 17;
     const el = document.elementFromPoint(cx, cy) ?? document.body;
 
     const mkTouch = (type: string) => {
       const touch = new Touch({
-        identifier: Date.now(),
+        identifier: Date.now() + Math.floor(Math.random() * 100),
         target: el,
-        clientX: cx + (Math.random() - 0.5) * 2,
-        clientY: cy + (Math.random() - 0.5) * 2,
+        clientX: cx + (Math.random() - 0.5) * 3,
+        clientY: cy + (Math.random() - 0.5) * 3,
         screenX: cx,
         screenY: cy,
         pageX: cx,
@@ -236,9 +257,10 @@ async function dispatchTouchClick(p: Page, x: number, y: number): Promise<void> 
     };
 
     mkTouch('touchstart');
-    // Micro-movimento de dedo durante pressão
-    setTimeout(() => mkTouch('touchmove'), 20 + Math.random() * 30);
-    setTimeout(() => mkTouch('touchend'), 60 + Math.random() * 80);
+    // Micro-movimentos do dedo — pressão natural
+    setTimeout(() => mkTouch('touchmove'), 15 + Math.random() * 25);
+    setTimeout(() => mkTouch('touchmove'), 35 + Math.random() * 30);
+    setTimeout(() => mkTouch('touchend'),  65 + Math.random() * 90);
   }, { cx: x, cy: y });
 }
 
@@ -249,28 +271,35 @@ async function humanClick(p: Page, selector: string): Promise<void> {
   const box = await p.locator(selector).boundingBox().catch(() => null);
 
   if (box) {
-    const tx = Math.round(box.x + box.width  * randFloat(0.28, 0.72));
-    const ty = Math.round(box.y + box.height * randFloat(0.28, 0.72));
+    const tx = Math.round(box.x + box.width  * randFloat(0.25, 0.75));
+    const ty = Math.round(box.y + box.height * randFloat(0.25, 0.75));
 
     await humanMouseMove(p, tx, ty);
     // Hover dwell: usuário olha o botão antes de pressionar
-    await humanPause(randInt(sp(150), sp(320)));
+    await humanPause(randInt(sp(140), sp(340)));
 
-    // Micro-ajuste final da mão
+    // Micro-ajuste final da mão — mão não fica perfeitamente parada
     if (!isSpeedMode()) {
-      await p.mouse.move(tx + randInt(-2, 2), ty + randInt(-2, 2));
-      await new Promise<void>((r) => setTimeout(r, randInt(20, 60)));
+      await p.mouse.move(tx + randInt(-3, 3), ty + randInt(-3, 3));
+      await new Promise<void>((r) => setTimeout(r, randInt(18, 55)));
       await p.mouse.move(tx, ty);
+      await new Promise<void>((r) => setTimeout(r, randInt(15, 40)));
     }
 
     // Dispara touch events reais antes do mousedown
     await dispatchTouchClick(p, tx, ty);
-    await new Promise<void>((r) => setTimeout(r, randInt(15, 40)));
+    await new Promise<void>((r) => setTimeout(r, randInt(12, 38)));
 
     await p.mouse.down();
-    // Press duration humana: 60-200ms com distribuição normal
-    await new Promise<void>((r) => setTimeout(r, randNormal(100, 30)));
+    // Press duration com distribuição normal (humanos variam 60-200ms)
+    await new Promise<void>((r) => setTimeout(r, randNormal(105, 28)));
     await p.mouse.up();
+
+    // Mão afasta levemente após click — fingerprint natural
+    if (!isSpeedMode()) {
+      await reflexPause();
+      await p.mouse.move(tx + randInt(-8, 8), ty + randInt(-5, 5));
+    }
   } else {
     await p.click(selector);
   }
@@ -285,15 +314,22 @@ async function microHesitate(p: Page): Promise<void> {
   try {
     const btnBox = await p.locator('#forward-button').boundingBox().catch(() => null);
     if (!btnBox) return;
+    const btnCX = btnBox.x + btnBox.width  * randFloat(0.35, 0.65);
+    const btnCY = btnBox.y + btnBox.height * randFloat(0.35, 0.65);
     // Move para o botão
-    await humanMouseMove(p, btnBox.x + btnBox.width * 0.5, btnBox.y + btnBox.height * 0.5);
-    await humanPause(randInt(180, 400));
-    // Recua levemente — hesitação
-    await humanMouseMove(p, btnBox.x + btnBox.width * 0.5 + randInt(-30, 30), btnBox.y - randInt(20, 60));
-    await humanPause(randInt(120, 280));
+    await humanMouseMove(p, btnCX, btnCY);
+    await humanPause(randInt(160, 380));
+    // Recua levemente — hesitação genuína
+    await humanMouseMove(p, btnCX + randInt(-40, 40), btnCY - randInt(18, 65));
+    await humanPause(randInt(100, 260));
+    // Pausa de reflexão — 30% chance de olhar para trás no formulário
+    if (Math.random() < 0.30) {
+      await humanMouseMove(p, randInt(60, 320), randInt(120, 380));
+      await humanPause(randInt(200, 500));
+    }
     // Retorna ao botão com convicção
-    await humanMouseMove(p, btnBox.x + btnBox.width * randFloat(0.35, 0.65), btnBox.y + btnBox.height * randFloat(0.35, 0.65));
-    await humanPause(randInt(100, 250));
+    await humanMouseMove(p, btnCX, btnCY);
+    await humanPause(randInt(90, 220));
   } catch { /* ignora */ }
 }
 
@@ -304,9 +340,8 @@ async function clickForwardButton(p: Page, cycle: number): Promise<void> {
   await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 15000 }).catch(() => {
     log('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando mesmo assim...', cycle);
   });
-  // Pausa pensativa + micro-hesitação antes de submeter
   if (!isSpeedMode()) {
-    await cogPause(600, 1600);
+    await cogPause(500, 1400);
     await microHesitate(p);
   }
   await humanClick(p, '#forward-button');
@@ -323,46 +358,53 @@ async function pageWarmup(p: Page, cycle: number): Promise<void> {
   }
   log('info', '🔥 Aquecendo página (simulando leitura inicial)...', cycle);
 
-  // Fase 1: movimentos de leitura (olhos varrem o formulário)
+  // Fase 1: movimentos de leitura em ziguezague (olhos varrem o formulário)
   const pontosLeitura = [
-    { x: randInt(60, 200),  y: randInt(60,  140) },
-    { x: randInt(100, 300), y: randInt(140, 280) },
-    { x: randInt(80,  310), y: randInt(280, 400) },
-    { x: randInt(100, 280), y: randInt(400, 520) },
+    { x: randInt(50, 180),  y: randInt(55,  130) },
+    { x: randInt(180, 340), y: randInt(100, 200) },
+    { x: randInt(60,  250), y: randInt(200, 320) },
+    { x: randInt(150, 340), y: randInt(300, 420) },
+    { x: randInt(60,  220), y: randInt(400, 520) },
   ];
   for (const pt of pontosLeitura) {
     await humanMouseMove(p, pt.x, pt.y);
-    await humanPause(randInt(180, 480));
+    await humanPause(randInt(160, 460));
   }
 
-  // Fase 2: scroll de leitura
+  // Fase 2: scroll de leitura + idle
   await scrollIdle(p);
 
-  // Fase 3: hover no campo de input
+  // Fase 3: hover no campo de input (usuário "localiza" onde vai digitar)
   try {
     const inputBox = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').boundingBox().catch(() => null);
     if (inputBox) {
       const cx = inputBox.x + inputBox.width  * 0.5;
       const cy = inputBox.y + inputBox.height * 0.5;
-      await humanMouseMove(p, cx + randInt(-20, 20), cy + randInt(-5, 5));
-      await humanPause(randInt(300, 700));
+      // Aproxima em dois passos — como um olho que lê e depois foca
+      await humanMouseMove(p, cx + randInt(-50, 50), cy + randInt(-30, 30));
+      await humanPause(randInt(280, 650));
+      await humanMouseMove(p, cx + randInt(-15, 15), cy + randInt(-8, 8));
+      await humanPause(randInt(220, 550));
 
-      // Fase 4: hover no botão e volta — hesitação típica
+      // Fase 4: hover no botão e volta — indecisão típica
       const btnBox = await p.locator('#forward-button').boundingBox().catch(() => null);
       if (btnBox) {
-        await humanMouseMove(p, btnBox.x + btnBox.width * 0.5, btnBox.y + btnBox.height * 0.5);
-        await humanPause(randInt(200, 500));
+        await humanMouseMove(p, btnBox.x + btnBox.width * randFloat(0.3, 0.7), btnBox.y + btnBox.height * 0.5);
+        await humanPause(randInt(180, 460));
         await humanMouseMove(p, cx, cy);
-        await humanPause(randInt(350, 750));
+        await humanPause(randInt(300, 700));
       }
     }
   } catch { /* ignora */ }
 
-  // Fase 5: scroll aleatório extra (30% de chance — usuário distrai)
-  if (Math.random() < 0.3) await scrollIdle(p);
+  // Fase 5: distração — 35% de chance de scroll extra
+  if (Math.random() < 0.35) {
+    await scrollIdle(p);
+    await humanPause(randInt(300, 700));
+  }
 
   // Fase 6: pausa final — "usuário decide começar a digitar"
-  await cogPause(900, 2400);
+  await cogPause(800, 2200);
   log('info', '✅ Aquecimento concluído', cycle);
 }
 
@@ -504,1033 +546,4 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
       const opcao = opcoes.nth(i);
       const texto = await opcao.innerText().catch(() => '');
       if (norm(texto).includes(nomeBuscaNorm)) {
-        const opcaoBox = await opcao.boundingBox().catch(() => null);
-        if (opcaoBox) {
-          await humanMouseMove(p, opcaoBox.x + opcaoBox.width / 2, opcaoBox.y + opcaoBox.height / 2);
-          await humanPause(randInt(sp(150), sp(300)));
-        }
-        await opcao.click({ timeout: 5000 });
-        log('info', `✅ Cidade selecionada: "${texto.trim()}"`, cycle);
-        clicou = true;
-        break;
-      }
-    } catch { /* tenta próxima */ }
-  }
-
-  if (!clicou) {
-    log('warn', `⚠️ Nenhuma opção com "${nomeBusca}", clicando na primeira`, cycle);
-    try {
-      const primeiraBox = await opcoes.first().boundingBox().catch(() => null);
-      if (primeiraBox) {
-        await humanMouseMove(p, primeiraBox.x + primeiraBox.width / 2, primeiraBox.y + primeiraBox.height / 2);
-        await humanPause(randInt(sp(150), sp(300)));
-      }
-      await opcoes.first().click({ timeout: 5000 });
-    } catch {
-      await p.keyboard.press('ArrowDown');
-      await humanPause(randInt(sp(150), sp(300)));
-      await p.keyboard.press('Enter');
-    }
-  }
-  await humanPause(randInt(sp(400), sp(700)));
-}
-
-// ─── Digitação humanizada ─────────────────────────────────────────────────────
-
-const CHAR_NATURAL_DELAY = { mean: 80, std: 28 };
-const CHAR_FAST_DELAY    = { mean: 28, std: 10 };
-
-async function _typeChar(p: Page, ch: string, fast: boolean): Promise<void> {
-  const { mean, std } = fast ? CHAR_FAST_DELAY : CHAR_NATURAL_DELAY;
-  let delay = Math.max(15, randNormal(mean, std));
-  if (!fast && /[ @._+\-]/.test(ch)) delay += randInt(60, 180);
-  await p.keyboard.type(ch, { delay });
-}
-
-async function _introduceTypo(p: Page, ch: string): Promise<void> {
-  const adjacentes: Record<string, string> = {
-    a:'s', b:'v', c:'x', d:'s', e:'r', f:'g', g:'h', h:'j', i:'u',
-    j:'k', k:'l', l:'k', m:'n', n:'m', o:'p', p:'o', q:'w', r:'e',
-    s:'a', t:'r', u:'y', v:'b', w:'q', x:'z', y:'u', z:'x',
-  };
-  const typo = adjacentes[ch.toLowerCase()] ?? String.fromCharCode(ch.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
-  await p.keyboard.type(typo, { delay: randInt(40, 90) });
-  await humanPause(randInt(60, 160));
-  await p.keyboard.press('Backspace');
-  await humanPause(randInt(50, 120));
-}
-
-async function humanType(p: Page, selector: string, value: string): Promise<void> {
-  await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  await hoverElement(p, selector);
-  await p.click(selector);
-  await p.fill(selector, '');
-  await humanPause(randInt(sp(70), sp(160)));
-
-  const fast = isSpeedMode();
-  let burstCount = 0;
-  const burstSize = randInt(3, 7);
-
-  for (let i = 0; i < value.length; i++) {
-    const ch = value[i]!;
-    if (!fast && Math.random() < 0.025 && /[a-z]/i.test(ch)) await _introduceTypo(p, ch);
-    await _typeChar(p, ch, fast);
-    burstCount++;
-    if (!fast) {
-      if (burstCount >= burstSize) { await humanPause(randInt(60, 200)); burstCount = 0; }
-      if (Math.random() < 0.06) await humanPause(randInt(150, 450));
-    }
-  }
-}
-
-async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
-  await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-  await hoverElement(p, selector);
-  await p.click(selector, { force: true });
-  await humanPause(randInt(sp(90), sp(180)));
-
-  await p.keyboard.press('ControlOrMeta+a');
-  await humanPause(randInt(35, 70));
-  await p.keyboard.press('Delete');
-  await humanPause(randInt(sp(70), sp(160)));
-
-  const currentVal = await p.locator(selector).inputValue().catch(() => '');
-  if (currentVal.length > 0) {
-    await p.click(selector, { clickCount: 3 });
-    await humanPause(randInt(30, 60));
-    for (let i = 0; i < currentVal.length; i++) {
-      await p.keyboard.press('Backspace');
-      await new Promise<void>((r) => setTimeout(r, randInt(10, 30)));
-    }
-    await humanPause(randInt(40, 80));
-  }
-
-  const fast = isSpeedMode();
-  let burstCount = 0;
-  const burstSize = randInt(3, 7);
-
-  for (let i = 0; i < value.length; i++) {
-    const ch = value[i]!;
-    if (!fast && Math.random() < 0.025 && /[a-z]/i.test(ch)) await _introduceTypo(p, ch);
-    await _typeChar(p, ch, fast);
-    burstCount++;
-    if (!fast) {
-      if (burstCount >= burstSize) { await humanPause(randInt(60, 200)); burstCount = 0; }
-      if (Math.random() < 0.06) await humanPause(randInt(150, 450));
-    }
-  }
-
-  const finalVal = await p.locator(selector).inputValue().catch(() => '??');
-  log('info', `🔍 [DEBUG] Campo "${selector}" após digitação: "${finalVal}"`);
-}
-
-// ─── JS helpers ───────────────────────────────────────────────────────────────
-
-const JS_NAO_ATIVAR = `
-  (function() {
-    var normalize = function(s) {
-      return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toUpperCase().trim();
-    };
-    var botoes = Array.from(document.querySelectorAll('button'));
-    var alvo = botoes.find(function(b) {
-      var t = normalize(b.innerText);
-      return t.indexOf('NAO ATIVAR') !== -1 || t.indexOf('N AO ATIVAR') !== -1;
-    });
-    if (alvo) { alvo.click(); return true; }
-    return false;
-  })()
-`;
-
-const JS_FALLBACK_SUBMIT = `
-  (function() {
-    var normalize = function(s) {
-      return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toUpperCase().trim();
-    };
-    var botoes = Array.from(document.querySelectorAll('button[type="submit"]'));
-    var alvo = botoes.find(function(b) {
-      var t = normalize(b.innerText);
-      return !t.includes('CONTINUAR') && !t.includes('AJUDA') && b.offsetParent !== null;
-    });
-    if (alvo) { alvo.click(); return alvo.innerText; }
-    return null;
-  })()
-`;
-
-// ─── KYC init script ──────────────────────────────────────────────────────────
-
-const KYC_INIT_SCRIPT = `
-  (function() {
-    if (window.__kycInjected) return;
-    window.__kycInjected = true;
-
-    var PROVIDERS = {
-      'Socure':  ['socure', 'devicer.io', 'sigma.socure', 'verify.socure'],
-      'Veriff':  ['veriff', 'magic.veriff', 'api.veriff.me', 'cdn.veriff'],
-      'Jumio':   ['jumio', 'lon.jumio', 'netverify'],
-      'Onfido':  ['onfido', 'sdk.onfido'],
-      'Persona': ['withpersona', 'persona.id'],
-      'Stripe':  ['identity.stripe', 'stripe-js'],
-      'Au10tix': ['au10tix'],
-      'Mitek':   ['miteksystems', 'mitek'],
-    };
-
-    function analyze(url, source) {
-      if (!url || typeof url !== 'string') return;
-      var u = url.toLowerCase();
-      for (var provider in PROVIDERS) {
-        var patterns = PROVIDERS[provider];
-        for (var i = 0; i < patterns.length; i++) {
-          if (u.indexOf(patterns[i]) !== -1) {
-            try { window.__kycSignal(provider, source, url, 5); } catch(e) {}
-            window.dispatchEvent(new CustomEvent('__kyc_hit', { detail: { provider: provider, source: source, url: url } }));
-            return;
-          }
-        }
-      }
-    }
-
-    var _fetch = window.fetch;
-    window.fetch = function() {
-      try { analyze(arguments[0] && (arguments[0].url || arguments[0]), 'fetch'); } catch(e) {}
-      return _fetch.apply(this, arguments);
-    };
-
-    var _open = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-      try { analyze(url, 'xhr'); } catch(e) {}
-      return _open.apply(this, arguments);
-    };
-
-    var _WS = window.WebSocket;
-    if (_WS) {
-      window.WebSocket = function(url, proto) {
-        try { analyze(url, 'websocket'); } catch(e) {}
-        return proto ? new _WS(url, proto) : new _WS(url);
-      };
-      window.WebSocket.prototype = _WS.prototype;
-    }
-
-    var _create = document.createElement.bind(document);
-    document.createElement = function(tag) {
-      var el = _create(tag);
-      var t = tag.toLowerCase();
-      if (t === 'script' || t === 'iframe') {
-        var proto = t === 'script' ? HTMLScriptElement.prototype : HTMLIFrameElement.prototype;
-        var d = Object.getOwnPropertyDescriptor(proto, 'src');
-        if (d) {
-          Object.defineProperty(el, 'src', {
-            set: function(v) { analyze(v, t + '-tag'); return d.set.call(this, v); },
-            get: function()  { return d.get.call(this); },
-            configurable: true
-          });
-        }
-      }
-      return el;
-    };
-
-    new MutationObserver(function(ms) {
-      ms.forEach(function(m) {
-        m.addedNodes.forEach(function(n) {
-          if (!n.tagName) return;
-          var tag = n.tagName.toUpperCase();
-          if (tag === 'SCRIPT' || tag === 'IFRAME') {
-            var src = n.src || n.getAttribute('src') || '';
-            analyze(src, tag.toLowerCase() + '-dom');
-          }
-          if (tag === 'LINK') {
-            var href = n.href || n.getAttribute('href') || '';
-            analyze(href, 'link-dom');
-          }
-        });
-      });
-    }).observe(document.documentElement, { childList: true, subtree: true });
-
-    try {
-      var po = new PerformanceObserver(function(list) {
-        list.getEntries().forEach(function(entry) {
-          analyze(entry.name, 'perf-observer');
-        });
-      });
-      po.observe({ type: 'resource', buffered: true });
-    } catch(e) {}
-
-  })();
-`;
-
-// ─── Stealth script ───────────────────────────────────────────────────────────
-
-const stealthScript = `
-  (function() {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'platform',          { get: () => 'iPhone' });
-    Object.defineProperty(navigator, 'maxTouchPoints',    { get: () => 5 });
-    Object.defineProperty(navigator, 'languages',         { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
-    Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 6 });
-    try { Object.defineProperty(navigator, 'deviceMemory', { get: () => 4 }); } catch(e) {}
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => {
-        const arr = Object.create(PluginArray.prototype);
-        Object.defineProperty(arr, 'length', { value: 0 });
-        arr.item = () => null; arr.namedItem = () => null; arr.refresh = () => {};
-        return arr;
-      }
-    });
-    if (navigator.connection) {
-      Object.defineProperty(navigator.connection, 'effectiveType', { get: () => '4g' });
-      Object.defineProperty(navigator.connection, 'rtt',           { get: () => 80 });
-      Object.defineProperty(navigator.connection, 'downlink',      { get: () => 8 });
-      Object.defineProperty(navigator.connection, 'saveData',      { get: () => false });
-    }
-    Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-    Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-    const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
-    window.navigator.permissions.query = (p) =>
-      p.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission, onchange: null })
-        : _origQuery(p);
-    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(type) {
-      const ctx = this.getContext('2d');
-      if (ctx) {
-        const noise = ctx.createImageData(1, 1);
-        noise.data[0] = Math.floor(Math.random() * 3);
-        ctx.putImageData(noise, Math.random() * this.width | 0, Math.random() * this.height | 0);
-      }
-      return origToDataURL.apply(this, arguments);
-    };
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(param) {
-      if (param === 37445) return 'Apple Inc.';
-      if (param === 37446) return 'Apple GPU';
-      return getParameter.call(this, param);
-    };
-    try {
-      const _AC = window.AudioContext || window.webkitAudioContext;
-      if (_AC) {
-        const _createBuffer = _AC.prototype.createBuffer;
-        _AC.prototype.createBuffer = function(channels, length, sampleRate) {
-          const buf = _createBuffer.call(this, channels, length, sampleRate);
-          const noise = 0.0001;
-          for (let c = 0; c < buf.numberOfChannels; c++) {
-            const data = buf.getChannelData(c);
-            for (let i = 0; i < data.length; i++) data[i] += (Math.random() * 2 - 1) * noise;
-          }
-          return buf;
-        };
-      }
-    } catch(e) {}
-    const _dateNow = Date.now.bind(Date);
-    Date.now = function() { return _dateNow() + Math.floor(Math.random() * 3); };
-    const _perfNow = performance.now.bind(performance);
-    performance.now = function() { return _perfNow() + Math.random() * 0.5; };
-    try {
-      if (!window.chrome) Object.defineProperty(window, 'chrome', { value: {}, configurable: true });
-      Object.defineProperty(window.chrome, 'runtime', {
-        get: () => ({ connect: () => {}, sendMessage: () => {}, id: undefined }),
-        configurable: true,
-      });
-    } catch(e) {}
-    try {
-      navigator.getBattery = () => Promise.resolve({ charging: true, chargingTime: 0, dischargingTime: Infinity, level: 0.92 });
-    } catch(e) {}
-  })();
-`;
-
-// ─── KYC patterns ─────────────────────────────────────────────────────────────
-
-const KYC_PATTERNS: Array<{ pattern: RegExp; provider: string }> = [
-  { pattern: /socure/i,              provider: 'Socure'  },
-  { pattern: /devicer\.io/i,         provider: 'Socure'  },
-  { pattern: /sigma\.socure/i,       provider: 'Socure'  },
-  { pattern: /verify\.socure/i,      provider: 'Socure'  },
-  { pattern: /veriff/i,              provider: 'Veriff'  },
-  { pattern: /magic\.veriff/i,       provider: 'Veriff'  },
-  { pattern: /api\.veriff\.me/i,     provider: 'Veriff'  },
-  { pattern: /cdn\.veriff/i,         provider: 'Veriff'  },
-  { pattern: /jumio/i,               provider: 'Jumio'   },
-  { pattern: /lon\.jumio/i,          provider: 'Jumio'   },
-  { pattern: /netverify/i,           provider: 'Jumio'   },
-  { pattern: /onfido/i,              provider: 'Onfido'  },
-  { pattern: /sdk\.onfido/i,         provider: 'Onfido'  },
-  { pattern: /withpersona/i,         provider: 'Persona' },
-  { pattern: /persona\.id/i,         provider: 'Persona' },
-  { pattern: /identity\.stripe/i,    provider: 'Stripe'  },
-  { pattern: /au10tix/i,             provider: 'Au10tix' },
-  { pattern: /miteksystems/i,        provider: 'Mitek'   },
-];
-
-function detectKycProvider(url: string): string | null {
-  for (const { pattern, provider } of KYC_PATTERNS) {
-    if (pattern.test(url)) return provider;
-  }
-  return null;
-}
-
-// ─── Listeners ────────────────────────────────────────────────────────────────
-
-function registrarListenersFrame(frame: Frame, cycle: number): void {
-  try {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'frame-url', 5, cycle, url);
-  } catch { /* ignora */ }
-}
-
-function registrarListenersPage(page: Page, cycle: number): void {
-  try {
-    for (const frame of page.frames()) registrarListenersFrame(frame, cycle);
-  } catch { /* ignora */ }
-
-  page.on('frameattached',  (frame) => registrarListenersFrame(frame, cycle));
-  page.on('framenavigated', (frame) => {
-    const url = frame.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'frame-navigated', 5, cycle, url);
-  });
-  page.on('websocket', (ws) => {
-    const url = ws.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'websocket-native', 5, cycle, url);
-  });
-  page.on('request', (req) => {
-    const url = req.url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'page-request', 4, cycle, url);
-  });
-  page.exposeFunction('__kycSignal', (provider: string, source: string, url: string, weight: number) => {
-    globalState.addKycSignal(provider, source, weight, cycle, url);
-  }).catch(() => {});
-}
-
-function getFirstAvailableProxy(): { server: string; username?: string; password?: string } | null {
-  const proxies = (globalState.getState().config as any).proxies as Array<{server:string;username?:string;password?:string}> | undefined;
-  if (!proxies || proxies.length === 0) return null;
-  return proxies[0] ?? null;
-}
-
-// ─── Cria contexto isolado ────────────────────────────────────────────────────
-
-async function criarContextoIsolado(
-  cycle: number
-): Promise<{ context: BrowserContext; page: Page }> {
-  const proxy = getFirstAvailableProxy();
-
-  if (proxy) {
-    try {
-      const p = new URL(buildProxyServerArg(proxy.server));
-      log('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
-    } catch {
-      log('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
-    }
-  } else {
-    log('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
-  }
-
-  const proxyConfig = proxy
-    ? {
-        server: buildProxyServerArg(proxy.server),
-        ...(proxy.username ? { username: proxy.username } : {}),
-        ...(proxy.password ? { password: proxy.password } : {}),
-      }
-    : undefined;
-
-  // Leve variação de viewport por ciclo — impede fingerprint de viewport fixo
-  const baseW = MOBILE_DEVICE.viewport?.width  ?? 390;
-  const baseH = MOBILE_DEVICE.viewport?.height ?? 844;
-  const vpW   = baseW + randInt(-4, 4);
-  const vpH   = baseH + randInt(-8, 8);
-
-  const context = await browser!.newContext({
-    ...MOBILE_DEVICE,
-    viewport: { width: vpW, height: vpH },
-    locale: 'pt-BR',
-    timezoneId: 'America/Sao_Paulo',
-    geolocation: {
-      latitude:  -23.5505 + randFloat(-0.005, 0.005),
-      longitude: -46.6333 + randFloat(-0.005, 0.005),
-    },
-    permissions: ['geolocation'],
-    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
-    ...(proxyConfig ? { proxy: proxyConfig } : {}),
-  });
-
-  await context.addInitScript({ content: stealthScript });
-  await context.addInitScript({ content: KYC_INIT_SCRIPT });
-
-  await context.route('**/*', (route) => {
-    const url = route.request().url();
-    const provider = detectKycProvider(url);
-    if (provider) globalState.addKycSignal(provider, 'network-route', 3, cycle, url);
-    route.continue();
-  });
-
-  const page = await context.newPage();
-
-  page.on('request', (req) => {
-    if (req.method() === 'POST') {
-      const url = req.url();
-      const body = req.postData() ?? '';
-      if (
-        url.includes('auth') || url.includes('login') || url.includes('signup') ||
-        url.includes('otp') || url.includes('email') || url.includes('uber') ||
-        url.includes('identity') || url.includes('forward')
-      ) {
-        log('info', `📡 [NET] POST ${url.split('?')[0]} | body: ${body.slice(0, 300)}`, cycle);
-      }
-    }
-  });
-
-  context.on('page', async (novaPage) => {
-    try {
-      const temOpener = await novaPage.evaluate(() => window.opener !== null).catch(() => false);
-      if (!temOpener) { log('info', `🪟 Nova aba sem opener — ignorando`, cycle); return; }
-      const url = novaPage.url();
-      log('info', `📌 Popup interceptado (${url || 'about:blank'}) — fechando`, cycle);
-      registrarListenersPage(novaPage, cycle);
-      await new Promise<void>((r) => setTimeout(r, 800));
-      await novaPage.close().catch(() => {});
-    } catch { /* não fecha se não conseguir verificar */ }
-  });
-
-  try {
-    const cdp = await context.newCDPSession(page);
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      mobile: true,
-      width:  vpW,
-      height: vpH,
-      deviceScaleFactor: MOBILE_DEVICE.deviceScaleFactor ?? 3,
-      screenOrientation: { angle: 0, type: 'portraitPrimary' },
-    });
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-    await cdp.send('Emulation.setUserAgentOverride', {
-      userAgent: MOBILE_DEVICE.userAgent ?? '',
-      acceptLanguage: 'pt-BR,pt;q=0.9',
-      platform: 'iPhone',
-    });
-    log('info', `📱 CDP mobile ativado`, cycle);
-  } catch (e) {
-    log('warn', `⚠️ CDP mobile falhou: ${e}`, cycle);
-  }
-
-  registrarListenersPage(page, cycle);
-  contextosPorCiclo.set(cycle, context);
-  return { context, page };
-}
-
-async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void> {
-  const ctx = contextosPorCiclo.get(cycle);
-  if (ctx) {
-    log('warn', `🧹 Fechando aba do ciclo #${cycle} — motivo: ${motivo}`, cycle);
-    await ctx.close().catch(() => {});
-    contextosPorCiclo.delete(cycle);
-  }
-  globalState.clearPayload(cycle);
-}
-
-// ─── WhatsApp ─────────────────────────────────────────────────────────────────
-
-async function dispensarWhatsApp(p: Page, cycle: number): Promise<void> {
-  try {
-    await humanPause(randInt(sp(2000), sp(3500)));
-    const SELETORES_WHATSAPP = [
-      'button:has-text("ÃO ATIVAR")',
-      'button:has-text("Nao ativar")',
-      'button:has-text("Not now")',
-      'button:has-text("Agora não")',
-      '[data-testid*="whatsapp"]',
-      'button[type="submit"]',
-    ];
-    const TIMEOUT_MS = 30_000;
-    const POLL_MS = isSpeedMode() ? 1_000 : 3_000;
-    const inicio = Date.now();
-    let detectado = false;
-
-    log('info', '🔍 Aguardando tela do WhatsApp (até 30s)...', cycle);
-    while (Date.now() - inicio < TIMEOUT_MS) {
-      for (const sel of SELETORES_WHATSAPP) {
-        try {
-          const visivel = await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false);
-          if (visivel) { detectado = true; break; }
-        } catch { /* ignora */ }
-      }
-      if (detectado) break;
-      await humanPause(POLL_MS);
-    }
-
-    if (!detectado) { log('warn', '⚠️ Tela WhatsApp não detectada após 30s, pulando...', cycle); return; }
-
-    log('info', '📲 Tela WhatsApp detectada, clicando em NÃO ATIVAR...', cycle);
-    await humanPause(randInt(sp(400), sp(800)));
-
-    for (const sel of ['button:has-text("NÃO ATIVAR")', 'button:has-text("Nao ativar")', 'button:has-text("Not now")', 'button:has-text("Agora não")']) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 2000 }).catch(() => false);
-        if (visivel) {
-          await hoverElement(p, sel);
-          await el.click({ timeout: 5000 });
-          log('info', `🔕 WhatsApp: NÃO ATIVAR clicado (${sel})`, cycle);
-          await humanPause(randInt(sp(400), sp(800)));
-          return;
-        }
-      } catch { /* tenta próxima */ }
-    }
-
-    try {
-      const clicou = await p.evaluate(JS_NAO_ATIVAR) as boolean;
-      if (clicou) { log('info', '🔕 WhatsApp: NÃO ATIVAR clicado (JS normalize)', cycle); return; }
-    } catch { /* ignora */ }
-
-    try {
-      const clicou = await p.evaluate(JS_FALLBACK_SUBMIT) as string | null;
-      if (clicou) { log('info', `🔕 WhatsApp: botão "${clicou}" clicado (fallback)`, cycle); return; }
-    } catch { /* ignora */ }
-
-    log('warn', '⚠️ Tela detectada mas não foi possível clicar em NÃO ATIVAR — continuando...', cycle);
-  } catch (err) {
-    log('warn', `⚠️ dispensarWhatsApp erro inesperado (ignorado): ${err}`, cycle);
-  }
-}
-
-// ─── KYC: resolve provider dominante ─────────────────────────────────────────
-
-function resolverProviderDominante(
-  cycle: number,
-  scoreMinimo = 4
-): { provider: string; score: number; url: string } | null {
-  const { byCycle } = globalState.getKycState();
-  const cicloMap = byCycle[cycle];
-  if (!cicloMap) return null;
-  let melhor: { provider: string; score: number; url: string } | null = null;
-  for (const [provider, state] of Object.entries(cicloMap)) {
-    if (state.score >= scoreMinimo) {
-      if (!melhor || state.score > melhor.score) {
-        melhor = { provider, score: state.score, url: state.signals[0]?.url ?? '' };
-      }
-    }
-  }
-  return melhor;
-}
-
-// ─── Polling do botão "Tirar foto" ────────────────────────────────────────────
-
-async function pollingBotaoTirarFoto(
-  p: Page,
-  seletoresItem: string[],
-  seletoresBotao: string[],
-  cycle: number,
-  timeoutMs = 60_000
-): Promise<boolean> {
-  const POLL_INTERVAL_MS = isSpeedMode() ? 1_500 : 3_000;
-  const inicio = Date.now();
-  let tentativa = 0;
-
-  log('info', `📸 [TirarFoto] Iniciando polling (timeout: ${timeoutMs / 1000}s)`, cycle);
-
-  while (Date.now() - inicio < timeoutMs) {
-    tentativa++;
-    for (const sel of seletoresBotao) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 1200 }).catch(() => false);
-        if (visivel) {
-          await hoverElement(p, sel);
-          await el.click({ force: true, timeout: 5000 });
-          log('info', `✅ [TirarFoto] Poll #${tentativa} — botão clicado! (${sel})`, cycle);
-          return true;
-        }
-      } catch { /* tenta próximo seletor */ }
-    }
-
-    if (tentativa % 2 === 0) {
-      try {
-        const scrollY = tentativa % 4 === 0 ? 0 : 300;
-        await scrollInercial(p, scrollY !== 0 ? scrollY : -200);
-        await humanPause(randInt(sp(300), sp(600)));
-        for (const sel of seletoresBotao) {
-          try {
-            const el = p.locator(sel).first();
-            if (await el.isVisible({ timeout: 1200 }).catch(() => false)) {
-              await hoverElement(p, sel);
-              await el.click({ force: true, timeout: 5000 });
-              log('info', `✅ [TirarFoto] Poll #${tentativa} (pós-scroll) clicado! (${sel})`, cycle);
-              return true;
-            }
-          } catch { /* ignora */ }
-        }
-      } catch { /* ignora */ }
-    }
-
-    if (tentativa % 3 === 0) {
-      try {
-        await p.evaluate('window.scrollTo(0, 0)');
-        await humanPause(randInt(sp(400), sp(700)));
-        for (const sel of seletoresItem) {
-          try {
-            const el = p.locator(sel).first();
-            if (await el.isVisible({ timeout: 1500 }).catch(() => false)) {
-              await hoverElement(p, sel);
-              await el.click({ force: true, timeout: 5000 });
-              log('info', `📸 [TirarFoto] Poll #${tentativa} — "Foto do perfil" re-clicado (${sel})`, cycle);
-              await humanPause(randInt(sp(1000), sp(2000)));
-              break;
-            }
-          } catch { /* ignora */ }
-        }
-      } catch { /* ignora */ }
-    }
-
-    const restante = timeoutMs - (Date.now() - inicio);
-    if (restante > 0) await humanPause(POLL_INTERVAL_MS);
-  }
-
-  log('warn', `❌ [TirarFoto] Timeout após ${tentativa} polls — botão não encontrado`, cycle);
-  return false;
-}
-
-// ─── Foto do perfil + KYC ─────────────────────────────────────────────────────
-
-async function clicarFotoPerfil(p: Page, cycle: number, context: BrowserContext): Promise<void> {
-  log('info', '📸 Aguardando tela de lista de requisitos (Foto do perfil)...', cycle);
-
-  const SELETORES_ITEM = [
-    '[data-testid="stepItem profilePhoto"]',
-    '[data-dgui="requirement-list-item"]:has-text("Foto do perfil")',
-    '[data-dgui="requirement-list-item"]:has-text("Foto")',
-    'a:has-text("Foto do perfil")',
-    'a:has-text("Foto")',
-    '[data-tracking-name="requirement-list-item"]:has-text("Foto")',
-    '[role="listitem"]:has-text("Foto do perfil")',
-    '[role="listitem"]:has-text("Foto")',
-    'li:has-text("Foto do perfil")',
-    'li:has-text("Foto")',
-  ];
-
-  const SELETORES_BOTAO_FOTO = [
-    '[data-dgui="button"]:has-text("Tirar foto")',
-    'button:has-text("Tirar foto")',
-    'button:has-text("Usar meu telefone")',
-    'button:has-text("Enviar foto")',
-    'button:has-text("Escolher foto")',
-    'button:has-text("Take photo")',
-    'button:has-text("Upload photo")',
-    '[data-testid="step-bottom-navigation"] button',
-    '[data-testid="step-bottom-navigation"] [data-dgui="button"]',
-    '[data-dgui="button"]',
-  ];
-
-  const TIMEOUT_ITEM = 20_000;
-  const inicioItem = Date.now();
-  let clicouItem = false;
-
-  while (Date.now() - inicioItem < TIMEOUT_ITEM) {
-    for (const sel of SELETORES_ITEM) {
-      try {
-        const el = p.locator(sel).first();
-        const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
-        if (visivel) {
-          await hoverElement(p, sel);
-          await el.click({ force: true, timeout: 5000 });
-          log('info', `📸 "Foto do perfil" clicado (${sel})`, cycle);
-          clicouItem = true;
-          break;
-        }
-      } catch { /* tenta próximo seletor */ }
-    }
-    if (clicouItem) break;
-    await humanPause(isSpeedMode() ? 600 : 1500);
-  }
-
-  if (!clicouItem) { log('warn', '⚠️ "Foto do perfil" não encontrado após 20s, pulando...', cycle); return; }
-
-  await humanPause(randInt(sp(1200), sp(2000)));
-  const botaoClicado = await pollingBotaoTirarFoto(p, SELETORES_ITEM, SELETORES_BOTAO_FOTO, cycle, 60_000);
-  if (!botaoClicado) log('warn', '⚠️ Botão de foto não encontrado após polling completo', cycle);
-
-  const salvarContaSocure = async (): Promise<void> => {
-    const payload = globalState.getPayload(cycle);
-    if (!payload) { log('warn', '⚠️ Payload não encontrado — conta não salva', cycle); return; }
-    try {
-      const cookies = await context.cookies();
-      const saved = accountStore.save({
-        cycle,
-        provider: 'Socure',
-        nome: payload.nome,
-        sobrenome: payload.sobrenome,
-        email: payload.email,
-        telefone: payload.telefone,
-        senha: payload.senha,
-        localizacao: payload.localizacao,
-        codigoIndicacao: payload.codigoIndicacao,
-        cookies,
-      });
-      log('success', `💾 Conta salva! id=${saved.id} | ${payload.email}`, cycle);
-    } catch (e) {
-      log('warn', `⚠️ Erro ao salvar conta: ${e}`, cycle);
-    } finally {
-      globalState.clearPayload(cycle);
-    }
-  };
-
-  const detectarEFechar = async (provider: string, score: number, url: string): Promise<void> => {
-    if (provider === 'Veriff') {
-      log('info', `🗑️ Veriff detectado (score=${score}) → fechando aba`, cycle);
-      await humanPause(randInt(sp(500), sp(1000)));
-      await context.close().catch(() => {});
-      contextosPorCiclo.delete(cycle);
-      globalState.clearPayload(cycle);
-    } else {
-      log('success', `🟢 ${provider} detectado (score=${score}) → aba mantida aberta`, cycle);
-      if (provider === 'Socure') await salvarContaSocure();
-    }
-  };
-
-  log('info', '⏳ Aguardando KYC inicializar (até 30s)...', cycle);
-  const fimKyc1 = Date.now() + 30_000;
-  while (Date.now() < fimKyc1) {
-    const dominante = resolverProviderDominante(cycle, 4);
-    if (dominante) {
-      log('info', `✅ KYC detectado: ${dominante.provider} (score=${dominante.score})`, cycle);
-      await detectarEFechar(dominante.provider, dominante.score, dominante.url);
-      return;
-    }
-    await humanPause(isSpeedMode() ? 500 : 1000);
-  }
-
-  log('warn', '⚠️ KYC não detectado após 30s — re-poll 20s...', cycle);
-  const fimKyc2 = Date.now() + 20_000;
-  while (Date.now() < fimKyc2) {
-    const dominante = resolverProviderDominante(cycle, 4);
-    if (dominante) {
-      log('info', `✅ KYC detectado (re-poll): ${dominante.provider}`, cycle);
-      await detectarEFechar(dominante.provider, dominante.score, dominante.url);
-      return;
-    }
-    await humanPause(isSpeedMode() ? 500 : 1000);
-  }
-
-  log('warn', '⚠️ KYC não detectado após 50s. Aba mantida aberta.', cycle);
-}
-
-// ─── Flow principal ───────────────────────────────────────────────────────────
-
-export class MockPlaywrightFlow {
-  static async init(headless = true): Promise<void> {
-    const firstProxy = getFirstAvailableProxy();
-    const proxyServerArg = firstProxy ? buildProxyServerArg(firstProxy.server) : '__system__';
-
-    if (browser && currentLaunchProxy === proxyServerArg) {
-      log('info', '🌐 Browser já está rodando — reutilizando');
-      return;
-    }
-
-    if (browser && currentLaunchProxy !== proxyServerArg) {
-      log('warn', '🔄 Proxy mudou — reiniciando browser...');
-      await browser.close().catch(() => {});
-      browser = null;
-      currentLaunchProxy = null;
-      contextosPorCiclo.clear();
-    }
-
-    if (browserLaunching) {
-      log('info', '⏳ Aguardando browser iniciar...');
-      const deadline = Date.now() + 30_000;
-      while (!browser && Date.now() < deadline) await new Promise<void>((r) => setTimeout(r, 200));
-      if (!browser) throw new Error('Timeout aguardando browser iniciar');
-      return;
-    }
-
-    browserLaunching = true;
-    try {
-      if (firstProxy) {
-        try {
-          const p = new URL(proxyServerArg);
-          log('info', `🐧 Iniciando Chromium headless (Railway) | proxy: ${p.host}`);
-        } catch {
-          log('info', '🐧 Iniciando Chromium headless (Railway) | proxy: ativo');
-        }
-      } else {
-        log('info', '🐧 Iniciando Chromium headless (Railway) | sem proxy');
-      }
-
-      browser = await chromiumExtra.launch({
-        headless: true,
-        slowMo: 0,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-infobars',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-features=IsolateOrigins,site-per-process',
-          '--disable-site-isolation-trials',
-          '--disable-extensions',
-          ...(firstProxy ? [`--proxy-server=${proxyServerArg}`, '--proxy-bypass-list=<-loopback>'] : []),
-        ],
-      }) as unknown as Browser;
-
-      currentLaunchProxy = proxyServerArg;
-      log('info', firstProxy ? '✅ Browser pronto! (proxy ativo)' : '✅ Browser pronto! (sem proxy)');
-    } finally {
-      browserLaunching = false;
-    }
-  }
-
-  static async execute(
-    cadastroUrl: string,
-    config: {
-      emailProvider: EmailProvider;
-      tempMailApiKey: string;
-      otpTimeout: number;
-      extraDelay: number;
-      inviteCode: string;
-    },
-    cycle: number
-  ): Promise<void> {
-    if (!browser) throw new Error('Browser não inicializado — chame init() primeiro');
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`⏱️ Ciclo #${cycle} excedeu o timeout de ${CYCLE_TIMEOUT_MS / 60_000} min`)),
-        CYCLE_TIMEOUT_MS
-      )
-    );
-
-    try {
-      await Promise.race([timeoutPromise, MockPlaywrightFlow._executarCiclo(cadastroUrl, config, cycle)]);
-    } catch (error) {
-      await fecharContextoCiclo(cycle, String(error));
-      throw error;
-    }
-  }
-
-  private static async _executarCiclo(
-    cadastroUrl: string,
-    config: {
-      emailProvider: EmailProvider;
-      tempMailApiKey: string;
-      otpTimeout: number;
-      extraDelay: number;
-      inviteCode: string;
-    },
-    cycle: number
-  ): Promise<void> {
-    log('info', `🆕 Ciclo #${cycle}: abrindo nova aba`, cycle);
-    const { context, page: p } = await criarContextoIsolado(cycle);
-    const client = createEmailClient(config.emailProvider, config.tempMailApiKey);
-
-    try {
-      await p.goto(cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      // networkidle dá tempo ao Arkose de registrar os primeiros eventos de rede
-      await p.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-      log('info', '🌐 Página de cadastro aberta', cycle);
-
-      // Aquecimento: constrói histórico de interação ANTES de tocar no formulário
-      await pageWarmup(p, cycle);
-
-      const emailAccount = await client.createRandomEmail();
-      const payload = gerarPayloadCompleto(emailAccount, config.inviteCode);
-      log('info', `👤 ${payload.nome} ${payload.sobrenome} | ${payload.email}`, cycle);
-
-      globalState.setPayload(cycle, {
-        nome: payload.nome,
-        sobrenome: payload.sobrenome,
-        email: payload.email,
-        telefone: payload.telefone,
-        senha: payload.senha,
-        localizacao: payload.localizacao,
-        codigoIndicacao: payload.codigoIndicacao,
-      });
-
-      log('info', '📧 Preenchendo email...', cycle);
-      await humanTypeForce(p, '#PHONE_NUMBER_or_EMAIL_ADDRESS', payload.email);
-
-      // Pausa pós-digitação: usuário confere o email antes de continuar
-      await cogPause(config.extraDelay, config.extraDelay + 700);
-
-      const emailNocampo = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').inputValue().catch(() => '??');
-      log('info', `🔍 [DEBUG] Email no campo antes do clique: "${emailNocampo}"`, cycle);
-
-      await clickForwardButton(p, cycle);
-
-      // Aguarda a tela de OTP antes de disparar waitForOTP
-      log('info', '⏳ Aguardando tela de OTP (#EMAIL_OTP_CODE-0)...', cycle);
-      await p.waitForSelector('#EMAIL_OTP_CODE-0', { state: 'visible', timeout: 40000 });
-      log('info', `🔑 Tela de OTP detectada! Aguardando código (timeout: ${config.otpTimeout / 1000}s)...`, cycle);
-
-      const otp = await client.waitForOTP(payload.email, config.otpTimeout, cycle);
-      log('info', `🔑 OTP recebido: ${otp}`, cycle);
-
-      await humanPause(randInt(sp(800), sp(1400)));
-      const digits = otp.replace(/\D/g, '').split('');
-      for (let i = 0; i < digits.length; i++) {
-        await humanType(p, `#EMAIL_OTP_CODE-${i}`, digits[i]!);
-        await humanPause(randInt(sp(80), sp(160)));
-      }
-      await cogPause(config.extraDelay, config.extraDelay + 400);
-      await clickForwardButton(p, cycle);
-
-      await humanPause(randInt(sp(400), sp(900)));
-      await humanType(p, '#PHONE_NUMBER', payload.telefone);
-      await cogPause(config.extraDelay, config.extraDelay + 400);
-      await clickForwardButton(p, cycle);
-
-      await humanPause(randInt(sp(400), sp(900)));
-      await humanType(p, '#PASSWORD', payload.senha);
-      await cogPause(config.extraDelay, config.extraDelay + 400);
-      await clickForwardButton(p, cycle);
-
-      await humanPause(randInt(sp(400), sp(900)));
-      await humanType(p, '#FIRST_NAME', payload.nome);
-      await humanPause(randInt(sp(300), sp(600)));
-      await humanType(p, '#LAST_NAME', payload.sobrenome);
-      await cogPause(config.extraDelay, config.extraDelay + 400);
-      await clickForwardButton(p, cycle);
-
-      await aceitarTermos(p);
-      await cogPause(config.extraDelay, config.extraDelay + 500);
-      await clickForwardButton(p, cycle);
-
-      await p.waitForURL('**/bonjour.uber.com/**', { timeout: 40000 });
-      await humanPause(randInt(sp(700), sp(1400)));
-
-      await dispensarCookies(p);
-      await selecionarCidade(p, payload.localizacao, cycle);
-      await dispensarCookies(p);
-
-      await humanTypeForce(p, '[data-testid="signup-step::invite-code-input"]', payload.codigoIndicacao);
-      await cogPause(config.extraDelay, config.extraDelay + 500);
-      await dispensarCookies(p);
-      await humanClick(p, '[data-testid="submit-button"]');
-
-      await dispensarWhatsApp(p, cycle);
-      await clicarFotoPerfil(p, cycle, context);
-
-      const aindaAberta = contextosPorCiclo.has(cycle);
-      log(
-        aindaAberta ? 'success' : 'info',
-        `${aindaAberta ? '🎉' : '✅'} Ciclo #${cycle} concluído!`,
-        cycle
-      );
-    } catch (error) {
-      globalState.clearPayload(cycle);
-      await ArtifactsManager.saveErrorArtifacts(p, cycle);
-      throw error;
-    }
-  }
-
-  static async cleanup(): Promise<void> {
-    for (const [cycle, ctx] of contextosPorCiclo.entries()) {
-      await ctx.close().catch(() => {});
-      log('info', `🗑️ Aba do ciclo #${cycle} fechada`);
-    }
-    contextosPorCiclo.clear();
-    await browser?.close().catch(() => {});
-    browser = null;
-    currentLaunchProxy = null;
-    log('info', '🧹 Browser fechado');
-  }
-}
+        const opcaoBox = aw
