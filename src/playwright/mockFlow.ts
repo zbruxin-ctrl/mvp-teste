@@ -20,37 +20,28 @@ const contextosPorCiclo = new Map<number, BrowserContext>();
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-// ─── Normaliza URL de proxy para http:// e embute credenciais ────────────────
-// O Chromium exige http:// (não https://) no --proxy-server.
-// Credenciais devem estar embutidas: http://user:pass@host:port
+// ─── Normaliza URL de proxy para http:// (SEM credenciais embutidas) ──────────
+// O Chromium NÃO aceita credenciais inline no --proxy-server.
+// Retorna apenas o host:porta normalizado com protocolo http://.
 
-function buildProxyUrl(server: string, username?: string, password?: string): string {
-  // Garante protocolo http://
+function buildProxyServerArg(server: string): string {
   let normalized = server.trim();
-  if (normalized.startsWith('https://')) {
-    normalized = 'http://' + normalized.slice('https://'.length);
-  } else if (!normalized.startsWith('http://') && !normalized.startsWith('socks5://') && !normalized.startsWith('socks4://')) {
-    normalized = 'http://' + normalized;
+  // Remove credenciais se vieram embutidas (segurança)
+  try {
+    const parsed = new URL(
+      normalized.startsWith('http://') || normalized.startsWith('https://')
+        ? normalized
+        : 'http://' + normalized
+    );
+    // Garante protocolo http:// e remove credenciais
+    return `http://${parsed.host}`;
+  } catch {
+    // Fallback manual: troca https → http e remove user:pass@
+    normalized = normalized.replace(/^https:\/\//, 'http://');
+    normalized = normalized.replace(/^http:\/\/[^@]+@/, 'http://');
+    if (!normalized.startsWith('http://')) normalized = 'http://' + normalized;
+    return normalized;
   }
-
-  // Embute credenciais na URL se fornecidas e ainda não presentes
-  if (username && password) {
-    try {
-      const parsed = new URL(normalized);
-      if (!parsed.username) {
-        parsed.username = encodeURIComponent(username);
-        parsed.password = encodeURIComponent(password);
-        return parsed.toString();
-      }
-    } catch {
-      // URL inválida — insere manualmente
-      const proto = normalized.split('://')[0]!;
-      const rest  = normalized.split('://')[1]!;
-      return `${proto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${rest}`;
-    }
-  }
-
-  return normalized;
 }
 
 // ─── Speed helpers ────────────────────────────────────────────────────────────
@@ -927,9 +918,9 @@ function getFirstAvailableProxy(): { server: string; username?: string; password
 }
 
 // ─── Cria contexto isolado ────────────────────────────────────────────────────
-// O proxy é gerenciado inteiramente no launch() via --proxy-server com
-// credenciais embutidas na URL (http://user:pass@host:port).
-// O newContext NÃO recebe proxy para evitar conflito com o browser-level proxy.
+// O browser é lançado com --proxy-server=http://host:porta (SEM credenciais).
+// As credenciais são passadas via context.authenticate() que é o método
+// correto do Playwright para autenticação de proxy HTTP.
 
 async function criarContextoIsolado(
   cycle: number
@@ -937,9 +928,8 @@ async function criarContextoIsolado(
   const proxy = getFirstAvailableProxy();
 
   if (proxy) {
-    // Loga apenas host:port — sem expor credenciais no log
     try {
-      const p = new URL(buildProxyUrl(proxy.server));
+      const p = new URL(buildProxyServerArg(proxy.server));
       globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → ${p.host}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
     } catch {
       globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo`, cycle);
@@ -955,8 +945,15 @@ async function criarContextoIsolado(
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
     extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
-    // Proxy NÃO é passado aqui: browser foi lançado com --proxy-server=http://user:pass@host:port
   });
+
+  // ── Autenticação de proxy via Playwright (método correto) ──────────────────
+  // context.authenticate() é a API oficial do Playwright para credenciais de
+  // proxy HTTP. Funciona independente do --proxy-server ter ou não credenciais.
+  if (proxy?.username && proxy?.password) {
+    await context.authenticate({ username: proxy.username, password: proxy.password });
+    globalState.addLog('info', `🔐 Credenciais de autenticação injetadas no contexto #${cycle}`, cycle);
+  }
 
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
@@ -1025,15 +1022,15 @@ async function fecharContextoCiclo(cycle: number, motivo: string): Promise<void>
 export class MockPlaywrightFlow {
   static async init(headless = true): Promise<void> {
     const firstProxy = getFirstAvailableProxy();
-    // Usa apenas o host como chave de comparação (sem credenciais)
-    const launchProxyKey = firstProxy ? buildProxyUrl(firstProxy.server) : '__system__';
+    // Chave de comparação usa apenas host (sem credenciais)
+    const proxyServerArg = firstProxy ? buildProxyServerArg(firstProxy.server) : '__system__';
 
-    if (browser && currentLaunchProxy === launchProxyKey) {
+    if (browser && currentLaunchProxy === proxyServerArg) {
       globalState.addLog('info', '🌐 Browser já está rodando — reutilizando');
       return;
     }
 
-    if (browser && currentLaunchProxy !== launchProxyKey) {
+    if (browser && currentLaunchProxy !== proxyServerArg) {
       globalState.addLog('warn', '🔄 Proxy mudou — reiniciando browser...');
       await browser.close().catch(() => {});
       browser = null;
@@ -1051,15 +1048,9 @@ export class MockPlaywrightFlow {
 
     browserLaunching = true;
     try {
-      // Constrói URL com protocolo correto (http://) e credenciais embutidas
-      const proxyUrl = firstProxy
-        ? buildProxyUrl(firstProxy.server, firstProxy.username, firstProxy.password)
-        : '';
-
-      if (proxyUrl) {
-        // Loga sem credenciais
+      if (firstProxy) {
         try {
-          const p = new URL(proxyUrl);
+          const p = new URL(proxyServerArg);
           globalState.addLog('info', `🐧 Iniciando Chromium headless (Railway) | proxy: ${p.host}`);
         } catch {
           globalState.addLog('info', '🐧 Iniciando Chromium headless (Railway) | proxy: ativo');
@@ -1080,14 +1071,13 @@ export class MockPlaywrightFlow {
           '--disable-gpu',
           '--no-first-run',
           '--no-default-browser-check',
-          // Credenciais embutidas na URL: http://user:pass@host:port
-          // Protocolo garantido como http:// (nunca https://)
-          ...(proxyUrl ? [`--proxy-server=${proxyUrl}`, '--proxy-bypass-list=<-loopback>'] : []),
+          // APENAS host:porta — sem credenciais. Auth é feita via context.authenticate()
+          ...(firstProxy ? [`--proxy-server=${proxyServerArg}`, '--proxy-bypass-list=<-loopback>'] : []),
         ],
       }) as unknown as Browser;
 
-      currentLaunchProxy = launchProxyKey;
-      globalState.addLog('info', proxyUrl ? '✅ Browser pronto! (proxy ativo)' : '✅ Browser pronto! (sem proxy)');
+      currentLaunchProxy = proxyServerArg;
+      globalState.addLog('info', firstProxy ? '✅ Browser pronto! (proxy ativo)' : '✅ Browser pronto! (sem proxy)');
     } finally {
       browserLaunching = false;
     }
