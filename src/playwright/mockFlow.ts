@@ -35,7 +35,7 @@ function log(level: 'info' | 'warn' | 'success' | 'error', msg: string, cycle?: 
   console.log(`${new Date().toISOString()} ${prefix} [${level.toUpperCase()}] ${msg}`);
 }
 
-// ─── Proxy helper ───────────────────────────────────────────────────────────
+// ─── Proxy helper ─────────────────────────────────────────────────────────────
 
 function buildProxyServerArg(server: string): string {
   let normalized = server.trim();
@@ -54,7 +54,7 @@ function buildProxyServerArg(server: string): string {
   }
 }
 
-// ─── Dispensar cookies ─────────────────────────────────────────────────────────
+// ─── Dispensar cookies ────────────────────────────────────────────────────────
 
 async function dispensarCookies(p: Page): Promise<void> {
   const candidatos = [
@@ -86,7 +86,7 @@ async function dispensarCookies(p: Page): Promise<void> {
   }
 }
 
-// ─── Aceitar termos ─────────────────────────────────────────────────────────────
+// ─── Aceitar termos ───────────────────────────────────────────────────────────
 
 async function aceitarTermos(p: Page): Promise<void> {
   await humanPause(randInt(sp(500), sp(900)));
@@ -127,7 +127,7 @@ async function aceitarTermos(p: Page): Promise<void> {
   globalState.addLog('info', '☑️ Termos aceitos');
 }
 
-// ─── Seleciona cidade ─────────────────────────────────────────────────────────────
+// ─── Seleciona cidade ─────────────────────────────────────────────────────────
 
 async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise<void> {
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
@@ -145,8 +145,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
 
   log('info', `📍 Digitando cidade: "${nomeBusca}"`, cycle);
   await p.waitForSelector(INPUT_SEL, { state: 'visible', timeout: 15000 });
-
-  // Usa focusField com pointer events reais antes de digitar
   await focusField(p, INPUT_SEL);
   await p.fill(INPUT_SEL, '');
   await humanPause(randInt(sp(100), sp(200)));
@@ -219,9 +217,9 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   }
 }
 
-// ─── Browser management ──────────────────────────────────────────────────────────
+// ─── Browser management ───────────────────────────────────────────────────────
 
-async function ensureBrowser(proxyConfig?: string): Promise<void> {
+async function ensureBrowser(headless = false, proxyConfig?: string): Promise<void> {
   if (browser && browser.isConnected() && currentLaunchProxy === (proxyConfig ?? null)) return;
   if (browserLaunching) {
     while (browserLaunching) await new Promise<void>((r) => setTimeout(r, 100));
@@ -231,7 +229,7 @@ async function ensureBrowser(proxyConfig?: string): Promise<void> {
   try {
     if (browser) { await browser.close().catch(() => {}); browser = null; }
     const launchOpts: any = {
-      headless: false,
+      headless,
       args: [
         '--no-sandbox', '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
@@ -260,10 +258,9 @@ export async function closeBrowser(): Promise<void> {
   if (browser) { await browser.close().catch(() => {}); browser = null; }
 }
 
-// ─── Context por ciclo ─────────────────────────────────────────────────────────────
+// ─── Context por ciclo ────────────────────────────────────────────────────────
 
 async function criarContextoCiclo(cycle: number, proxyConfig?: string): Promise<BrowserContext> {
-  await ensureBrowser(proxyConfig);
   const ctx = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -273,7 +270,6 @@ async function criarContextoCiclo(cycle: number, proxyConfig?: string): Promise<
     geolocation: { latitude: -23.55 + randFloat(-0.5, 0.5), longitude: -46.63 + randFloat(-0.5, 0.5) },
     userAgent: MOBILE_DEVICE.userAgent,
   });
-  // Bloqueia recursos pesados desnecessários
   await ctx.route('**/*.{png,jpg,jpeg,gif,webp,svg,ico,woff,woff2,ttf,otf,eot}', (r) => r.abort()).catch(() => {});
   contextosPorCiclo.set(cycle, ctx);
   return ctx;
@@ -287,25 +283,18 @@ async function fecharContextoCiclo(cycle: number): Promise<void> {
   }
 }
 
-// ─── Frame helper ─────────────────────────────────────────────────────────────
-
-async function getMainFrame(p: Page): Promise<Frame> {
-  return p.mainFrame();
-}
-
-// ─── Etapas do flow ─────────────────────────────────────────────────────────────
+// ─── Etapas do flow ───────────────────────────────────────────────────────────
 
 async function etapa_digitarEmail(p: Page, email: string, cycle: number): Promise<void> {
   log('info', `📧 Digitando email: ${email}`, cycle);
   const SEL = '#PHONE_NUMBER_or_EMAIL_ADDRESS';
   await p.waitForSelector(SEL, { state: 'visible', timeout: 20000 });
-  // Usar humanTypeForce para garantir cadeia completa de eventos
   await humanTypeForce(p, SEL, email);
   log('info', '✅ Email digitado', cycle);
 }
 
 async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promise<void> {
-  log('info', '🔒 Digitando senha...', cycle);
+  log('info', '🔑 Digitando senha...', cycle);
   const SEL = 'input[type="password"], #password, [name="password"]';
   await p.waitForSelector(SEL, { state: 'visible', timeout: 15000 });
   await humanTypeForce(p, SEL, senha);
@@ -350,29 +339,18 @@ async function etapa_digitarSobrenome(p: Page, sobrenome: string, cycle: number)
   log('warn', '⚠️ Campo de sobrenome não encontrado', cycle);
 }
 
-async function etapa_aguardarOTP(p: Page, emailClient: IEmailClient, email: string, cycle: number): Promise<string> {
+async function etapa_aguardarOTP(
+  p: Page,
+  emailClient: IEmailClient,
+  email: string,
+  cycle: number,
+  otpTimeoutMs = 120_000
+): Promise<string> {
   log('info', '📨 Aguardando OTP no email...', cycle);
-  const OTP_TIMEOUT = 120_000;
-  const fim = Date.now() + OTP_TIMEOUT;
-  let otp = '';
-  while (Date.now() < fim) {
-    await humanPause(randInt(4000, 7000));
-    try {
-      const msgs = await emailClient.getMessages();
-      for (const msg of msgs) {
-        const body = typeof msg.body === 'string' ? msg.body : JSON.stringify(msg.body);
-        const match = body.match(/\b(\d{6})\b/);
-        if (match) {
-          otp = match[1]!;
-          log('success', `✅ OTP recebido: ${otp}`, cycle);
-          return otp;
-        }
-      }
-    } catch (e) {
-      log('warn', `⚠️ Erro ao verificar email: ${e}`, cycle);
-    }
-  }
-  throw new Error('OTP não recebido no tempo limite');
+  // IEmailClient expõe waitForOTP — não getMessages()
+  const otp = await emailClient.waitForOTP(email, otpTimeoutMs, cycle);
+  log('success', `✅ OTP recebido: ${otp}`, cycle);
+  return otp;
 }
 
 async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<void> {
@@ -393,13 +371,12 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
       return;
     }
   }
-  // Fallback: campos de dígito único (split OTP inputs)
+  // Fallback: campos de dígito único
   const singleDigitInputs = p.locator('input[maxlength="1"]');
   const count = await singleDigitInputs.count();
   if (count >= 4) {
     log('info', `🔢 Digitando OTP em ${count} campos individuais`, cycle);
     for (let i = 0; i < Math.min(count, otp.length); i++) {
-      const input = singleDigitInputs.nth(i);
       await focusField(p, `input[maxlength="1"]:nth-of-type(${i + 1})`);
       await _typeChar(p, otp[i]!, isSpeedMode());
       await humanPause(randInt(sp(80), sp(200)));
@@ -414,40 +391,42 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
 
 async function _executarCiclo(
   cycle: number,
-  payload: ReturnType<typeof gerarPayloadCompleto>,
-  emailClient: IEmailClient,
-  artifacts: ArtifactsManager,
-  proxyConfig?: string
+  opts: {
+    cadastroUrl: string;
+    emailProvider: EmailProvider;
+    tempMailApiKey: string;
+    otpTimeout: number;
+    extraDelay: number;
+    inviteCode: string;
+  }
 ): Promise<void> {
-  let ctx: BrowserContext | null = null;
   let page: Page | null = null;
 
   try {
-    ctx = await criarContextoCiclo(cycle, proxyConfig);
+    await criarContextoCiclo(cycle);
+    const ctx = contextosPorCiclo.get(cycle)!;
     page = await ctx.newPage();
     page.setDefaultTimeout(30_000);
 
-    // Navegar para a página de cadastro
-    const TARGET_URL = 'https://www.booking.com/register.html?lang=pt-br';
-    log('info', `🌐 Navegando para ${TARGET_URL}`, cycle);
-    await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    const payload = gerarPayloadCompleto(undefined, opts.inviteCode);
+    const emailClient: IEmailClient = createEmailClient(
+      opts.emailProvider as any,
+      opts.tempMailApiKey
+    );
+
+    log('info', `🌐 Navegando para ${opts.cadastroUrl}`, cycle);
+    await page.goto(opts.cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await humanPause(randInt(sp(800), sp(1800)));
 
-    // Dispensar cookies imediatamente
     await dispensarCookies(page);
 
     // ⭐ Aquecer página ANTES de qualquer interação com formulário
-    // Cria histórico de movimentos que o Arkose analisa pré-submit
     await pageWarmup(page, cycle);
 
-    // Etapa 1: digitar email
+    // Etapa 1: email
     await etapa_digitarEmail(page, payload.email, cycle);
     await cogPause(400, 900);
-
-    // Aceitar termos se visiveis antes do forward
     try { await aceitarTermos(page); } catch { /* não obrigatório nessa etapa */ }
-
-    // Avançar
     await clickForwardButton(page, cycle);
     await humanPause(randInt(sp(1200), sp(2500)));
 
@@ -455,7 +434,7 @@ async function _executarCiclo(
     const senhaVisible = await page.locator('input[type="password"]').first()
       .isVisible({ timeout: 8000 }).catch(() => false);
     if (senhaVisible) {
-      await etapa_digitarSenha(page, payload.password, cycle);
+      await etapa_digitarSenha(page, payload.senha, cycle);
       await cogPause(500, 1100);
       await clickForwardButton(page, cycle);
       await humanPause(randInt(sp(1200), sp(2500)));
@@ -465,16 +444,13 @@ async function _executarCiclo(
     const nomeVisible = await page.locator('[data-testid*="first-name"], [name="firstName"], [id*="first"]').first()
       .isVisible({ timeout: 8000 }).catch(() => false);
     if (nomeVisible) {
-      await etapa_digitarNome(page, payload.firstName, cycle);
+      await etapa_digitarNome(page, payload.nome, cycle);
       await humanPause(randInt(sp(300), sp(700)));
-      await etapa_digitarSobrenome(page, payload.lastName, cycle);
+      await etapa_digitarSobrenome(page, payload.sobrenome, cycle);
       await cogPause(400, 900);
-
-      // Selecionar cidade se o campo aparecer nessa etapa
       const cidadeVisible = await page.locator('[data-testid="flow-type-city-selector-v2-input"]').first()
         .isVisible({ timeout: 3000 }).catch(() => false);
-      if (cidadeVisible) await selecionarCidade(page, payload.city ?? 'São Paulo', cycle);
-
+      if (cidadeVisible) await selecionarCidade(page, payload.cidade, cycle);
       await clickForwardButton(page, cycle);
       await humanPause(randInt(sp(1200), sp(2500)));
     }
@@ -485,7 +461,7 @@ async function _executarCiclo(
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
 
     if (otpVisible) {
-      const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle);
+      const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
       await etapa_digitarOTP(page, otp, cycle);
       await cogPause(400, 900);
       await clickForwardButton(page, cycle);
@@ -497,45 +473,89 @@ async function _executarCiclo(
     const sucesso = url.includes('myaccount') || url.includes('home') || url.includes('dashboard');
     if (sucesso) {
       log('success', `🎉 Conta criada com sucesso! URL: ${url}`, cycle);
-      await accountStore.saveAccount({
+      // accountStore.save() espera Omit<Account, 'id' | 'createdAt'>
+      accountStore.save({
+        cycle,
+        provider: opts.emailProvider,
+        nome: payload.nome,
+        sobrenome: payload.sobrenome,
         email: payload.email,
-        password: payload.password,
-        createdAt: new Date().toISOString(),
+        telefone: payload.telefone,
+        senha: payload.senha,
+        localizacao: payload.localizacao,
+        codigoIndicacao: payload.codigoIndicacao,
+        cookies: [],
       });
-      await artifacts.save(cycle, { email: payload.email, password: payload.password, url });
+      // ArtifactsManager é 100% static — sem new, sem .save()
+      await ArtifactsManager.saveErrorArtifacts(page, cycle);
     } else {
       log('warn', `⚠️ Flow concluído mas URL inesperada: ${url}`, cycle);
     }
 
   } catch (err: any) {
     log('error', `❌ Erro no ciclo: ${err?.message ?? err}`, cycle);
+    if (page) await ArtifactsManager.saveErrorArtifacts(page, cycle).catch(() => {});
     throw err;
   } finally {
     await fecharContextoCiclo(cycle);
   }
 }
 
-// ─── Executor público ────────────────────────────────────────────────────────────────
+// ─── Classe MockPlaywrightFlow (mantida para compatibilidade com server/index.ts) ──
+
+type FlowOpts = {
+  emailProvider: EmailProvider;
+  tempMailApiKey: string;
+  otpTimeout: number;
+  extraDelay: number;
+  inviteCode: string;
+};
+
+export class MockPlaywrightFlow {
+  private static headless = false;
+
+  static async init(headless = false): Promise<void> {
+    MockPlaywrightFlow.headless = headless;
+    await ensureBrowser(headless);
+  }
+
+  static async execute(
+    cadastroUrl: string,
+    opts: FlowOpts,
+    cycle: number
+  ): Promise<void> {
+    const timeoutHandle = setTimeout(() => {
+      log('error', `⏰ Ciclo ${cycle} excedeu timeout de ${CYCLE_TIMEOUT_MS / 1000}s`, cycle);
+      fecharContextoCiclo(cycle).catch(() => {});
+    }, CYCLE_TIMEOUT_MS);
+    try {
+      await _executarCiclo(cycle, { cadastroUrl, ...opts });
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  static async cleanup(): Promise<void> {
+    await closeBrowser();
+  }
+}
+
+// ─── Executor legado (usado se alguém importar executarMockFlow diretamente) ───
 
 export async function executarMockFlow(
   cycle: number,
   proxyConfig?: string,
   emailProvider?: EmailProvider
 ): Promise<void> {
-  const payload = gerarPayloadCompleto();
-  const artifacts = new ArtifactsManager();
-
-  const provider = emailProvider ?? EmailProvider.TEMPMAIL;
-  const emailClient: IEmailClient = createEmailClient(provider, payload.email);
-
-  const timeoutHandle = setTimeout(() => {
-    log('error', `⏰ Ciclo ${cycle} excedeu timeout de ${CYCLE_TIMEOUT_MS / 1000}s`, cycle);
-    fecharContextoCiclo(cycle).catch(() => {});
-  }, CYCLE_TIMEOUT_MS);
-
-  try {
-    await _executarCiclo(cycle, payload, emailClient, artifacts, proxyConfig);
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
+  const state = globalState.getState();
+  const config = state.config;
+  await ensureBrowser(config.headless ?? false, proxyConfig);
+  await _executarCiclo(cycle, {
+    cadastroUrl: (config as any).cadastroUrl ?? 'https://www.booking.com/register.html?lang=pt-br',
+    emailProvider: emailProvider ?? config.emailProvider,
+    tempMailApiKey: config.tempMailApiKey ?? '',
+    otpTimeout: config.otpTimeout ?? 120_000,
+    extraDelay: config.extraDelay ?? 0,
+    inviteCode: config.inviteCode ?? '',
+  });
 }
