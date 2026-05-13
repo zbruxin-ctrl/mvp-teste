@@ -900,14 +900,19 @@ function getFirstAvailableProxy(): { server: string; username?: string; password
 }
 
 // ─── Cria contexto isolado ─────────────────────────────────────────────────────
+// NOTA: O proxy é aplicado no nível do browser via --proxy-server (ver init()).
+// O newContext NÃO repassa proxy para evitar conflito com o proxy do launch.
+// Credenciais de autenticação do proxy são injetadas via setHTTPCredentials.
 
 async function criarContextoIsolado(
   cycle: number
 ): Promise<{ context: BrowserContext; page: Page }> {
-  const proxy = globalState.getProxyForCycle(cycle);
+  // Usa sempre o primeiro proxy (mesmo que getProxyForCycle retorne outro),
+  // pois o --proxy-server do launch é fixo no proxies[0].
+  const proxy = getFirstAvailableProxy();
 
   if (proxy) {
-    globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → usando proxy: ${proxy.server}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
+    globalState.addLog('info', `🌐 [Proxy] Ciclo #${cycle} → proxy ativo: ${proxy.server}` + (proxy.username ? ` | usuário: ${proxy.username}` : ''), cycle);
   } else {
     globalState.addLog('warn', `⚠️ [Proxy] Ciclo #${cycle} → SEM proxy configurado`, cycle);
   }
@@ -919,8 +924,15 @@ async function criarContextoIsolado(
     geolocation: { latitude: -23.5505, longitude: -46.6333 },
     permissions: ['geolocation'],
     extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7' },
-    ...(proxy ? { proxy: { server: proxy.server, username: proxy.username, password: proxy.password } } : {}),
+    // Proxy NÃO é passado aqui — o browser já foi lançado com --proxy-server.
+    // Passar proxy no contexto quando o browser foi lançado sem proxy não funciona no Chromium.
   });
+
+  // Injeta credenciais de autenticação do proxy (funciona mesmo sem proxy no newContext)
+  if (proxy?.username && proxy?.password) {
+    await context.setHTTPCredentials({ username: proxy.username, password: proxy.password });
+    globalState.addLog('info', `🔐 [Proxy] Credenciais de autenticação injetadas no contexto #${cycle}`, cycle);
+  }
 
   await context.addInitScript({ content: stealthScript });
   await context.addInitScript({ content: KYC_INIT_SCRIPT });
@@ -1035,7 +1047,7 @@ export class MockPlaywrightFlow {
       }) as unknown as Browser;
 
       currentLaunchProxy = launchProxyKey;
-      globalState.addLog('info', '✅ Browser pronto!');
+      globalState.addLog('info', proxyArg ? `✅ Browser pronto! (proxy: ${proxyArg})` : '✅ Browser pronto! (sem proxy)');
     } finally {
       browserLaunching = false;
     }
