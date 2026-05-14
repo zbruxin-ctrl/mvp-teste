@@ -322,9 +322,22 @@ export async function humanType(p: Page, selector: string, value: string): Promi
  * humanTypeForce — variante que limpa forçosamente e dispara InputEvent
  * após cada caractere para compatibilidade com React/Vue controlled inputs.
  * Também executa um dispatchEvent 'change' ao final para validação de campo.
+ *
+ * TOLERANTE a campos que somem durante a digitação (ex: tela de OTP da Uber
+ * navega para a próxima tela enquanto os dígitos ainda estão sendo digitados).
+ * Toda operação que interage com o locator é envolvida em try/catch para que
+ * um StaleElementReferenceError ou timeout não derrube o ciclo inteiro.
  */
 export async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
-  await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+  // Aguarda o campo aparecer antes de qualquer coisa
+  const appeared = await p.waitForSelector(selector, { state: 'visible', timeout: 15000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (!appeared) {
+    globalState.addLog('warn', `⚠️ [humanTypeForce] Campo "${selector}" não apareceu — pulando digitação`);
+    return;
+  }
 
   // 1. Focar com cadeia completa de pointer events
   await focusField(p, selector);
@@ -344,7 +357,7 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
         bubbles: true, cancelable: false, composed: true,
         data: '', inputType: 'deleteContentBackward',
       }));
-    });
+    }).catch(() => { /* campo pode ter sumido — ignora */ });
     await humanPause(randInt(25, 55));
   }
 
@@ -354,6 +367,15 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
   let burstRemaining = randInt(3, 8);
 
   for (let i = 0; i < value.length; i++) {
+    // Se o campo sumiu durante a digitação (Uber navega para próxima tela
+    // antes de todos os dígitos do OTP serem enviados), para graciosamente.
+    const stillVisible = await p.locator(selector).isVisible().catch(() => false);
+    if (!stillVisible) {
+      globalState.addLog('info',
+        `ℹ️ [humanTypeForce] Campo "${selector}" desapareceu após ${i}/${value.length} chars — OK, navegação detectada`);
+      return;
+    }
+
     const ch = value[i]!;
 
     // Typo ocasional
@@ -370,7 +392,7 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
             bubbles: true, cancelable: false, composed: true,
             data: null as any, inputType: 'deleteContentBackward',
           }));
-        });
+        }).catch(() => {});
         await humanPause(randInt(30, 80));
       }
     }
@@ -395,13 +417,13 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
   // 5. Pausa pós-digitação: usuário confere o que digitou
   await humanPause(randInt(sp(200), sp(500)));
 
-  // 6. Disparar 'change' para ativar validação de campos controlled
+  // 6. Disparar 'change' + 'blur' para ativar validação (tolerante a campo sumido)
   await p.locator(selector).evaluate((el: HTMLInputElement) => {
     el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
     el.dispatchEvent(new Event('blur',   { bubbles: true }));
-  });
+  }).catch(() => { /* campo pode ter sumido após último char — normal no OTP */ });
 
-  const finalVal = await p.locator(selector).inputValue().catch(() => '??');
+  const finalVal = await p.locator(selector).inputValue().catch(() => '(campo sumiu)');
   const { globalState: _gs } = await import('../state/globalState');
   _gs.addLog('info', `🔍 [DEBUG] Campo "${selector}" → "${finalVal}"`);
 }

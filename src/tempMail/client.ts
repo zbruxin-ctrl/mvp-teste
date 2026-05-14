@@ -563,26 +563,11 @@ export class YOPmailClient implements IEmailClient {
 // GET /html?email=&code=                → { status, html }
 // ──────────────────────────────────────────────────────────────────────────────────
 
-// Domínios conhecidos por serem bloqueados por serviços como Uber, iFood, etc.
-// A Uber rejeita silenciosamente emails para domínios "jovens" ou TLDs incomuns.
-// Domínios com TLD .it.com, .us.com, .br.com, .hu.com etc. costumam ser bloqueados.
+// Apenas serviços sabidamente suspeitos/abusados são bloqueados.
+// NÃO incluir padrões de TLD (*.it.com, *.us.com etc.) pois o tempmailc
+// usa exclusivamente domínios com esse formato — filtrá-los descarta a
+// lista inteira e força o fallback sem filtro de qualquer jeito.
 const BLOCKED_DOMAIN_PATTERNS = [
-  /\.it\.com$/i,
-  /\.us\.com$/i,
-  /\.br\.com$/i,
-  /\.hu\.com$/i,
-  /\.gb\.com$/i,
-  /\.de\.com$/i,
-  /\.eu\.com$/i,
-  /\.sa\.com$/i,
-  /\.jpn\.com$/i,
-  /\.kr\.com$/i,
-  /\.cn\.com$/i,
-  /\.ae\.org$/i,
-  /\.qc\.com$/i,
-  /\.uy\.com$/i,
-  /\.ar\.com$/i,
-  /grr\.la$/i,
   /guerrillamail/i,
   /sharklasers/i,
   /guerrillamailblock/i,
@@ -666,11 +651,9 @@ export class TempMailCClient implements IEmailClient {
 
     if (!this.domains.length) {
       const allDomains = await this.fetchDomains();
-      // Filtra domínios conhecidos por serem bloqueados pela Uber
       this.domains = allDomains.filter(d => !isDomainBlocked(d));
 
       if (!this.domains.length) {
-        // Fallback: usa todos se todos forem filtrados
         globalState.addLog('warn', '⚠️ [tempmailc] Todos os domínios foram filtrados — usando lista completa');
         this.domains = allDomains;
       } else {
@@ -779,35 +762,19 @@ export class TempMailCClient implements IEmailClient {
                 return otpHtml;
               }
             }
-          } catch { /* ignora falha no html fallback */ }
+          } catch (e) {
+            globalState.addLog('warn', `⚠️ [tempmailc] Erro em /html: ${e instanceof Error ? e.message : e}`, cycle);
+          }
         } else {
-          globalState.addLog('info', `💭 [tempmailc] Inbox vazia — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
+          globalState.addLog('info', `💭 [tempmailc] /inbox vazio — próximo poll em ${POLL_INTERVAL_MS / 1000}s`, cycle);
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Parado')) throw e;
-        globalState.addLog('warn', `⚠️ [tempmailc] Erro no fallback /inbox poll #${poll}: ${e instanceof Error ? e.message : e}`, cycle);
+        globalState.addLog('warn', `⚠️ [tempmailc] Erro em /inbox poll #${poll}: ${e instanceof Error ? e.message : e}`, cycle);
       }
 
       await sleep(POLL_INTERVAL_MS);
     }
-
     throw new Error(`⏰ Timeout aguardando OTP tempmailc (${Math.round(timeoutMs / 1000)}s)`);
   }
-}
-
-// ──────────────────────────────────────────────────────────────────────────────────
-// Factory
-// ──────────────────────────────────────────────────────────────────────────────────
-export function createEmailClient(
-  provider: 'temp-mail.io' | 'mail.tm' | 'yopmail' | 'tempmailc',
-  apiKey?: string
-): IEmailClient {
-  if (provider === 'mail.tm')   return new MailTmClient();
-  if (provider === 'yopmail')   return new YOPmailClient();
-  if (provider === 'tempmailc') {
-    if (!apiKey) throw new Error('tempmailc requer uma API key');
-    return new TempMailCClient(apiKey);
-  }
-  if (!apiKey) throw new Error('temp-mail.io requer uma API key');
-  return new TempMailClient(apiKey);
 }
