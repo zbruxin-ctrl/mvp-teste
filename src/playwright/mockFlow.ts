@@ -1,6 +1,6 @@
 import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { Browser, Page, BrowserContext, Frame, devices } from 'playwright';
+import { Browser, Page, BrowserContext, devices } from 'playwright';
 import { globalState } from '../state/globalState';
 import { createEmailClient } from '../tempMail/client';
 import { IEmailClient } from '../types/tempMail';
@@ -22,63 +22,36 @@ let browser: Browser | null = null;
 let browserLaunching = false;
 let currentLaunchProxy: string | null = null;
 
-const contextosPorCiclo = new Map<number, BrowserContext>();
+const contextosPorCiclo = new Map<number, import('playwright').BrowserContext>();
 
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const MOBILE_DEVICE = devices['iPhone 14'];
 
-// ─── Helpers de detecção de estado da URL ─────────────────────────────────────
-
-// Destinos Uber que indicam autenticação concluída
-const UBER_SUCCESS_NEXT_URLS = [
-  'bonjour.uber.com',
-  'rider.uber.com',
-  'm.uber.com',
-  'uber.com/go',
-  'auth.uber.com',  // próprio auth redirect final
-];
+// ─── Detecção de URL ─────────────────────────────────────────────────────────────────
 
 /**
- * URLs que indicam cadastro concluído com sucesso.
- * Inclui auth.uber.com/v2 quando next_url aponta para destino Uber conhecido
- * (significa que o usuário foi autenticado e será redirecionado).
+ * Sucesso REAL = a página saiu de auth.uber.com e chegou num destino Uber final.
+ * next_url na querystring é só o destino configurado — não significa redirect já ocorreu.
  */
 function isSuccessUrl(url: string): boolean {
-  // Destinos finais diretos
-  if (
-    url.includes('myaccount') ||
-    url.includes('/home') ||
-    url.includes('/dashboard') ||
+  return (
     url.includes('bonjour.uber.com') ||
     url.includes('rider.uber.com') ||
-    url.includes('m.uber.com/dl') ||
+    (url.includes('m.uber.com') && !url.includes('auth.uber.com')) ||
     url.includes('uber.com/go') ||
+    url.includes('uber.com/home') ||
+    url.includes('uber.com/feed') ||
     url.includes('/account') ||
-    url.includes('/profile')
-  ) return true;
-
-  // auth.uber.com/v2 com next_url apontando para destino conhecido = usuário autenticado
-  if (url.includes('auth.uber.com')) {
-    try {
-      const parsed = new URL(url);
-      const nextUrl = parsed.searchParams.get('next_url') ?? '';
-      if (UBER_SUCCESS_NEXT_URLS.some(dest => nextUrl.includes(dest))) return true;
-    } catch { /* URL mal-formada — ignora */ }
-  }
-
-  return false;
+    url.includes('/profile') ||
+    url.includes('/dashboard') ||
+    url.includes('/home')
+  );
 }
 
-/**
- * URLs que indicam etapa intermediária de cadastro (ainda no funil, sem next_url de sucesso).
- */
+/** Ainda dentro do funil de cadastro/auth do Uber. */
 function isOnboardingUrl(url: string): boolean {
-  // Se já é sucesso, não é onboarding
-  if (isSuccessUrl(url)) return false;
-
   return (
     url.includes('auth.uber.com') ||
-    url.includes('/v2/') ||
     url.includes('/signup') ||
     url.includes('/register') ||
     url.includes('/onboard') ||
@@ -102,8 +75,7 @@ function buildProxyServerArg(server: string): string {
   try {
     const parsed = new URL(
       normalized.startsWith('http://') || normalized.startsWith('https://')
-        ? normalized
-        : 'http://' + normalized
+        ? normalized : 'http://' + normalized
     );
     return `http://${parsed.host}`;
   } catch {
@@ -118,24 +90,18 @@ function buildProxyServerArg(server: string): string {
 
 async function dispensarCookies(p: Page): Promise<void> {
   const candidatos = [
-    'button:has-text("Aceitar todos")',
-    'button:has-text("Accept all")',
-    'button:has-text("Aceitar")',
-    'button:has-text("Accept")',
+    'button:has-text("Aceitar todos")', 'button:has-text("Accept all")',
+    'button:has-text("Aceitar")', 'button:has-text("Accept")',
     '[id*="cookie"] button:has-text("Concordo")',
-    '[class*="cookie"] button',
-    '[class*="consent"] button',
-    '[data-testid="cookie-banner-accept"]',
-    '[data-testid="accept-cookies"]',
-    '#onetrust-accept-btn-handler',
-    '.onetrust-accept-btn-handler',
+    '[class*="cookie"] button', '[class*="consent"] button',
+    '[data-testid="cookie-banner-accept"]', '[data-testid="accept-cookies"]',
+    '#onetrust-accept-btn-handler', '.onetrust-accept-btn-handler',
     'button#accept-recommended-btn-handler',
   ];
   for (const seletor of candidatos) {
     try {
       const el = p.locator(seletor).first();
-      const visivel = await el.isVisible({ timeout: 1500 }).catch(() => false);
-      if (visivel) {
+      if (await el.isVisible({ timeout: 1500 }).catch(() => false)) {
         await hoverElement(p, seletor);
         await el.click({ timeout: 3000 });
         globalState.addLog('info', `🍪 Banner de cookies dispensado (${seletor})`);
@@ -148,43 +114,43 @@ async function dispensarCookies(p: Page): Promise<void> {
 
 // ─── Aceitar termos ───────────────────────────────────────────────────────────
 
-async function aceitarTermos(p: Page): Promise<void> {
-  await humanPause(randInt(sp(500), sp(900)));
-  const candidatos = [
+/**
+ * Tenta marcar qualquer checkbox/label de termos visível na página.
+ * Retorna true se aceitou, false se nenhum foi encontrado (não lança).
+ */
+async function tentarAceitarTermos(p: Page): Promise<boolean> {
+  const candidatos: Array<() => Promise<void>> = [
     async () => {
       const el = p.locator('input[type="checkbox"]').first();
-      await el.waitFor({ state: 'attached', timeout: 8000 });
+      await el.waitFor({ state: 'attached', timeout: 4000 });
+      if (!await el.isVisible({ timeout: 2000 }).catch(() => false)) throw new Error('not visible');
       const box = await el.boundingBox().catch(() => null);
-      if (box) {
-        await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-        await humanPause(randInt(sp(80), sp(160)));
-      }
+      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+      await humanPause(randInt(sp(80), sp(160)));
       await el.check({ force: true, timeout: 5000 });
     },
     async () => {
-      const el = p.locator('label:has-text("Concordo"), [class*="label"]:has-text("Concordo")').first();
-      await el.waitFor({ state: 'attached', timeout: 5000 });
+      const el = p.locator('[role="checkbox"]').first();
+      await el.waitFor({ state: 'attached', timeout: 4000 });
+      if (!await el.isVisible({ timeout: 2000 }).catch(() => false)) throw new Error('not visible');
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
       await humanPause(randInt(sp(60), sp(140)));
       await el.click({ force: true, timeout: 5000 });
     },
     async () => {
-      const el = p.locator('[role="checkbox"]').first();
-      await el.waitFor({ state: 'attached', timeout: 5000 });
+      const el = p.locator('label:has-text("Concordo"), label:has-text("Agree"), label:has-text("aceito"), label:has-text("accept")').first();
+      await el.waitFor({ state: 'attached', timeout: 4000 });
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
       await humanPause(randInt(sp(60), sp(140)));
       await el.click({ force: true, timeout: 5000 });
     },
-    async () => { await p.click('text=Concordo', { force: true, timeout: 5000 }); },
   ];
-  let aceitou = false;
-  for (const tentativa of candidatos) {
-    try { await tentativa(); aceitou = true; break; } catch { /* tenta próximo */ }
+  for (const fn of candidatos) {
+    try { await fn(); globalState.addLog('info', '☑️ Termos aceitos'); return true; } catch { /* tenta próximo */ }
   }
-  if (!aceitou) throw new Error('Não foi possível aceitar os termos — nenhum seletor funcionou');
-  globalState.addLog('info', '☑️ Termos aceitos');
+  return false;
 }
 
 // ─── Seleciona cidade ─────────────────────────────────────────────────────────
@@ -193,11 +159,8 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   const INPUT_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
   const DROPDOWN_ITEM_SELS = [
     '[data-testid="flow-type-city-selector-v2-option"]',
-    '[role="option"]',
-    '[role="listbox"] li',
-    '[class*="suggestion"]',
-    '[class*="option"]',
-    '[class*="item"]',
+    '[role="option"]', '[role="listbox"] li',
+    '[class*="suggestion"]', '[class*="option"]', '[class*="item"]',
   ];
   const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
   const nomeBusca = cidade.split(',')[0]!.trim();
@@ -208,25 +171,22 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await focusField(p, INPUT_SEL);
   await p.fill(INPUT_SEL, '');
   await humanPause(randInt(sp(100), sp(200)));
-
   for (const ch of nomeBusca) {
     await _typeChar(p, ch, isSpeedMode());
     if (!isSpeedMode() && Math.random() < 0.08) await humanPause(randInt(80, 200));
   }
 
-  log('info', '⏳ Aguardando dropdown de cidade...', cycle);
   let itemSel: string | null = null;
   const pollMs = isSpeedMode() ? 200 : 500;
   const fimDropdown = Date.now() + 8_000;
   while (Date.now() < fimDropdown) {
     for (const sel of DROPDOWN_ITEM_SELS) {
       try {
-        const count = await p.locator(sel).count();
-        if (count > 0) {
-          const visivel = await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false);
-          if (visivel) { itemSel = sel; break; }
+        if (await p.locator(sel).count() > 0 &&
+            await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false)) {
+          itemSel = sel; break;
         }
-      } catch { /* tenta próximo */ }
+      } catch { /* continua */ }
     }
     if (itemSel) break;
     await humanPause(pollMs);
@@ -234,7 +194,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
 
   if (!itemSel) {
     log('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter', cycle);
-    await humanPause(randInt(sp(300), sp(600)));
     await p.keyboard.press('ArrowDown');
     await humanPause(randInt(sp(150), sp(300)));
     await p.keyboard.press('Enter');
@@ -244,33 +203,23 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await humanPause(randInt(sp(300), sp(600)));
   const opcoes = p.locator(itemSel);
   const total = await opcoes.count();
-  log('info', `📍 Dropdown aberto com ${total} opções`, cycle);
-
   let clicou = false;
   for (let i = 0; i < total; i++) {
     try {
       const opcao = opcoes.nth(i);
       const texto = await opcao.innerText().catch(() => '');
       if (norm(texto).includes(nomeBuscaNorm)) {
-        const opcaoBox = await opcao.boundingBox().catch(() => null);
-        if (opcaoBox) {
-          await humanMouseMove(
-            p,
-            opcaoBox.x + opcaoBox.width  * randFloat(0.25, 0.75),
-            opcaoBox.y + opcaoBox.height * randFloat(0.25, 0.75)
-          );
-          await humanPause(randInt(sp(120), sp(280)));
-        }
+        const box = await opcao.boundingBox().catch(() => null);
+        if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.25, 0.75), box.y + box.height * randFloat(0.25, 0.75));
+        await humanPause(randInt(sp(120), sp(280)));
         await opcao.click({ timeout: 5000 });
         clicou = true;
         log('info', `📍 Cidade selecionada: "${texto.trim()}"`, cycle);
         break;
       }
-    } catch { /* tenta próximo */ }
+    } catch { /* continua */ }
   }
-
   if (!clicou) {
-    log('warn', '⚠️ Cidade não encontrada no dropdown, tentando ArrowDown+Enter', cycle);
     await p.keyboard.press('ArrowDown');
     await humanPause(randInt(sp(150), sp(300)));
     await p.keyboard.press('Enter');
@@ -320,7 +269,7 @@ export async function closeBrowser(): Promise<void> {
 
 // ─── Context por ciclo ────────────────────────────────────────────────────────
 
-async function criarContextoCiclo(cycle: number, proxyConfig?: string): Promise<BrowserContext> {
+async function criarContextoCiclo(cycle: number): Promise<import('playwright').BrowserContext> {
   const ctx = await browser!.newContext({
     ...MOBILE_DEVICE,
     locale: 'pt-BR',
@@ -337,10 +286,7 @@ async function criarContextoCiclo(cycle: number, proxyConfig?: string): Promise<
 
 async function fecharContextoCiclo(cycle: number): Promise<void> {
   const ctx = contextosPorCiclo.get(cycle);
-  if (ctx) {
-    await ctx.close().catch(() => {});
-    contextosPorCiclo.delete(cycle);
-  }
+  if (ctx) { await ctx.close().catch(() => {}); contextosPorCiclo.delete(cycle); }
 }
 
 // ─── Etapas do flow ───────────────────────────────────────────────────────────
@@ -361,50 +307,9 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
   log('info', '✅ Senha digitada', cycle);
 }
 
-async function etapa_digitarNome(p: Page, nome: string, cycle: number): Promise<void> {
-  log('info', `👤 Digitando nome: ${nome}`, cycle);
-  const candidatos = [
-    '[data-testid*="first-name"]',
-    '[name="firstName"]',
-    '[id*="first"]',
-    'input[placeholder*="ome"]',
-  ];
-  for (const sel of candidatos) {
-    const el = p.locator(sel).first();
-    if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await humanTypeForce(p, sel, nome);
-      log('info', '✅ Nome digitado', cycle);
-      return;
-    }
-  }
-  log('warn', '⚠️ Campo de nome não encontrado', cycle);
-}
-
-async function etapa_digitarSobrenome(p: Page, sobrenome: string, cycle: number): Promise<void> {
-  log('info', `👤 Digitando sobrenome: ${sobrenome}`, cycle);
-  const candidatos = [
-    '[data-testid*="last-name"]',
-    '[name="lastName"]',
-    '[id*="last"]',
-    'input[placeholder*="obrenome"]',
-  ];
-  for (const sel of candidatos) {
-    const el = p.locator(sel).first();
-    if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await humanTypeForce(p, sel, sobrenome);
-      log('info', '✅ Sobrenome digitado', cycle);
-      return;
-    }
-  }
-  log('warn', '⚠️ Campo de sobrenome não encontrado', cycle);
-}
-
 async function etapa_aguardarOTP(
-  p: Page,
-  emailClient: IEmailClient,
-  email: string,
-  cycle: number,
-  otpTimeoutMs = 120_000
+  p: Page, emailClient: IEmailClient, email: string,
+  cycle: number, otpTimeoutMs = 120_000
 ): Promise<string> {
   log('info', '📨 Aguardando OTP no email...', cycle);
   const otp = await emailClient.waitForOTP(email, otpTimeoutMs, cycle);
@@ -423,16 +328,14 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
     'input[inputmode="numeric"]',
   ];
   for (const sel of candidatos) {
-    const el = p.locator(sel).first();
-    if (await el.isVisible({ timeout: 5000 }).catch(() => false)) {
+    if (await p.locator(sel).first().isVisible({ timeout: 5000 }).catch(() => false)) {
       await humanTypeForce(p, sel, otp);
       log('info', '✅ OTP digitado', cycle);
       return;
     }
   }
   // Fallback: campos de dígito único
-  const singleDigitInputs = p.locator('input[maxlength="1"]');
-  const count = await singleDigitInputs.count();
+  const count = await p.locator('input[maxlength="1"]').count();
   if (count >= 4) {
     log('info', `🔢 Digitando OTP em ${count} campos individuais`, cycle);
     for (let i = 0; i < Math.min(count, otp.length); i++) {
@@ -447,112 +350,158 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
 }
 
 /**
- * Aguarda a navegação se estabilizar após uma ação crítica.
- * Considera "estabilizado" quando a URL não muda por stableMs consecutivos.
+ * Aguarda URL estabilizar (para de mudar por stableMs).
  */
-async function aguardarNavegacaoEstabilizar(
-  p: Page,
-  maxWaitMs = 12_000,
-  stableMs = 1_200
-): Promise<string> {
+async function aguardarNavegacaoEstabilizar(p: Page, maxWaitMs = 12_000, stableMs = 1_200): Promise<string> {
   const fim = Date.now() + maxWaitMs;
   let lastUrl = p.url();
   let lastChange = Date.now();
-
   while (Date.now() < fim) {
     await humanPause(250);
     const cur = p.url();
-    if (cur !== lastUrl) {
-      lastUrl = cur;
-      lastChange = Date.now();
-    } else if (Date.now() - lastChange >= stableMs) {
-      break;
-    }
+    if (cur !== lastUrl) { lastUrl = cur; lastChange = Date.now(); }
+    else if (Date.now() - lastChange >= stableMs) break;
   }
   return p.url();
 }
 
 /**
- * Etapa pós-OTP: lida com telas intermediárias do Uber após verificação do código.
- * Se auth.uber.com/v2 com next_url=bonjour.uber.com → já é sucesso, encerra imediatamente.
- * Se ainda está em onboarding sem next_url → tenta preencher campos e avançar.
+ * Processa UMA tela de onboarding do Uber (pós-OTP).
+ * Detecta os campos presentes, preenche o que encontrar e clica em Avançar.
+ * Retorna true se clicou no botão de avançar, false se não havia nada a fazer.
+ */
+async function processarTelaOnboarding(
+  p: Page,
+  payload: { nome: string; sobrenome: string; cidade: string; telefone: string },
+  cycle: number,
+  telaIdx: number
+): Promise<boolean> {
+  log('info', `📋 [Tela ${telaIdx}] Verificando campos da tela de onboarding...`, cycle);
+  let fezAlgo = false;
+
+  // — Nome
+  for (const sel of ['[data-testid*="first-name"]', '[name="firstName"]', '[id*="first"]', '[placeholder*="irst"]', '[placeholder*="ome"]']) {
+    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+      const val = await p.locator(sel).first().inputValue().catch(() => '');
+      if (!val) {
+        await humanTypeForce(p, sel, payload.nome);
+        log('info', `✅ [Tela ${telaIdx}] Nome preenchido`, cycle);
+        fezAlgo = true;
+      }
+      break;
+    }
+  }
+
+  await humanPause(randInt(sp(150), sp(350)));
+
+  // — Sobrenome
+  for (const sel of ['[data-testid*="last-name"]', '[name="lastName"]', '[id*="last"]', '[placeholder*="ast"]', '[placeholder*="obrenome"]']) {
+    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+      const val = await p.locator(sel).first().inputValue().catch(() => '');
+      if (!val) {
+        await humanTypeForce(p, sel, payload.sobrenome);
+        log('info', `✅ [Tela ${telaIdx}] Sobrenome preenchido`, cycle);
+        fezAlgo = true;
+      }
+      break;
+    }
+  }
+
+  await humanPause(randInt(sp(150), sp(350)));
+
+  // — Telefone (opcional — só preenche se campo estiver vazio)
+  for (const sel of ['[name="phoneNumber"]', '[data-testid*="phone"]', 'input[type="tel"]', '[id*="phone"]']) {
+    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
+      const val = await p.locator(sel).first().inputValue().catch(() => '');
+      if (!val && payload.telefone) {
+        await humanTypeForce(p, sel, payload.telefone);
+        log('info', `✅ [Tela ${telaIdx}] Telefone preenchido`, cycle);
+        fezAlgo = true;
+      }
+      break;
+    }
+  }
+
+  await humanPause(randInt(sp(150), sp(350)));
+
+  // — Cidade
+  if (await p.locator('[data-testid="flow-type-city-selector-v2-input"]').first().isVisible({ timeout: 1500 }).catch(() => false)) {
+    await selecionarCidade(p, payload.cidade, cycle);
+    fezAlgo = true;
+  }
+
+  await cogPause(300, 700);
+
+  // — Termos / checkboxes
+  const aceitou = await tentarAceitarTermos(p);
+  if (aceitou) { fezAlgo = true; await cogPause(300, 600); }
+
+  // Se não encontramos nada para preencher, verifica se é tela de transição (só botão)
+  const temBotao = await p.locator('#forward-button, [data-testid="forward-button"], button[type="submit"]').first()
+    .isVisible({ timeout: 2000 }).catch(() => false);
+
+  if (!fezAlgo && !temBotao) {
+    log('info', `💭 [Tela ${telaIdx}] Tela de transição sem campos/botão — aguardando navegação automática...`, cycle);
+    return false;
+  }
+
+  // Clica em Avançar
+  await clickForwardButton(p, cycle);
+  log('info', `👉 [Tela ${telaIdx}] Botão de avançar clicado`, cycle);
+  return true;
+}
+
+/**
+ * Loop pós-OTP: percorre TODAS as telas de onboarding do Uber
+ * (nome, sobrenome, telefone, termos, cidade, telas de KYC/verificação, etc.)
+ * até chegar em isSuccessUrl ou atingir o limite de telas.
+ *
+ * Salva a conta apenas quando o redirect real para bonjour/rider/etc. acontecer.
  */
 async function etapa_posOTP(
   p: Page,
-  payload: { nome: string; sobrenome: string; cidade: string },
+  payload: { nome: string; sobrenome: string; cidade: string; telefone: string },
   cycle: number
-): Promise<void> {
-  const url = await aguardarNavegacaoEstabilizar(p, 12_000, 1_200);
-  log('info', `🔍 URL pós-OTP estabilizada: ${url}`, cycle);
+): Promise<'success' | 'onboarding' | 'unknown'> {
+  const MAX_TELAS = 12;
+  const MAX_TELA_TIMEOUT_MS = 20_000; // espera máxima por tela
 
-  // Sucesso direto — auth.uber.com/v2 com next_url conhecido, ou destino final
-  if (isSuccessUrl(url)) {
-    log('success', `🎉 Autenticação concluída pós-OTP: ${url}`, cycle);
-    return;
-  }
+  for (let tela = 1; tela <= MAX_TELAS; tela++) {
+    // Espera URL estabilizar após a ação anterior
+    const url = await aguardarNavegacaoEstabilizar(p, MAX_TELA_TIMEOUT_MS, 1_200);
+    log('info', `🔍 [Tela ${tela}] URL: ${url}`, cycle);
 
-  // Ainda em onboarding sem next_url de sucesso — há campos a preencher
-  if (isOnboardingUrl(url)) {
-    log('info', '📋 Tela de onboarding pós-OTP — verificando campos...', cycle);
-
-    const inputVisivel = await p.locator('input:not([type="hidden"])').first()
-      .isVisible({ timeout: 8_000 }).catch(() => false);
-
-    if (inputVisivel) {
-      for (const sel of [
-        '[data-testid*="first-name"]', '[name="firstName"]',
-        '[id*="first"]', '[placeholder*="irst"]', '[placeholder*="ome"]',
-      ]) {
-        if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
-          await humanTypeForce(p, sel, payload.nome);
-          log('info', '✅ Nome preenchido na tela pós-OTP', cycle);
-          break;
-        }
-      }
-
-      await humanPause(randInt(sp(200), sp(450)));
-
-      for (const sel of [
-        '[data-testid*="last-name"]', '[name="lastName"]',
-        '[id*="last"]', '[placeholder*="ast"]', '[placeholder*="obrenome"]',
-      ]) {
-        if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
-          await humanTypeForce(p, sel, payload.sobrenome);
-          log('info', '✅ Sobrenome preenchido na tela pós-OTP', cycle);
-          break;
-        }
-      }
-
-      await cogPause(400, 900);
-
-      const cidadeVis = await p.locator('[data-testid="flow-type-city-selector-v2-input"]').first()
-        .isVisible({ timeout: 2000 }).catch(() => false);
-      if (cidadeVis) await selecionarCidade(p, payload.cidade, cycle);
-
-      try { await aceitarTermos(p); } catch { /* não obrigatório */ }
-
-      await clickForwardButton(p, cycle);
-      log('info', '👉 Botão de avançar clicado na tela pós-OTP', cycle);
-
-      const urlFinal = await aguardarNavegacaoEstabilizar(p, 15_000, 1_500);
-      log('info', `🔍 URL após submit pós-OTP: ${urlFinal}`, cycle);
-
-      if (isSuccessUrl(urlFinal)) {
-        log('success', `🎉 Sucesso após tela pós-OTP: ${urlFinal}`, cycle);
-      } else if (isOnboardingUrl(urlFinal)) {
-        log('info', `🔄 Ainda em onboarding: ${urlFinal}`, cycle);
-      } else {
-        log('warn', `⚠️ URL inesperada após tela pós-OTP: ${urlFinal}`, cycle);
-      }
-    } else {
-      // Tela de transição sem inputs — aguarda navegação automática
-      log('info', '💭 Tela de transição — aguardando navegação automática...', cycle);
-      const urlFinal = await aguardarNavegacaoEstabilizar(p, 12_000, 2_000);
-      log('info', `🔍 URL após espera: ${urlFinal}`, cycle);
+    if (isSuccessUrl(url)) {
+      log('success', `🎉 Redirect real detectado! URL: ${url}`, cycle);
+      return 'success';
     }
-  } else {
-    log('warn', `⚠️ URL pós-OTP não reconhecida: ${url}`, cycle);
+
+    if (!isOnboardingUrl(url)) {
+      log('warn', `⚠️ URL não reconhecida: ${url}`, cycle);
+      return 'unknown';
+    }
+
+    // Aguarda qualquer conteúdo interativo aparecer
+    await p.waitForSelector(
+      'input:not([type="hidden"]), button, [role="checkbox"], #forward-button',
+      { timeout: 10_000 }
+    ).catch(() => {});
+
+    const clicou = await processarTelaOnboarding(p, payload, cycle, tela);
+
+    if (!clicou) {
+      // Sem interação possível — aguarda um pouco mais para navegação automática
+      const urlApos = await aguardarNavegacaoEstabilizar(p, 8_000, 2_000);
+      if (urlApos === url) {
+        // URL não mudou mesmo após espera — fluxo travado
+        log('warn', `⚠️ [Tela ${tela}] URL não avançou. Abortando loop.`, cycle);
+        return isSuccessUrl(urlApos) ? 'success' : 'onboarding';
+      }
+    }
   }
+
+  log('warn', `⚠️ Loop de onboarding atingiu limite de ${MAX_TELAS} telas`, cycle);
+  return isSuccessUrl(p.url()) ? 'success' : 'onboarding';
 }
 
 // ─── _executarCiclo ───────────────────────────────────────────────────────────
@@ -576,59 +525,59 @@ async function _executarCiclo(
     page = await ctx.newPage();
     page.setDefaultTimeout(30_000);
 
-    // ⭐ 1. Criar email via provider ANTES de qualquer navegação
-    const emailClient: IEmailClient = createEmailClient(
-      opts.emailProvider as any,
-      opts.tempMailApiKey
-    );
+    // 1. Email
+    const emailClient: IEmailClient = createEmailClient(opts.emailProvider as any, opts.tempMailApiKey);
     const emailAccount = await emailClient.createRandomEmail();
-    log('info', `📬 Email criado pelo provider: ${emailAccount.email}`, cycle);
+    log('info', `📬 Email criado: ${emailAccount.email}`, cycle);
 
-    // ⭐ 2. Montar payload usando o email real do provider
     const payload = gerarPayloadCompleto(emailAccount, opts.inviteCode);
 
     log('info', `🌐 Navegando para ${opts.cadastroUrl}`, cycle);
     await page.goto(opts.cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await humanPause(randInt(sp(800), sp(1800)));
-
     await dispensarCookies(page);
-
-    // ⭐ 3. Aquecer página ANTES de qualquer interação
     await pageWarmup(page, cycle);
 
-    // Etapa 1: email
+    // 2. Email
     await etapa_digitarEmail(page, payload.email, cycle);
     await cogPause(400, 900);
-    try { await aceitarTermos(page); } catch { /* não obrigatório nessa etapa */ }
+    await tentarAceitarTermos(page);
     await clickForwardButton(page, cycle);
     await humanPause(randInt(sp(1200), sp(2500)));
 
-    // Etapa 2: senha
-    const senhaVisible = await page.locator('input[type="password"]').first()
-      .isVisible({ timeout: 8000 }).catch(() => false);
-    if (senhaVisible) {
+    // 3. Senha (opcional)
+    if (await page.locator('input[type="password"]').first().isVisible({ timeout: 8000 }).catch(() => false)) {
       await etapa_digitarSenha(page, payload.senha, cycle);
       await cogPause(500, 1100);
       await clickForwardButton(page, cycle);
       await humanPause(randInt(sp(1200), sp(2500)));
     }
 
-    // Etapa 3: nome e sobrenome
-    const nomeVisible = await page.locator('[data-testid*="first-name"], [name="firstName"], [id*="first"]').first()
-      .isVisible({ timeout: 8000 }).catch(() => false);
-    if (nomeVisible) {
-      await etapa_digitarNome(page, payload.nome, cycle);
+    // 4. Nome/Sobrenome na tela inicial (se aparecer antes do OTP)
+    if (await page.locator('[data-testid*="first-name"], [name="firstName"], [id*="first"]').first()
+        .isVisible({ timeout: 8000 }).catch(() => false)) {
+      const nomeSels = ['[data-testid*="first-name"]', '[name="firstName"]', '[id*="first"]'];
+      for (const sel of nomeSels) {
+        if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+          await humanTypeForce(page, sel, payload.nome); break;
+        }
+      }
       await humanPause(randInt(sp(300), sp(700)));
-      await etapa_digitarSobrenome(page, payload.sobrenome, cycle);
+      const sobreSels = ['[data-testid*="last-name"]', '[name="lastName"]', '[id*="last"]'];
+      for (const sel of sobreSels) {
+        if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+          await humanTypeForce(page, sel, payload.sobrenome); break;
+        }
+      }
       await cogPause(400, 900);
-      const cidadeVisible = await page.locator('[data-testid="flow-type-city-selector-v2-input"]').first()
-        .isVisible({ timeout: 3000 }).catch(() => false);
-      if (cidadeVisible) await selecionarCidade(page, payload.cidade, cycle);
+      if (await page.locator('[data-testid="flow-type-city-selector-v2-input"]').first().isVisible({ timeout: 3000 }).catch(() => false)) {
+        await selecionarCidade(page, payload.cidade, cycle);
+      }
       await clickForwardButton(page, cycle);
       await humanPause(randInt(sp(1200), sp(2500)));
     }
 
-    // Etapa 4: OTP
+    // 5. OTP
     const otpVisible = await page.locator(
       'input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
@@ -637,46 +586,41 @@ async function _executarCiclo(
       const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
       await etapa_digitarOTP(page, otp, cycle);
       await cogPause(400, 900);
-      await clickForwardButton(page, cycle);
+      // clickForwardButton aqui: o OTP do Uber geralmente não tem botão (auto-submit), mas tentamos
+      await clickForwardButton(page, cycle).catch(() => {});
 
-      // ⭐ Etapa pós-OTP: resolve redirect para auth.uber.com/v2
-      await etapa_posOTP(page, payload, cycle);
-    }
+      // 6. Loop pós-OTP: percorre todas as telas restantes
+      const resultado = await etapa_posOTP(
+        page,
+        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone },
+        cycle
+      );
 
-    // ✔️ Verifica sucesso final
-    const urlFinal = page.url();
-    if (isSuccessUrl(urlFinal)) {
-      log('success', `🎉 Conta criada com sucesso! URL: ${urlFinal}`, cycle);
-      accountStore.save({
-        cycle,
-        provider: opts.emailProvider,
-        nome: payload.nome,
-        sobrenome: payload.sobrenome,
-        email: payload.email,
-        telefone: payload.telefone,
-        senha: payload.senha,
-        localizacao: payload.localizacao,
-        codigoIndicacao: payload.codigoIndicacao,
-        cookies: [],
-      });
-      await ArtifactsManager.saveErrorArtifacts(page, cycle);
-    } else if (isOnboardingUrl(urlFinal)) {
-      // OTP validado mas ainda em tela de cadastro — salva mesmo assim
-      log('success', `✅ Ciclo concluído (OTP validado) | URL atual: ${urlFinal}`, cycle);
-      accountStore.save({
-        cycle,
-        provider: opts.emailProvider,
-        nome: payload.nome,
-        sobrenome: payload.sobrenome,
-        email: payload.email,
-        telefone: payload.telefone,
-        senha: payload.senha,
-        localizacao: payload.localizacao,
-        codigoIndicacao: payload.codigoIndicacao,
-        cookies: [],
-      });
+      // ✅ Só salva se o redirect real para destino Uber ocorreu
+      if (resultado === 'success') {
+        const urlFinal = page.url();
+        log('success', `🎉 Conta criada com sucesso! URL: ${urlFinal}`, cycle);
+        accountStore.save({
+          cycle,
+          provider: opts.emailProvider,
+          nome: payload.nome,
+          sobrenome: payload.sobrenome,
+          email: payload.email,
+          telefone: payload.telefone,
+          senha: payload.senha,
+          localizacao: payload.localizacao,
+          codigoIndicacao: payload.codigoIndicacao,
+          cookies: [],
+        });
+        await ArtifactsManager.saveErrorArtifacts(page, cycle);
+      } else {
+        // KYC incompleto ou fluxo não chegou ao destino final — não salva
+        const urlFinal = page.url();
+        log('warn', `⚠️ Conta NÃO salva — KYC/verificação incompleta. URL final: ${urlFinal}`, cycle);
+        if (page) await ArtifactsManager.saveErrorArtifacts(page, cycle).catch(() => {});
+      }
     } else {
-      log('warn', `⚠️ Flow concluído mas URL inesperada: ${urlFinal}`, cycle);
+      log('warn', '⚠️ Campo de OTP não apareceu', cycle);
     }
 
   } catch (err: any) {
@@ -706,11 +650,7 @@ export class MockPlaywrightFlow {
     await ensureBrowser(headless);
   }
 
-  static async execute(
-    cadastroUrl: string,
-    opts: FlowOpts,
-    cycle: number
-  ): Promise<void> {
+  static async execute(cadastroUrl: string, opts: FlowOpts, cycle: number): Promise<void> {
     const timeoutHandle = setTimeout(() => {
       log('error', `⏰ Ciclo ${cycle} excedeu timeout de ${CYCLE_TIMEOUT_MS / 1000}s`, cycle);
       fecharContextoCiclo(cycle).catch(() => {});
@@ -722,9 +662,7 @@ export class MockPlaywrightFlow {
     }
   }
 
-  static async cleanup(): Promise<void> {
-    await closeBrowser();
-  }
+  static async cleanup(): Promise<void> { await closeBrowser(); }
 }
 
 // ─── Executor legado ──────────────────────────────────────────────────────────
