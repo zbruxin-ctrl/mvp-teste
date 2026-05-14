@@ -389,6 +389,81 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   return false;
 }
 
+// ─── FIX #4: Tela de re-autenticação pós-OTP ─────────────────────────────────
+//
+// Após o OTP o Uber redireciona para auth.uber.com com um form que contém
+// SIMULTANEAMENTE:
+//   - INPUT[type=email][id=username]       ← email para confirmar identidade
+//   - INPUT[type=password][id=PASSWORD]    ← senha da conta (novo-password)
+//
+// O processarTelaOnboarding não reconhecia esse par e ficava tentando clicar
+// #forward-button (que não existe nessa tela — o submit é um button[type=submit]
+// diferente). Agora detectamos o par e preenchemos ambos antes de submeter.
+
+async function tratarTelaReAuth(
+  p: Page,
+  email: string,
+  senha: string,
+  cycle: number
+): Promise<boolean> {
+  const temEmail = await p.locator('#username[type="email"], input[id="username"]')
+    .first().isVisible({ timeout: 3000 }).catch(() => false);
+  const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
+    .first().isVisible({ timeout: 2000 }).catch(() => false);
+
+  if (!temEmail || !temSenha) return false;
+
+  log('info', '🔐 Tela re-auth pós-OTP detectada (username + password)', cycle);
+  await cogPause(400, 800);
+
+  // Preenche email (username)
+  await forcarValorReact(p, '#username', email);
+  await humanTypeForce(p, '#username', email);
+  const emailVal = await p.locator('#username').inputValue().catch(() => '');
+  if (emailVal !== email) await forcarValorReact(p, '#username', email);
+  log('info', `✅ [re-auth] Email: "${await p.locator('#username').inputValue().catch(() => '')}"`, cycle);
+
+  await humanPause(randInt(sp(300), sp(600)));
+
+  // Preenche senha
+  const senhaSels = ['#PASSWORD', 'input[autocomplete="new-password"]', 'input[type="password"]'];
+  for (const sel of senhaSels) {
+    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+      await humanTypeForce(p, sel, senha);
+      log('info', `✅ [re-auth] Senha digitada (${sel})`, cycle);
+      break;
+    }
+  }
+
+  await cogPause(400, 800);
+
+  // Submete — o botão nessa tela é button[type=submit] ou #forward-button
+  const submitSels = [
+    'button[type="submit"]',
+    '#forward-button',
+    '[data-testid="forward-button"]',
+    'button:has-text("Continuar")',
+    'button:has-text("Continue")',
+    'button:has-text("Entrar")',
+    'button:has-text("Sign in")',
+  ];
+  for (const sel of submitSels) {
+    const el = p.locator(sel).first();
+    if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+      const box = await el.boundingBox().catch(() => null);
+      if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
+      await humanPause(randInt(sp(150), sp(350)));
+      await el.click({ timeout: 5000 });
+      log('info', `🖱️ [re-auth] Botão submit clicado (${sel})`, cycle);
+      await humanPause(randInt(sp(800), sp(1600)));
+      return true;
+    }
+  }
+
+  log('warn', '⚠️ [re-auth] Nenhum botão de submit encontrado', cycle);
+  return false;
+}
+
 // ─── Browser management ───────────────────────────────────────────────────────
 
 async function ensureBrowser(headless = false, proxyConfig?: string): Promise<void> {
@@ -699,7 +774,7 @@ async function preencherTelefone(p: Page, telefone: string, cycle: number): Prom
 
 async function processarTelaOnboarding(
   p: Page,
-  payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string },
+  payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string; email: string; senha: string },
   cycle: number,
   telaIdx: number
 ): Promise<boolean> {
@@ -708,6 +783,9 @@ async function processarTelaOnboarding(
   if (await tratarTelaWhatsApp(p, cycle)) return true;
   if (await tratarHubKYC(p, cycle)) return true;
   if (await tratarTelaFotoPerfil(p, cycle)) return true;
+
+  // FIX #4: detecta tela de re-auth (username + password juntos) ANTES do fluxo genérico
+  if (await tratarTelaReAuth(p, payload.email, payload.senha, cycle)) return true;
 
   try {
     const inputs = await p.$$eval('input:not([type="hidden"])', (els) =>
@@ -789,7 +867,7 @@ async function processarTelaOnboarding(
 
 async function etapa_posOTP(
   p: Page,
-  payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string },
+  payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string; email: string; senha: string },
   cycle: number
 ): Promise<'success' | 'onboarding' | 'unknown'> {
   const MAX_TELAS = 15;
@@ -870,7 +948,7 @@ async function _executarCiclo(
       log('warn', '⚠️ Tela inicial não detectada — tentando loop de onboarding direto', cycle);
       const resultado = await etapa_posOTP(
         page,
-        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode },
+        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
         cycle
       );
       if (resultado !== 'success') log('warn', `⚠️ Flow incompleto (sem tela inicial). URL: ${page.url()}`, cycle);
@@ -940,7 +1018,7 @@ async function _executarCiclo(
 
       const resultado = await etapa_posOTP(
         page,
-        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode },
+        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
         cycle
       );
 
