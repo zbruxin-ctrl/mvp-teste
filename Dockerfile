@@ -32,7 +32,11 @@ RUN npm install
 RUN npx playwright install chromium
 
 COPY . .
+
+# Compila TypeScript E copia src/frontend → dist/frontend
 RUN npm run build
 
 EXPOSE 3000
-CMD ["npm", "start"]
+
+# Apenas inicia o servidor (build ja foi feito acima)
+CMD ["npm", "run", "serve"]
