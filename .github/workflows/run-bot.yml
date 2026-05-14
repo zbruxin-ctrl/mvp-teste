@@ -17,7 +17,7 @@ on:
           - tempmailc
           - yopmail
       invite_code:
-        description: 'Código de convite (opcional)'
+        description: 'Codigo de convite (opcional)'
         required: false
         default: ''
         type: string
@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout do repositório
+      - name: Checkout do repositorio
         uses: actions/checkout@v4
 
       - name: Setup Node.js 20
@@ -42,7 +42,7 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Instalar dependências do sistema para Chromium
+      - name: Instalar dependencias do sistema para Chromium
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -65,7 +65,7 @@ jobs:
             libcairo2 \
             libatspi2.0-0
 
-      - name: Instalar dependências npm
+      - name: Instalar dependencias npm
         run: npm ci
 
       - name: Instalar Chromium via Playwright
@@ -83,35 +83,7 @@ jobs:
           BOT_HEADLESS: 'true'
           BOT_CADASTRO_URL: 'https://bonjour.uber.com/'
           TEMP_MAIL_API_KEY: ${{ secrets.TEMP_MAIL_API_KEY }}
-        run: node -e "
-          const { MockPlaywrightFlow } = require('./dist/playwright/mockFlow');
-          const ciclos = parseInt(process.env.BOT_CICLOS || '1');
-          const provider = process.env.BOT_EMAIL_PROVIDER || 'tempmailc';
-          const inviteCode = process.env.BOT_INVITE_CODE || '';
-          const otpTimeout = parseInt(process.env.BOT_OTP_TIMEOUT || '120') * 1000;
-          const cadastroUrl = process.env.BOT_CADASTRO_URL || 'https://bonjour.uber.com/';
-          const apiKey = process.env.TEMP_MAIL_API_KEY || '';
-
-          (async () => {
-            console.log('Iniciando bot: ' + ciclos + ' ciclo(s)');
-            await MockPlaywrightFlow.init(true);
-            const promises = [];
-            for (let i = 1; i <= ciclos; i++) {
-              promises.push(
-                MockPlaywrightFlow.execute(cadastroUrl, {
-                  emailProvider: provider,
-                  tempMailApiKey: apiKey,
-                  otpTimeout,
-                  extraDelay: 0,
-                  inviteCode,
-                }, i)
-              );
-            }
-            await Promise.all(promises);
-            await MockPlaywrightFlow.cleanup();
-            console.log('Bot finalizado!');
-          })().catch(e => { console.error(e); process.exit(1); });
-        "
+        run: node scripts/run-bot.js
 
       - name: Upload de artefatos (contas criadas)
         if: always()
