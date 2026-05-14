@@ -29,12 +29,23 @@ const MOBILE_DEVICE = devices['iPhone 14'];
 
 // ─── Helpers de detecção de estado da URL ─────────────────────────────────────
 
+// Destinos Uber que indicam autenticação concluída
+const UBER_SUCCESS_NEXT_URLS = [
+  'bonjour.uber.com',
+  'rider.uber.com',
+  'm.uber.com',
+  'uber.com/go',
+  'auth.uber.com',  // próprio auth redirect final
+];
+
 /**
- * URLs que indicam que o cadastro foi concluído com sucesso total
- * (usuário logado e dentro da plataforma).
+ * URLs que indicam cadastro concluído com sucesso.
+ * Inclui auth.uber.com/v2 quando next_url aponta para destino Uber conhecido
+ * (significa que o usuário foi autenticado e será redirecionado).
  */
 function isSuccessUrl(url: string): boolean {
-  return (
+  // Destinos finais diretos
+  if (
     url.includes('myaccount') ||
     url.includes('/home') ||
     url.includes('/dashboard') ||
@@ -42,17 +53,29 @@ function isSuccessUrl(url: string): boolean {
     url.includes('rider.uber.com') ||
     url.includes('m.uber.com/dl') ||
     url.includes('uber.com/go') ||
-    // Booking e outros alvos
     url.includes('/account') ||
     url.includes('/profile')
-  );
+  ) return true;
+
+  // auth.uber.com/v2 com next_url apontando para destino conhecido = usuário autenticado
+  if (url.includes('auth.uber.com')) {
+    try {
+      const parsed = new URL(url);
+      const nextUrl = parsed.searchParams.get('next_url') ?? '';
+      if (UBER_SUCCESS_NEXT_URLS.some(dest => nextUrl.includes(dest))) return true;
+    } catch { /* URL mal-formada — ignora */ }
+  }
+
+  return false;
 }
 
 /**
- * URLs que indicam etapa intermediária de cadastro (ainda dentro do funil).
- * Não são sucesso, mas também não são falha — o flow deve continuar.
+ * URLs que indicam etapa intermediária de cadastro (ainda no funil, sem next_url de sucesso).
  */
 function isOnboardingUrl(url: string): boolean {
+  // Se já é sucesso, não é onboarding
+  if (isSuccessUrl(url)) return false;
+
   return (
     url.includes('auth.uber.com') ||
     url.includes('/v2/') ||
@@ -424,10 +447,8 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
 }
 
 /**
- * Aguarda a navegação se estabilizar após uma ação crítica (ex: submit OTP).
- * Retorna a URL final estabilizada.
- * — Espera máxima: maxWaitMs (padrão: 12s)
- * — Considera "estabilizado" quando a URL parou de mudar por stableMs (padrão: 1.2s)
+ * Aguarda a navegação se estabilizar após uma ação crítica.
+ * Considera "estabilizado" quando a URL não muda por stableMs consecutivos.
  */
 async function aguardarNavegacaoEstabilizar(
   p: Page,
@@ -445,7 +466,7 @@ async function aguardarNavegacaoEstabilizar(
       lastUrl = cur;
       lastChange = Date.now();
     } else if (Date.now() - lastChange >= stableMs) {
-      break; // URL estabilizou
+      break;
     }
   }
   return p.url();
@@ -453,8 +474,8 @@ async function aguardarNavegacaoEstabilizar(
 
 /**
  * Etapa pós-OTP: lida com telas intermediárias do Uber após verificação do código.
- * Fluxo possível após OTP:
- *   auth.uber.com/v2/ com sm_flow_id → tela de dados pessoais (nome/sobrenome) → submit → sucesso
+ * Se auth.uber.com/v2 com next_url=bonjour.uber.com → já é sucesso, encerra imediatamente.
+ * Se ainda está em onboarding sem next_url → tenta preencher campos e avançar.
  */
 async function etapa_posOTP(
   p: Page,
@@ -464,88 +485,72 @@ async function etapa_posOTP(
   const url = await aguardarNavegacaoEstabilizar(p, 12_000, 1_200);
   log('info', `🔍 URL pós-OTP estabilizada: ${url}`, cycle);
 
-  // Caso 1: já chegou na URL de sucesso — nada a fazer
+  // Sucesso direto — auth.uber.com/v2 com next_url conhecido, ou destino final
   if (isSuccessUrl(url)) {
-    log('success', `🎉 Sucesso direto pós-OTP: ${url}`, cycle);
+    log('success', `🎉 Autenticação concluída pós-OTP: ${url}`, cycle);
     return;
   }
 
-  // Caso 2: ainda em onboarding (auth.uber.com/v2, /signup, etc)
+  // Ainda em onboarding sem next_url de sucesso — há campos a preencher
   if (isOnboardingUrl(url)) {
-    log('info', '📋 Tela de onboarding detectada pós-OTP — verificando campos...', cycle);
+    log('info', '📋 Tela de onboarding pós-OTP — verificando campos...', cycle);
 
-    // Aguarda até algum campo de input aparecer (nome, sobrenome, telefone, etc)
     const inputVisivel = await p.locator('input:not([type="hidden"])').first()
       .isVisible({ timeout: 8_000 }).catch(() => false);
 
     if (inputVisivel) {
-      // Tenta preencher nome
-      const nomeSel = [
-        '[data-testid*="first-name"]',
-        '[name="firstName"]',
-        '[id*="first"]',
-        '[placeholder*="irst"]',
-        '[placeholder*="ome"]',
-      ];
-      for (const sel of nomeSel) {
+      for (const sel of [
+        '[data-testid*="first-name"]', '[name="firstName"]',
+        '[id*="first"]', '[placeholder*="irst"]', '[placeholder*="ome"]',
+      ]) {
         if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
           await humanTypeForce(p, sel, payload.nome);
-          log('info', `✅ Nome preenchido na tela pós-OTP`, cycle);
+          log('info', '✅ Nome preenchido na tela pós-OTP', cycle);
           break;
         }
       }
 
       await humanPause(randInt(sp(200), sp(450)));
 
-      // Tenta preencher sobrenome
-      const sobreSel = [
-        '[data-testid*="last-name"]',
-        '[name="lastName"]',
-        '[id*="last"]',
-        '[placeholder*="ast"]',
-        '[placeholder*="obrenome"]',
-      ];
-      for (const sel of sobreSel) {
+      for (const sel of [
+        '[data-testid*="last-name"]', '[name="lastName"]',
+        '[id*="last"]', '[placeholder*="ast"]', '[placeholder*="obrenome"]',
+      ]) {
         if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
           await humanTypeForce(p, sel, payload.sobrenome);
-          log('info', `✅ Sobrenome preenchido na tela pós-OTP`, cycle);
+          log('info', '✅ Sobrenome preenchido na tela pós-OTP', cycle);
           break;
         }
       }
 
       await cogPause(400, 900);
 
-      // Tenta seletor de cidade se aparecer
       const cidadeVis = await p.locator('[data-testid="flow-type-city-selector-v2-input"]').first()
         .isVisible({ timeout: 2000 }).catch(() => false);
       if (cidadeVis) await selecionarCidade(p, payload.cidade, cycle);
 
-      // Aceita termos se houver
       try { await aceitarTermos(p); } catch { /* não obrigatório */ }
 
-      // Clica no botão de avançar
       await clickForwardButton(p, cycle);
       log('info', '👉 Botão de avançar clicado na tela pós-OTP', cycle);
 
-      // Aguarda URL estabilizar novamente
       const urlFinal = await aguardarNavegacaoEstabilizar(p, 15_000, 1_500);
       log('info', `🔍 URL após submit pós-OTP: ${urlFinal}`, cycle);
 
       if (isSuccessUrl(urlFinal)) {
         log('success', `🎉 Sucesso após tela pós-OTP: ${urlFinal}`, cycle);
       } else if (isOnboardingUrl(urlFinal)) {
-        log('info', `🔄 Ainda em onboarding: ${urlFinal} — flow contínuo OK`, cycle);
+        log('info', `🔄 Ainda em onboarding: ${urlFinal}`, cycle);
       } else {
         log('warn', `⚠️ URL inesperada após tela pós-OTP: ${urlFinal}`, cycle);
       }
     } else {
-      log('info', '💭 Nenhum campo de input na tela pós-OTP — aguardando navegação automática...', cycle);
-      // Pode ser uma tela de transição que navega sozinha
+      // Tela de transição sem inputs — aguarda navegação automática
+      log('info', '💭 Tela de transição — aguardando navegação automática...', cycle);
       const urlFinal = await aguardarNavegacaoEstabilizar(p, 12_000, 2_000);
       log('info', `🔍 URL após espera: ${urlFinal}`, cycle);
     }
   } else {
-    // URL completamente inesperada
     log('warn', `⚠️ URL pós-OTP não reconhecida: ${url}`, cycle);
   }
 }
@@ -588,7 +593,7 @@ async function _executarCiclo(
 
     await dispensarCookies(page);
 
-    // ⭐ 3. Aquecer página ANTES de qualquer interação com formulário
+    // ⭐ 3. Aquecer página ANTES de qualquer interação
     await pageWarmup(page, cycle);
 
     // Etapa 1: email
@@ -634,7 +639,7 @@ async function _executarCiclo(
       await cogPause(400, 900);
       await clickForwardButton(page, cycle);
 
-      // ⭐ Etapa pós-OTP: lida com redirect para auth.uber.com/v2 (nome/sobrenome)
+      // ⭐ Etapa pós-OTP: resolve redirect para auth.uber.com/v2
       await etapa_posOTP(page, payload, cycle);
     }
 
@@ -656,8 +661,7 @@ async function _executarCiclo(
       });
       await ArtifactsManager.saveErrorArtifacts(page, cycle);
     } else if (isOnboardingUrl(urlFinal)) {
-      // Flow chegou ao fim do código mas ainda está em tela de cadastro.
-      // Registrar conta mesmo assim pois o OTP foi validado com sucesso.
+      // OTP validado mas ainda em tela de cadastro — salva mesmo assim
       log('success', `✅ Ciclo concluído (OTP validado) | URL atual: ${urlFinal}`, cycle);
       accountStore.save({
         cycle,
