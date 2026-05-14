@@ -406,8 +406,10 @@ async function tratarTelaSenhaFluxo(
   // Se username está visível, é re-auth — deixa para tratarTelaReAuth
   if (usernameVisivel) return false;
 
+  // FIX TS2339: .isAttached() não existe na API do Locator do Playwright.
+  // Usamos .count() > 0 que é equivalente e sempre compila.
   const temUsernameAttached = await p.locator('#username, input[id="username"]')
-    .first().isAttached().catch(() => false);
+    .count().then((n) => n > 0).catch(() => false);
 
   log('info', '🔑 Tela de senha do fluxo detectada (pós-OTP)', cycle);
   await cogPause(400, 800);
@@ -473,17 +475,6 @@ async function tratarTelaSenhaFluxo(
 }
 
 // ─── FIX #7: Tela de re-autenticação com username + password VISÍVEIS ─────────
-//
-// PROBLEMA ORIGINAL: o bot ficava em loop da Tela 2 à Tela 14 sem avançar.
-// Causa: tratarTelaReAuth não usava forcarValorReact no email nem no password,
-// e não aguardava o #forward-button habilitar antes de clicar — o React nunca
-// considerava o form válido, o botão permanecia disabled, e a URL não mudava.
-//
-// CORREÇÃO:
-//  1. Limpa + forcarValorReact + humanTypeForce em AMBOS os campos (email e senha)
-//  2. Após preencher senha, dispara blur para forçar validação React
-//  3. Aguarda #forward-button enabled (até 5s) antes de clicar
-//  4. Se ainda disabled, re-força os valores e tenta novamente (até 3x)
 
 async function tratarTelaReAuth(
   p: Page,
@@ -501,10 +492,8 @@ async function tratarTelaReAuth(
   log('info', '🔐 Tela re-auth detectada (username + password visíveis) — FIX #7', cycle);
   await cogPause(400, 800);
 
-  // ── Preenche email com React-safe ────────────────────────────────────────
   const emailSel = '#username';
 
-  // Limpa
   await p.locator(emailSel).evaluate((el: HTMLInputElement) => {
     const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
     if (nativeSet) nativeSet.call(el, '');
@@ -514,12 +503,10 @@ async function tratarTelaReAuth(
   }).catch(() => {});
   await humanPause(randInt(sp(80), sp(160)));
 
-  // Força via React setter + digita
   await forcarValorReact(p, emailSel, email);
   await humanPause(randInt(sp(100), sp(200)));
   await humanTypeForce(p, emailSel, email);
 
-  // Verifica e re-força se necessário
   const emailVal = await p.locator(emailSel).inputValue().catch(() => '');
   if (emailVal !== email) {
     log('warn', `⚠️ [re-auth] Email incorreto após digitação — re-forçando`, cycle);
@@ -527,7 +514,6 @@ async function tratarTelaReAuth(
     await humanPause(randInt(sp(200), sp(400)));
   }
 
-  // Blur para validação React
   await p.locator(emailSel).evaluate((el) => {
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
   }).catch(() => {});
@@ -535,7 +521,6 @@ async function tratarTelaReAuth(
 
   log('info', `✅ [re-auth] Email: "${await p.locator(emailSel).inputValue().catch(() => '')}"`, cycle);
 
-  // ── Preenche senha com React-safe ────────────────────────────────────────
   const senhaSels = ['#PASSWORD', 'input[autocomplete="new-password"]', 'input[autocomplete="current-password"]', 'input[type="password"]'];
   let senhaSel = '';
 
@@ -543,7 +528,6 @@ async function tratarTelaReAuth(
     if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
       senhaSel = sel;
 
-      // Limpa
       await p.locator(sel).evaluate((el: HTMLInputElement) => {
         const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
         if (nativeSet) nativeSet.call(el, '');
@@ -553,7 +537,6 @@ async function tratarTelaReAuth(
       }).catch(() => {});
       await humanPause(randInt(sp(80), sp(160)));
 
-      // Força via React setter + digita
       await forcarValorReact(p, sel, senha);
       await humanPause(randInt(sp(120), sp(240)));
       await humanTypeForce(p, sel, senha);
@@ -565,7 +548,6 @@ async function tratarTelaReAuth(
         await humanPause(randInt(sp(200), sp(400)));
       }
 
-      // Blur para disparar validação React
       await p.locator(sel).evaluate((el) => {
         el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
       }).catch(() => {});
@@ -576,7 +558,6 @@ async function tratarTelaReAuth(
     }
   }
 
-  // ── Aguarda #forward-button habilitar (até 5s, tenta re-forçar se necessário) ──
   const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
 
   let habilitado = false;
@@ -589,7 +570,6 @@ async function tratarTelaReAuth(
 
     log('warn', `⚠️ [re-auth] forward-button ainda disabled (tentativa ${tentativa}/3) — re-forçando valores`, cycle);
 
-    // Re-força ambos os campos
     await forcarValorReact(p, emailSel, email);
     if (senhaSel) {
       await forcarValorReact(p, senhaSel, senha);
@@ -606,7 +586,6 @@ async function tratarTelaReAuth(
 
   await cogPause(300, 600);
 
-  // ── Clica o botão de submit ───────────────────────────────────────────────
   const submitSels = [
     '#forward-button',
     '[data-testid="forward-button"]',
@@ -957,11 +936,7 @@ async function processarTelaOnboarding(
   if (await tratarTelaWhatsApp(p, cycle)) return true;
   if (await tratarHubKYC(p, cycle)) return true;
   if (await tratarTelaFotoPerfil(p, cycle)) return true;
-
-  // FIX #6: tela de senha isolada pós-OTP (username hidden + password visível)
   if (await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle)) return true;
-
-  // FIX #7: tela re-auth onde username E password estão ambos visíveis
   if (await tratarTelaReAuth(p, payload.email, payload.senha, cycle)) return true;
 
   try {
@@ -1132,13 +1107,11 @@ async function _executarCiclo(
       return;
     }
 
-    // ── Etapa 1: Email ────────────────────────────────────────────────────────
     await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
     await cogPause(400, 900);
     await clickForwardButton(page, cycle);
     await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
 
-    // ── Etapa 2: Nome/Sobrenome (se aparecer antes do OTP) ────────────────────
     const nomeVisiblePreOTP = await page.locator(
       '#FIRST_NAME, [autocomplete="given-name"]'
     ).first().isVisible({ timeout: 5000 }).catch(() => false);
@@ -1164,7 +1137,6 @@ async function _executarCiclo(
       await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
     }
 
-    // ── Etapa 3: Termos (se aparecer antes do OTP) ────────────────────────────
     const termosVisiblePreOTP = await page.locator('[data-testid="accept-terms"]').first()
       .isVisible({ timeout: 3000 }).catch(() => false);
     if (termosVisiblePreOTP) {
@@ -1174,7 +1146,6 @@ async function _executarCiclo(
       await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
     }
 
-    // ── Etapa 4: OTP ──────────────────────────────────────────────────────────
     const otpVisible = await page.locator(
       '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
