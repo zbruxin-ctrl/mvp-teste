@@ -137,15 +137,7 @@ app.post('/api/diagnose', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/logs/clear', requireAuth, (_req, res) => {
-  globalState.clearLogs();
-  res.json({ ok: true });
-});
-app.post('/api/kyc/clear', requireAuth, (_req, res) => {
-  globalState.clearKycState();
-  res.json({ ok: true });
-});
-
+// ── Limpar logs e KYC (DELETE canônico) ──────────────────
 app.delete('/api/logs', requireAuth, (_req, res) => {
   globalState.clearLogs();
   res.json({ ok: true });
@@ -172,7 +164,8 @@ app.post('/api/start', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/run-once', requireAuth, (req, res) => {
+// /api/run-once foi alias de start-once — mantido apenas start-once como canônico
+app.post('/api/start-once', requireAuth, (req, res) => {
   if (req.body?.config) {
     const result = validateConfig(req.body.config);
     if (!result.ok) { res.status(400).json({ ok: false, error: result.error }); return; }
@@ -182,7 +175,8 @@ app.post('/api/run-once', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/start-once', requireAuth, (req, res) => {
+// Alias mantido por retrocompatibilidade com frontend antigo
+app.post('/api/run-once', requireAuth, (req, res) => {
   if (req.body?.config) {
     const result = validateConfig(req.body.config);
     if (!result.ok) { res.status(400).json({ ok: false, error: result.error }); return; }
