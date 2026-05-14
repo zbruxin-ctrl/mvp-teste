@@ -26,9 +26,6 @@ let currentLaunchProxy: string | null = null;
 const contextosPorCiclo = new Map<number, import('playwright').BrowserContext>();
 
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
-// FIX #1: viewport explícito 390×844 — o --window-size do args não afeta
-// o viewport do contexto quando se usa devices[]. Definimos aqui para garantir
-// que a página renderize como iPhone 14 real (390×844) e não com dimensões erradas.
 const MOBILE_DEVICE = {
   ...devices['iPhone 14'],
   viewport: { width: 390, height: 844 },
@@ -390,18 +387,8 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
 }
 
 // ─── FIX #6: Tela de senha isolada pós-OTP ───────────────────────────────────
-//
-// No fluxo real: email → OTP → telefone → SENHA → nome/cidade/...
-//
-// A tela de senha aparece com #PASSWORD (visible) mas #username está
-// HIDDEN (visible: false, apenas attached ao DOM). O tratarTelaReAuth
-// antigo exigia isVisible para #username e falhava silenciosamente,
-// causando travamento no loop de onboarding.
-//
-// FIX: usa isAttached para #username — se estiver no DOM (mesmo hidden)
-// junto com #PASSWORD visível, é a tela de senha. Preenche senha,
-// dispara clickForwardButton e retorna true para o loop continuar
-// para as telas seguintes (telefone/nome/cidade já foram antes ou vêm depois).
+// #PASSWORD visível + #username HIDDEN no DOM = tela de criação de senha.
+// Diferente da re-auth onde ambos ficam visíveis.
 
 async function tratarTelaSenhaFluxo(
   p: Page,
@@ -409,34 +396,28 @@ async function tratarTelaSenhaFluxo(
   senha: string,
   cycle: number
 ): Promise<boolean> {
-  // #PASSWORD visível é condição obrigatória
   const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
     .first().isVisible({ timeout: 2000 }).catch(() => false);
   if (!temSenha) return false;
 
-  // #username attached (mesmo hidden) indica tela de senha do fluxo Uber
-  // Se não tiver #username no DOM, pode ser outra tela com senha — ainda trata
-  const temUsernameAttached = await p.locator('#username, input[id="username"]')
-    .first().isAttached().catch(() => false);
-
-  // Garante que não é a tela de re-auth com username VISÍVEL (tratada separado)
   const usernameVisivel = await p.locator('#username, input[id="username"]')
     .first().isVisible({ timeout: 500 }).catch(() => false);
 
-  // Se username está visível, deixa para tratarTelaReAuth
+  // Se username está visível, é re-auth — deixa para tratarTelaReAuth
   if (usernameVisivel) return false;
+
+  const temUsernameAttached = await p.locator('#username, input[id="username"]')
+    .first().isAttached().catch(() => false);
 
   log('info', '🔑 Tela de senha do fluxo detectada (pós-OTP)', cycle);
   await cogPause(400, 800);
 
-  // Se #username está no DOM (hidden), preenche silenciosamente para o React
   if (temUsernameAttached) {
     await forcarValorReact(p, '#username', email);
     log('info', `✅ [senha-fluxo] Username hidden preenchido via React setter`, cycle);
     await humanPause(randInt(sp(100), sp(200)));
   }
 
-  // Preenche a senha com o padrão React-safe (limpa → forçar setter → humanTypeForce)
   const senhaSels = [
     '#PASSWORD',
     'input[autocomplete="new-password"]',
@@ -447,7 +428,6 @@ async function tratarTelaSenhaFluxo(
 
   for (const sel of senhaSels) {
     if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
-      // Limpa via React setter
       await p.locator(sel).evaluate((el: HTMLInputElement) => {
         const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
         if (nativeSet) nativeSet.call(el, '');
@@ -457,14 +437,10 @@ async function tratarTelaSenhaFluxo(
       }).catch(() => {});
       await humanPause(randInt(sp(80), sp(160)));
 
-      // Força valor via React setter para habilitar o forward-button
       await forcarValorReact(p, sel, senha);
       await humanPause(randInt(sp(120), sp(240)));
-
-      // Digita normalmente (Arkose-safe)
       await humanTypeForce(p, sel, senha);
 
-      // Verifica valor final
       const val = await p.locator(sel).inputValue().catch(() => '');
       if (val !== senha) {
         log('warn', `⚠️ [senha-fluxo] Valor incorreto após digitação — re-forçando`, cycle);
@@ -472,7 +448,6 @@ async function tratarTelaSenhaFluxo(
         await humanPause(randInt(sp(200), sp(400)));
       }
 
-      // Aguarda forward-button habilitar (até 3s)
       const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
       const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 3000 })
         .then(() => fwdBtn.isEnabled({ timeout: 3000 }))
@@ -491,18 +466,24 @@ async function tratarTelaSenhaFluxo(
   }
 
   await cogPause(400, 900);
-
-  // Clica forward-button para avançar para a próxima tela do fluxo
   await clickForwardButton(p, cycle);
   log('info', '👉 [senha-fluxo] Avançado após senha', cycle);
   await humanPause(randInt(sp(800), sp(1600)));
   return true;
 }
 
-// ─── FIX #4 (mantido): Tela de re-autenticação com username VISÍVEL ───────────
+// ─── FIX #7: Tela de re-autenticação com username + password VISÍVEIS ─────────
 //
-// Tela onde AMBOS username E password estão visíveis ao mesmo tempo.
-// Diferente da tela de senha do fluxo normal onde #username fica hidden.
+// PROBLEMA ORIGINAL: o bot ficava em loop da Tela 2 à Tela 14 sem avançar.
+// Causa: tratarTelaReAuth não usava forcarValorReact no email nem no password,
+// e não aguardava o #forward-button habilitar antes de clicar — o React nunca
+// considerava o form válido, o botão permanecia disabled, e a URL não mudava.
+//
+// CORREÇÃO:
+//  1. Limpa + forcarValorReact + humanTypeForce em AMBOS os campos (email e senha)
+//  2. Após preencher senha, dispara blur para forçar validação React
+//  3. Aguarda #forward-button enabled (até 5s) antes de clicar
+//  4. Se ainda disabled, re-força os valores e tenta novamente (até 3x)
 
 async function tratarTelaReAuth(
   p: Page,
@@ -510,56 +491,141 @@ async function tratarTelaReAuth(
   senha: string,
   cycle: number
 ): Promise<boolean> {
-  // Ambos precisam estar VISÍVEIS para ser re-auth
-  const temEmail = await p.locator('#username[type="email"], input[id="username"]')
+  const temEmail = await p.locator('#username, input[id="username"]')
     .first().isVisible({ timeout: 2000 }).catch(() => false);
   const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
     .first().isVisible({ timeout: 2000 }).catch(() => false);
 
   if (!temEmail || !temSenha) return false;
 
-  log('info', '🔐 Tela re-auth detectada (username + password visíveis)', cycle);
+  log('info', '🔐 Tela re-auth detectada (username + password visíveis) — FIX #7', cycle);
   await cogPause(400, 800);
 
-  // Preenche email (username)
-  await forcarValorReact(p, '#username', email);
-  await humanTypeForce(p, '#username', email);
-  const emailVal = await p.locator('#username').inputValue().catch(() => '');
-  if (emailVal !== email) await forcarValorReact(p, '#username', email);
-  log('info', `✅ [re-auth] Email: "${await p.locator('#username').inputValue().catch(() => '')}"`, cycle);
+  // ── Preenche email com React-safe ────────────────────────────────────────
+  const emailSel = '#username';
 
-  await humanPause(randInt(sp(300), sp(600)));
+  // Limpa
+  await p.locator(emailSel).evaluate((el: HTMLInputElement) => {
+    const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (nativeSet) nativeSet.call(el, '');
+    else el.value = '';
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }).catch(() => {});
+  await humanPause(randInt(sp(80), sp(160)));
 
-  // Preenche senha
-  const senhaSels = ['#PASSWORD', 'input[autocomplete="new-password"]', 'input[type="password"]'];
+  // Força via React setter + digita
+  await forcarValorReact(p, emailSel, email);
+  await humanPause(randInt(sp(100), sp(200)));
+  await humanTypeForce(p, emailSel, email);
+
+  // Verifica e re-força se necessário
+  const emailVal = await p.locator(emailSel).inputValue().catch(() => '');
+  if (emailVal !== email) {
+    log('warn', `⚠️ [re-auth] Email incorreto após digitação — re-forçando`, cycle);
+    await forcarValorReact(p, emailSel, email);
+    await humanPause(randInt(sp(200), sp(400)));
+  }
+
+  // Blur para validação React
+  await p.locator(emailSel).evaluate((el) => {
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  }).catch(() => {});
+  await humanPause(randInt(sp(200), sp(400)));
+
+  log('info', `✅ [re-auth] Email: "${await p.locator(emailSel).inputValue().catch(() => '')}"`, cycle);
+
+  // ── Preenche senha com React-safe ────────────────────────────────────────
+  const senhaSels = ['#PASSWORD', 'input[autocomplete="new-password"]', 'input[autocomplete="current-password"]', 'input[type="password"]'];
+  let senhaSel = '';
+
   for (const sel of senhaSels) {
     if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+      senhaSel = sel;
+
+      // Limpa
+      await p.locator(sel).evaluate((el: HTMLInputElement) => {
+        const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSet) nativeSet.call(el, '');
+        else el.value = '';
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(80), sp(160)));
+
+      // Força via React setter + digita
+      await forcarValorReact(p, sel, senha);
+      await humanPause(randInt(sp(120), sp(240)));
       await humanTypeForce(p, sel, senha);
+
+      const senhaVal = await p.locator(sel).inputValue().catch(() => '');
+      if (senhaVal !== senha) {
+        log('warn', `⚠️ [re-auth] Senha incorreta após digitação — re-forçando`, cycle);
+        await forcarValorReact(p, sel, senha);
+        await humanPause(randInt(sp(200), sp(400)));
+      }
+
+      // Blur para disparar validação React
+      await p.locator(sel).evaluate((el) => {
+        el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(200), sp(400)));
+
       log('info', `✅ [re-auth] Senha digitada (${sel})`, cycle);
       break;
     }
   }
 
-  await cogPause(400, 800);
+  // ── Aguarda #forward-button habilitar (até 5s, tenta re-forçar se necessário) ──
+  const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
 
+  let habilitado = false;
+  for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 5000 })
+      .then(() => fwdBtn.isEnabled({ timeout: 5000 }))
+      .catch(() => false);
+
+    if (habilitado) break;
+
+    log('warn', `⚠️ [re-auth] forward-button ainda disabled (tentativa ${tentativa}/3) — re-forçando valores`, cycle);
+
+    // Re-força ambos os campos
+    await forcarValorReact(p, emailSel, email);
+    if (senhaSel) {
+      await forcarValorReact(p, senhaSel, senha);
+      await p.locator(senhaSel).evaluate((el) => {
+        el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      }).catch(() => {});
+    }
+    await humanPause(randInt(sp(400), sp(800)));
+  }
+
+  if (!habilitado) {
+    log('warn', '⚠️ [re-auth] forward-button nunca habilitou — tentando clicar de qualquer forma', cycle);
+  }
+
+  await cogPause(300, 600);
+
+  // ── Clica o botão de submit ───────────────────────────────────────────────
   const submitSels = [
-    'button[type="submit"]',
     '#forward-button',
     '[data-testid="forward-button"]',
+    'button[type="submit"]',
     'button:has-text("Continuar")',
     'button:has-text("Continue")',
     'button:has-text("Entrar")',
     'button:has-text("Sign in")',
   ];
+
   for (const sel of submitSels) {
     const el = p.locator(sel).first();
     if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
       await humanPause(randInt(sp(150), sp(350)));
-      await el.click({ timeout: 5000 });
+      await el.click({ force: true, timeout: 5000 });
       log('info', `🖱️ [re-auth] Botão submit clicado (${sel})`, cycle);
-      await humanPause(randInt(sp(800), sp(1600)));
+      await humanPause(randInt(sp(1000), sp(2000)));
       return true;
     }
   }
@@ -585,7 +651,6 @@ async function ensureBrowser(headless = false, proxyConfig?: string): Promise<vo
         '--no-sandbox', '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
-        // FIX #1: window-size alinhado com o viewport 390×844 do MOBILE_DEVICE
         '--window-size=390,844',
       ],
     };
@@ -613,7 +678,6 @@ export async function closeBrowser(): Promise<void> {
 // ─── Context por ciclo ────────────────────────────────────────────────────────
 
 async function criarContextoCiclo(cycle: number): Promise<import('playwright').BrowserContext> {
-  // FIX #1: viewport e screen explícitos para garantir 390×844 correto
   const ctx = await browser!.newContext({
     ...MOBILE_DEVICE,
     viewport: { width: 390, height: 844 },
@@ -632,16 +696,11 @@ async function criarContextoCiclo(cycle: number): Promise<import('playwright').B
 
 async function fecharContextoCiclo(cycle: number): Promise<void> {
   const ctx = contextosPorCiclo.get(cycle);
-  // FIX #2: fecha apenas o CONTEXTO do ciclo, nunca o browser global.
-  // O browser só fecha via closeBrowser() no SIGINT/SIGTERM.
   if (ctx) { await ctx.close().catch(() => {}); contextosPorCiclo.delete(cycle); }
 }
 
 // ─── Etapas do flow ───────────────────────────────────────────────────────────
 
-/**
- * FIX #3 — Digitar email no campo inicial.
- */
 async function forcarValorReact(p: Page, selector: string, value: string): Promise<void> {
   await p.locator(selector).evaluate((el: HTMLInputElement, val: string) => {
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
@@ -770,9 +829,6 @@ async function etapa_aguardarOTP(
   return otp;
 }
 
-/**
- * Digita o OTP nos campos individuais do Uber (EMAIL_OTP_CODE-0..3).
- */
 async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<void> {
   log('info', `🔢 Digitando OTP: ${otp}`, cycle);
 
@@ -903,10 +959,9 @@ async function processarTelaOnboarding(
   if (await tratarTelaFotoPerfil(p, cycle)) return true;
 
   // FIX #6: tela de senha isolada pós-OTP (username hidden + password visível)
-  // DEVE vir antes do handler genérico para não ser engolida por ele
   if (await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle)) return true;
 
-  // FIX #4: tela re-auth onde username E password estão ambos visíveis
+  // FIX #7: tela re-auth onde username E password estão ambos visíveis
   if (await tratarTelaReAuth(p, payload.email, payload.senha, cycle)) return true;
 
   try {
@@ -1084,9 +1139,6 @@ async function _executarCiclo(
     await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
 
     // ── Etapa 2: Nome/Sobrenome (se aparecer antes do OTP) ────────────────────
-    // No fluxo Uber Motorista: email → nome/sobrenome → termos → OTP → tel → senha
-    // No fluxo Uber Passageiro bonjour: email → OTP → tel → senha → ...
-    // Verificamos se nome já apareceu aqui (alguns fluxos mostram antes do OTP)
     const nomeVisiblePreOTP = await page.locator(
       '#FIRST_NAME, [autocomplete="given-name"]'
     ).first().isVisible({ timeout: 5000 }).catch(() => false);
@@ -1134,10 +1186,6 @@ async function _executarCiclo(
       log('info', '⏳ Aguardando navegação automática pós-OTP...', cycle);
       await aguardarNavegacaoEstabilizar(page, 8_000, 1_500);
 
-      // ── Etapas 5+: telefone → senha → nome → cidade → ... ─────────────────
-      // Tudo após o OTP é tratado pelo loop etapa_posOTP que chama
-      // processarTelaOnboarding em cada tela. O tratarTelaSenhaFluxo
-      // dentro do loop cuida da tela de senha com #username hidden.
       const resultado = await etapa_posOTP(
         page,
         { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
@@ -1177,8 +1225,6 @@ async function _executarCiclo(
     log('error', `❌ Erro no ciclo: ${err?.message ?? err}`, cycle);
     throw err;
   } finally {
-    // FIX #2: fecha APENAS o contexto isolado do ciclo.
-    // O browser global permanece aberto para o próximo ciclo.
     await fecharContextoCiclo(cycle);
   }
 }
@@ -1213,7 +1259,6 @@ export class MockPlaywrightFlow {
     }
   }
 
-  // Chamado apenas no SIGINT/SIGTERM — nunca durante ciclos normais
   static async cleanup(): Promise<void> { await closeBrowser(); }
 }
 
