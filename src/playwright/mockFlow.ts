@@ -615,8 +615,19 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
 }
 
 /**
- * Tela de senha: usa #PASSWORD (id exato do Uber) com fallbacks.
- * autocomplete="new-password" indica criação de conta.
+ * FIX #5 — Tela de senha (etapa_digitarSenha).
+ *
+ * Diagnóstico via DevTools confirmou:
+ *   - #PASSWORD  → visible: true, autocomplete: "new-password", value: [vazio]
+ *   - #forward-button → disabled: true
+ *
+ * O #PASSWORD é um React controlled input. Apenas humanTypeForce não é
+ * suficiente para habilitar o #forward-button porque o React state interno
+ * nunca é sincronizado. Solução: forcarValorReact ANTES de humanTypeForce,
+ * igual ao padrão já usado no campo de email (FIX #3).
+ *
+ * Após digitar, verificamos o valor e aguardamos o botão habilitar antes
+ * de prosseguir para o clickForwardButton.
  */
 async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promise<void> {
   log('info', '🔑 Digitando senha...', cycle);
@@ -633,7 +644,45 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
     const visible = await p.locator(SEL).first().isVisible({ timeout: 5000 }).catch(() => false);
     if (visible) {
       log('info', `🔑 Campo senha encontrado: "${SEL}"`, cycle);
+
+      // FIX #5a: limpa via React nativeInputValueSetter antes de digitar
+      await p.locator(SEL).evaluate((el: HTMLInputElement) => {
+        const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSet) nativeSet.call(el, '');
+        else el.value = '';
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(80), sp(160)));
+
+      // FIX #5b: força o valor via React setter para habilitar o #forward-button
+      await forcarValorReact(p, SEL, senha);
+      await humanPause(randInt(sp(120), sp(240)));
+
+      // Digita normalmente para registrar keydown/keyup no Arkose
       await humanTypeForce(p, SEL, senha);
+
+      // FIX #5c: verifica valor final e re-força se necessário
+      const val = await p.locator(SEL).inputValue().catch(() => '');
+      if (val !== senha) {
+        log('warn', `⚠️ Valor pós-digitação da senha incorreto — forçando via React setter`, cycle);
+        await forcarValorReact(p, SEL, senha);
+        await humanPause(randInt(sp(200), sp(400)));
+      }
+
+      // FIX #5d: aguarda o #forward-button habilitar (até 3s) antes de retornar
+      const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
+      const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 3000 })
+        .then(() => fwdBtn.isEnabled({ timeout: 3000 }))
+        .catch(() => false);
+      if (!habilitado) {
+        log('warn', '⚠️ #forward-button ainda disabled após senha — disparando blur para forçar validação React', cycle);
+        await p.locator(SEL).evaluate((el) => {
+          el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+        }).catch(() => {});
+        await humanPause(randInt(sp(300), sp(600)));
+      }
+
       log('info', '✅ Senha digitada', cycle);
       return;
     }
