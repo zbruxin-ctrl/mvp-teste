@@ -7,7 +7,7 @@ export type CycleExecutor = (config: Config, cycle: number) => Promise<void>;
 // URL de cadastro fixa — não pode ser alterada pelo frontend
 export const CADASTRO_URL = 'https://bonjour.uber.com/';
 
-// ─── KYC State ────────────────────────────────────────────────────────────────
+// ─── KYC State ─────────────────────────────────────────────────────────────────
 
 export interface KycSignal {
   provider: 'Socure' | 'Veriff' | string;
@@ -33,7 +33,7 @@ function kycLevel(score: number): KycProviderState['level'] {
   return 'WEAK';
 }
 
-// ─── Payload por ciclo ────────────────────────────────────────────────────────
+// ─── Payload por ciclo ──────────────────────────────────────────────────────────
 
 export interface CyclePayload {
   nome: string;
@@ -45,7 +45,7 @@ export interface CyclePayload {
   codigoIndicacao: string;
 }
 
-// ─── Helpers de proxy ─────────────────────────────────────────────────────────
+// ─── Helpers de proxy ─────────────────────────────────────────────────────────────
 
 export function parseProxyString(raw: string): ProxyConfig | null {
   raw = raw.trim();
@@ -78,7 +78,7 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   return null;
 }
 
-// ─── GlobalState ──────────────────────────────────────────────────────────────
+// ─── GlobalState ─────────────────────────────────────────────────────────────────
 
 class GlobalState {
   private state: AppState = {
@@ -91,13 +91,13 @@ class GlobalState {
     config: {
       cadastroUrl: CADASTRO_URL,
       tempMailApiKey: '',
-      emailProvider: 'mail.tm',
+      emailProvider: 'tempmailc',
       inviteCode: '',
       otpTimeout: 90000,
       cycleInterval: 60000,
       extraDelay: 2000,
       parallelCycles: 1,
-      headless: true,
+      headless: false,
       proxies: [],
     },
     shouldStop: false,

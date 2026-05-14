@@ -7,13 +7,13 @@ import * as accountStore from '../store/accountStore';
 import { Config } from '../types';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 const ADMIN_PASSWORD = 'connect@10';
 
 app.use(express.json());
 
-// ── CORS ──────────────────────────────────────────────────
+// ── CORS ──────────────────────────────────────────────────────
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -22,7 +22,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use(express.static(path.join(__dirname, '../../src/frontend')));
+// Serve o frontend compilado em dist/frontend
+app.use(express.static(path.join(__dirname, '../frontend')));
 
 globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.init(config.headless);
@@ -125,7 +126,7 @@ app.get('/api/accounts', requireAuth, (_req, res) => {
   res.json({ accounts: accountStore.list() });
 });
 
-// ── Diagnóstico de seletores ───────────────────────────────
+// ── Diagnóstico de seletores ─────────────────────────────
 app.post('/api/diagnose', requireAuth, async (req: Request, res: Response) => {
   const url: string = req.body?.url ?? CADASTRO_URL;
   try {
@@ -201,8 +202,14 @@ app.delete('/api/accounts/:id', requireAuth, (req, res) => {
   res.json({ ok: removed });
 });
 
+// Fallback: qualquer rota desconhecida serve o index.html (SPA)
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+});
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server rodando em http://localhost:${PORT}`);
+  console.log(`\n🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`🔑 Senha do painel: connect@10\n`);
 });
 
 async function gracefulShutdown(signal: string) {
