@@ -46,7 +46,7 @@ function gerarTampermonkeyScript(cookies: Cookie[], email: string): string {
   const cookieJson = JSON.stringify(cookieArr);
   const header = [
     '// ==UserScript==',
-    `// @name         Uber Cookie Injector — ${email}`,
+    '// @name         Uber Cookie Injector — ' + email,
     '// @namespace    http://tampermonkey.net/',
     '// @version      1.0',
     '// @description  Injeta cookies de sessão Uber',
@@ -57,20 +57,20 @@ function gerarTampermonkeyScript(cookies: Cookie[], email: string): string {
     '// ==/UserScript==',
   ].join('\n');
   const body =
-    `(function(){` +
-    `var H=window.location.hostname,C=${cookieJson};` +
-    `var ok=function(d){d=d.replace(/^[.]/,"");return H===d||H.endsWith("."+d)};` +
-    `var EX=Date.now()+3154e7;` +
-    `C.forEach(function(c){` +
-    `var n=c[0],v=c[1],d=c[2],s=c[3],h=c[4],e=c[5]>0?c[5]:EX;` +
-    `if(typeof GM_cookie!="undefined")GM_cookie.set({name:n,value:v,domain:d.replace(/^[.]/,""),path:"/",secure:!!s,httpOnly:!!h,expirationDate:Math.floor(e/1000)},function(){});` +
-    `if(!h&&ok(d)){var ck=n+"="+v+";path=/;expires="+new Date(e).toUTCString()+(s?";secure":"")+";";` +
-    `try{document.cookie=ck;}catch(x){}}` +
-    `});` +
-    `var RAN="__scr_done";` +
-    `if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");` +
-    `setTimeout(function(){location.href="https://account.uber.com/security";},800);}` +
-    `})()`;
+    '(function(){' +
+    'var H=window.location.hostname,C=' + cookieJson + ';' +
+    'var ok=function(d){d=d.replace(/^[.]/,"");return H===d||H.endsWith("."+d)};' +
+    'var EX=Date.now()+3154e7;' +
+    'C.forEach(function(c){' +
+    'var n=c[0],v=c[1],d=c[2],s=c[3],h=c[4],e=c[5]>0?c[5]:EX;' +
+    'if(typeof GM_cookie!="undefined")GM_cookie.set({name:n,value:v,domain:d.replace(/^[.]/,""),path:"/",secure:!!s,httpOnly:!!h,expirationDate:Math.floor(e/1000)},function(){});' +
+    'if(!h&&ok(d)){var ck=n+"="+v+";path=/;expires="+new Date(e).toUTCString()+(s?";secure":"")+";";' +
+    'try{document.cookie=ck;}catch(x){}}' +
+    '});' +
+    'var RAN="__scr_done";' +
+    'if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");' +
+    'setTimeout(function(){location.href="https://account.uber.com/security";},800);}' +
+    '})()';
   return header + '\n' + body;
 }
 
@@ -448,16 +448,20 @@ async function fecharContextoCiclo(cycle: number): Promise<void> {
 // ─── Etapas do flow ───────────────────────────────────────────────────────────
 
 /**
- * Tela 1 (motoristas): campo #PHONE_NUMBER com placeholder "(11) 96123-4567".
- * Tela de login genérica: campo #PHONE_NUMBER_or_EMAIL_ADDRESS.
- * Tenta os dois seletores em ordem.
+ * Tela 1: campo #PHONE_NUMBER_or_EMAIL_ADDRESS aceita email ou telefone.
+ * O bot sempre envia o EMAIL para esta etapa inicial.
+ * Fallback para #PHONE_NUMBER caso o campo EMAIL não esteja presente.
  */
-async function etapa_digitarTelefoneOuEmail(p: Page, valor: string, cycle: number): Promise<void> {
-  log('info', `📱 Digitando telefone/email: ${valor}`, cycle);
+async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: number): Promise<void> {
+  log('info', `📧 Digitando email: ${email}`, cycle);
 
+  // Seletores em ordem de preferência — email primeiro
   const SELS = [
-    '#PHONE_NUMBER',
     '#PHONE_NUMBER_or_EMAIL_ADDRESS',
+    '#EMAIL_ADDRESS',
+    'input[autocomplete="email"]',
+    'input[type="email"]',
+    '#PHONE_NUMBER',
     'input[autocomplete="tel-national"]',
     'input[type="tel"]',
     'input[inputmode="tel"]',
@@ -466,14 +470,14 @@ async function etapa_digitarTelefoneOuEmail(p: Page, valor: string, cycle: numbe
   for (const SEL of SELS) {
     const visible = await p.locator(SEL).first().isVisible({ timeout: 5000 }).catch(() => false);
     if (visible) {
-      log('info', `📱 Campo encontrado: "${SEL}"`, cycle);
-      await humanTypeForce(p, SEL, valor);
-      log('info', '✅ Telefone/email digitado', cycle);
+      log('info', `[DEBUG] Campo "${SEL}" → "${email}"`, cycle);
+      await humanTypeForce(p, SEL, email);
+      log('info', '✅ Email digitado', cycle);
       return;
     }
   }
 
-  throw new Error('Campo de telefone/email não encontrado em nenhum seletor conhecido');
+  throw new Error('Campo de email/telefone não encontrado em nenhum seletor conhecido');
 }
 
 /**
@@ -804,12 +808,12 @@ async function _executarCiclo(
     await dispensarCookies(page);
     await pageWarmup(page, cycle);
 
-    const isTelefoneScreen = await page.locator(
-      '#PHONE_NUMBER, #PHONE_NUMBER_or_EMAIL_ADDRESS, input[autocomplete="tel-national"]'
+    const isTelaCampoInicial = await page.locator(
+      '#PHONE_NUMBER_or_EMAIL_ADDRESS, #EMAIL_ADDRESS, input[type="email"], #PHONE_NUMBER, input[autocomplete="tel-national"]'
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
 
-    if (!isTelefoneScreen) {
-      log('warn', '⚠️ Tela inicial de telefone não detectada — tentando loop de onboarding direto', cycle);
+    if (!isTelaCampoInicial) {
+      log('warn', '⚠️ Tela inicial não detectada — tentando loop de onboarding direto', cycle);
       const resultado = await etapa_posOTP(
         page,
         { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode },
@@ -819,7 +823,8 @@ async function _executarCiclo(
       return;
     }
 
-    await etapa_digitarTelefoneOuEmail(page, payload.telefone, cycle);
+    // Etapa 1: sempre usa o EMAIL (não o telefone)
+    await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
     await cogPause(400, 900);
     await clickForwardButton(page, cycle);
     await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
