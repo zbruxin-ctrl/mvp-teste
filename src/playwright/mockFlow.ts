@@ -1,6 +1,7 @@
 import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page, BrowserContext, devices } from 'playwright';
+import type { Cookie } from 'playwright';
 import { globalState } from '../state/globalState';
 import { createEmailClient } from '../tempMail/client';
 import { IEmailClient } from '../types/tempMail';
@@ -26,6 +27,42 @@ const contextosPorCiclo = new Map<number, import('playwright').BrowserContext>()
 
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const MOBILE_DEVICE = devices['iPhone 14'];
+
+// ─── Formato Tampermonkey ─────────────────────────────────────────────────────
+
+/**
+ * Converte cookies do Playwright para o array de arrays usado no Tampermonkey:
+ * [nome, valor, domínio, secure(0/1), httpOnly(0/1), expiresMs(-1 se session)]
+ */
+function cookiesToTampermonkey(cookies: Cookie[]): [string, string, string, number, number, number][] {
+  return cookies.map((c) => [
+    c.name,
+    c.value,
+    c.domain,
+    c.secure ? 1 : 0,
+    c.httpOnly ? 1 : 0,
+    c.expires > 0 ? Math.round(c.expires * 1000) : -1,
+  ]);
+}
+
+/**
+ * Gera o código completo do UserScript Tampermonkey pronto para colar.
+ */
+function gerarTampermonkeyScript(cookies: Cookie[], email: string): string {
+  const cookieArr = cookiesToTampermonkey(cookies);
+  const cookieJson = JSON.stringify(cookieArr);
+  return `// ==UserScript==
+// @name         Uber Cookie Injector — ${email}
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Injeta cookies de sessão Uber
+// @author       MVP
+// @match        https://*.uber.com/*
+// @grant        GM_cookie
+// @run-at       document-start
+// ==/UserScript==
+(function(){var H=window.location.hostname,C=${cookieJson};var ok=function(d){d=d.replace(/^[.]/,"");return H===d||H.endsWith("."+d)};var EX=Date.now()+3154e7;C.forEach(function(c){var n=c[0],v=c[1],d=c[2],s=c[3],h=c[4],e=c[5]>0?c[5]:EX;if(typeof GM_cookie!="undefined")GM_cookie.set({name:n,value:v,domain:d.replace(/^[.]/,""),path:"/",secure:!!s,httpOnly:!!h,expirationDate:Math.floor(e/1000)},function(){});if(!h&&ok(d)){var ck=n+"="+v+";path=/;expires="+new Date(e).toUTCString()+(s?";secure":"")+";";try{document.cookie=ck;}catch(x){}}});var RAN="__scr_done";if(!sessionStorage.getItem(RAN)){sessionStorage.setItem(RAN,"1");setTimeout(function(){location.href="https://account.uber.com/security";},800);}})()`;
+}
 
 // ─── Detecção de URL ──────────────────────────────────────────────────────────
 
@@ -706,6 +743,15 @@ async function _executarCiclo(
 
       if (resultado === 'success') {
         const urlFinal = page.url();
+
+        // ── Captura cookies reais do contexto ──────────────────────────────
+        const cookiesRaw: Cookie[] = await ctx.cookies().catch(() => []);
+        log('info', `🍪 ${cookiesRaw.length} cookies capturados`, cycle);
+
+        // Gera script Tampermonkey e loga para fácil cópia
+        const tmScript = gerarTampermonkeyScript(cookiesRaw, payload.email);
+        log('success', `📋 Tampermonkey Script:\n${tmScript}`, cycle);
+
         log('success', `🎉 Conta criada com sucesso! URL: ${urlFinal}`, cycle);
         accountStore.save({
           cycle,
@@ -717,7 +763,7 @@ async function _executarCiclo(
           senha: payload.senha,
           localizacao: payload.localizacao,
           codigoIndicacao: payload.codigoIndicacao,
-          cookies: [],
+          cookies: cookiesRaw,
         });
       } else {
         const urlFinal = page.url();
