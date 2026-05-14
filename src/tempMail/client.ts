@@ -563,10 +563,6 @@ export class YOPmailClient implements IEmailClient {
 // GET /html?email=&code=                → { status, html }
 // ──────────────────────────────────────────────────────────────────────────────────
 
-// Apenas serviços sabidamente suspeitos/abusados são bloqueados.
-// NÃO incluir padrões de TLD (*.it.com, *.us.com etc.) pois o tempmailc
-// usa exclusivamente domínios com esse formato — filtrá-los descarta a
-// lista inteira e força o fallback sem filtro de qualquer jeito.
 const BLOCKED_DOMAIN_PATTERNS = [
   /guerrillamail/i,
   /sharklasers/i,
@@ -632,6 +628,10 @@ export class TempMailCClient implements IEmailClient {
     if (!res) throw new Error(`[tempmailc] GET ${path}: timeout/rede`);
     if (!res.ok) {
       const txt = await res.text().catch(() => String(res.status));
+      // Marca como trial expirado para o fallback da factory detectar
+      if (res.status === 403 && txt.includes('trial_expired')) {
+        throw new Error(`[tempmailc:trial_expired] ${txt}`);
+      }
       throw new Error(`[tempmailc] GET ${path} → ${res.status}: ${txt}`);
     }
     const txt = await res.text();
@@ -687,7 +687,6 @@ export class TempMailCClient implements IEmailClient {
       if (isStopped()) throw new Error('Parado pelo usuário');
       poll++;
 
-      // ── Tenta /code primeiro (mais direto e barato) ──
       try {
         const codeResp = await withRetry(
           'tempmailc /code',
@@ -714,7 +713,6 @@ export class TempMailCClient implements IEmailClient {
         globalState.addLog('warn', `⚠️ [tempmailc] Erro em /code poll #${poll}: ${e instanceof Error ? e.message : e}`, cycle);
       }
 
-      // ── Fallback: /inbox para log e /html para parsear OTP ──
       try {
         const inboxResp = await withRetry(
           'tempmailc /inbox',
@@ -746,7 +744,6 @@ export class TempMailCClient implements IEmailClient {
             return otp;
           }
 
-          // Último recurso: tenta HTML
           try {
             const htmlResp = await withRetry(
               'tempmailc /html',
@@ -780,11 +777,53 @@ export class TempMailCClient implements IEmailClient {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────
-// createEmailClient — factory function
-// Mapeia o EmailProvider string para a implementação correta de IEmailClient.
-// Exportada para uso em mockFlow.ts e qualquer outro módulo que precise criar
-// um cliente de email sem depender diretamente das classes concretas.
+// createEmailClient — factory function com fallback automático
+//
+// Se o provider selecionado for 'tempmailc' e a API retornar 403 trial_expired,
+// o fallback é automático para 'mail.tm' (gratuito, sem API key).
+// Isso evita que o ciclo inteiro falhe apenas por trial expirado.
 // ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cria um wrapper IEmailClient com fallback automático.
+ * Se o provider primário falhar em createRandomEmail() com trial_expired ou
+ * qualquer erro de autenticação (403/401), delega automaticamente para mail.tm.
+ */
+class FallbackEmailClient implements IEmailClient {
+  private primary: IEmailClient;
+  private fallback: IEmailClient;
+  private active: IEmailClient;
+  private primaryName: string;
+
+  constructor(primary: IEmailClient, primaryName: string) {
+    this.primary = primary;
+    this.primaryName = primaryName;
+    this.fallback = new MailTmClient();
+    this.active = primary;
+  }
+
+  async createRandomEmail(): Promise<EmailAccount> {
+    try {
+      const result = await this.primary.createRandomEmail();
+      this.active = this.primary;
+      return result;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const isAuthError = msg.includes('trial_expired') || msg.includes('403') || msg.includes('401') || msg.includes('unauthorized');
+      if (isAuthError) {
+        globalState.addLog('warn',
+          `⚠️ [${this.primaryName}] Trial/auth expirado — ativando fallback automático para mail.tm`);
+        this.active = this.fallback;
+        return this.fallback.createRandomEmail();
+      }
+      throw e;
+    }
+  }
+
+  async waitForOTP(email: string, timeoutMs?: number, cycle?: number): Promise<string> {
+    return this.active.waitForOTP(email, timeoutMs, cycle);
+  }
+}
 
 export function createEmailClient(
   provider: 'temp-mail.io' | 'mail.tm' | 'yopmail' | 'tempmailc',
@@ -798,7 +837,8 @@ export function createEmailClient(
     case 'yopmail':
       return new YOPmailClient();
     case 'tempmailc':
-      return new TempMailCClient(apiKey);
+      // Wrap com fallback: se trial expirar, cai automaticamente para mail.tm
+      return new FallbackEmailClient(new TempMailCClient(apiKey), 'tempmailc');
     default: {
       const _exhaustive: never = provider;
       throw new Error(`[createEmailClient] Provider desconhecido: ${_exhaustive}`);
