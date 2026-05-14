@@ -26,7 +26,14 @@ let currentLaunchProxy: string | null = null;
 const contextosPorCiclo = new Map<number, import('playwright').BrowserContext>();
 
 const CYCLE_TIMEOUT_MS = 10 * 60 * 1_000;
-const MOBILE_DEVICE = devices['iPhone 14'];
+// FIX #1: viewport explícito 390×844 — o --window-size do args não afeta
+// o viewport do contexto quando se usa devices[]. Definimos aqui para garantir
+// que a página renderize como iPhone 14 real (390×844) e não com dimensões erradas.
+const MOBILE_DEVICE = {
+  ...devices['iPhone 14'],
+  viewport: { width: 390, height: 844 },
+  screen:   { width: 390, height: 844 },
+};
 
 // ─── Formato Tampermonkey ─────────────────────────────────────────────────────
 
@@ -399,6 +406,7 @@ async function ensureBrowser(headless = false, proxyConfig?: string): Promise<vo
         '--no-sandbox', '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
+        // FIX #1: window-size alinhado com o viewport 390×844 do MOBILE_DEVICE
         '--window-size=390,844',
       ],
     };
@@ -426,8 +434,11 @@ export async function closeBrowser(): Promise<void> {
 // ─── Context por ciclo ────────────────────────────────────────────────────────
 
 async function criarContextoCiclo(cycle: number): Promise<import('playwright').BrowserContext> {
+  // FIX #1: viewport e screen explícitos para garantir 390×844 correto
   const ctx = await browser!.newContext({
     ...MOBILE_DEVICE,
+    viewport: { width: 390, height: 844 },
+    screen:   { width: 390, height: 844 },
     locale: 'pt-BR',
     timezoneId: 'America/Sao_Paulo',
     colorScheme: 'light',
@@ -442,20 +453,46 @@ async function criarContextoCiclo(cycle: number): Promise<import('playwright').B
 
 async function fecharContextoCiclo(cycle: number): Promise<void> {
   const ctx = contextosPorCiclo.get(cycle);
+  // FIX #2: fecha apenas o CONTEXTO do ciclo, nunca o browser global.
+  // O browser só fecha via closeBrowser() no SIGINT/SIGTERM.
   if (ctx) { await ctx.close().catch(() => {}); contextosPorCiclo.delete(cycle); }
 }
 
 // ─── Etapas do flow ───────────────────────────────────────────────────────────
 
 /**
- * Tela 1: campo #PHONE_NUMBER_or_EMAIL_ADDRESS aceita email ou telefone.
- * O bot sempre envia o EMAIL para esta etapa inicial.
- * Fallback para #PHONE_NUMBER caso o campo EMAIL não esteja presente.
+ * FIX #3 — Digitar email no campo inicial.
+ *
+ * O campo #PHONE_NUMBER_or_EMAIL_ADDRESS do Uber é um React controlled input.
+ * humanTypeForce já faz Ctrl+A + Delete, mas em algumas versões do Uber o
+ * React re-renderiza o campo antes de receber os keydown events, resultando
+ * em valor vazio no state interno do React mesmo com o DOM mostrando texto.
+ *
+ * Solução: antes de chamar humanTypeForce, forçamos o valor via nativeInputValueSetter
+ * (hack React) para sincronizar o internal state, depois disparamos o evento
+ * 'input' para que o React aceite o valor — e SÓ ENTÃO chamamos humanTypeForce
+ * para que a cadeia completa de keydown/keyup seja registrada pelo Arkose.
  */
+async function forcarValorReact(p: Page, selector: string, value: string): Promise<void> {
+  await p.locator(selector).evaluate((el: HTMLInputElement, val: string) => {
+    // Usa o setter nativo do HTMLInputElement para bypassar o React proxy
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value'
+    )?.set;
+    if (nativeInputValueSetter) {
+      nativeInputValueSetter.call(el, val);
+    } else {
+      el.value = val;
+    }
+    // Dispara input + change para o React sincronizar o state interno
+    el.dispatchEvent(new InputEvent('input',  { bubbles: true, cancelable: false, composed: true, data: val, inputType: 'insertText' }));
+    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+  }, value).catch(() => {});
+}
+
 async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: number): Promise<void> {
   log('info', `📧 Digitando email: ${email}`, cycle);
 
-  // Seletores em ordem de preferência — email primeiro
   const SELS = [
     '#PHONE_NUMBER_or_EMAIL_ADDRESS',
     '#EMAIL_ADDRESS',
@@ -471,8 +508,30 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
     const visible = await p.locator(SEL).first().isVisible({ timeout: 5000 }).catch(() => false);
     if (visible) {
       log('info', `[DEBUG] Campo "${SEL}" → "${email}"`, cycle);
+
+      // FIX #3: limpa forçadamente via React nativeInputValueSetter antes de digitar
+      await p.locator(SEL).evaluate((el: HTMLInputElement) => {
+        const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSet) nativeSet.call(el, '');
+        else el.value = '';
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(80), sp(160)));
+
+      // Digita normalmente com a cadeia completa de eventos (Arkose-safe)
       await humanTypeForce(p, SEL, email);
-      log('info', '✅ Email digitado', cycle);
+
+      // Verifica se o valor ficou correto; se não, força via React setter
+      const val = await p.locator(SEL).inputValue().catch(() => '');
+      if (val !== email) {
+        log('warn', `⚠️ Valor pós-digitação "${val}" ≠ email esperado — forçando via React setter`, cycle);
+        await forcarValorReact(p, SEL, email);
+        await humanPause(randInt(sp(200), sp(400)));
+      }
+
+      const finalVal = await p.locator(SEL).inputValue().catch(() => '');
+      log('info', `✅ Email digitado — valor final: "${finalVal}"`, cycle);
       return;
     }
   }
@@ -520,11 +579,6 @@ async function etapa_aguardarOTP(
 
 /**
  * Digita o OTP nos campos individuais do Uber (EMAIL_OTP_CODE-0..3).
- *
- * Estratégia em 3 camadas:
- *  1. Campos com id="EMAIL_OTP_CODE-N" (padrão atual do Uber) → 1 dígito por campo via _typeChar
- *  2. Campos com autocomplete="one-time-code" (múltiplos) → mesma lógica individual
- *  3. Campo único (name="otpCode" ou similar) → humanTypeForce
  */
 async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<void> {
   log('info', `🔢 Digitando OTP: ${otp}`, cycle);
@@ -823,7 +877,7 @@ async function _executarCiclo(
       return;
     }
 
-    // Etapa 1: sempre usa o EMAIL (não o telefone)
+    // Etapa 1: sempre usa o EMAIL
     await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
     await cogPause(400, 900);
     await clickForwardButton(page, cycle);
@@ -923,6 +977,8 @@ async function _executarCiclo(
     log('error', `❌ Erro no ciclo: ${err?.message ?? err}`, cycle);
     throw err;
   } finally {
+    // FIX #2: fecha APENAS o contexto isolado do ciclo.
+    // O browser global permanece aberto para o próximo ciclo.
     await fecharContextoCiclo(cycle);
   }
 }
@@ -957,6 +1013,7 @@ export class MockPlaywrightFlow {
     }
   }
 
+  // Chamado apenas no SIGINT/SIGTERM — nunca durante ciclos normais
   static async cleanup(): Promise<void> { await closeBrowser(); }
 }
 
