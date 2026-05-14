@@ -389,16 +389,120 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   return false;
 }
 
-// ─── FIX #4: Tela de re-autenticação pós-OTP ─────────────────────────────────
+// ─── FIX #6: Tela de senha isolada pós-OTP ───────────────────────────────────
 //
-// Após o OTP o Uber redireciona para auth.uber.com com um form que contém
-// SIMULTANEAMENTE:
-//   - INPUT[type=email][id=username]       ← email para confirmar identidade
-//   - INPUT[type=password][id=PASSWORD]    ← senha da conta (novo-password)
+// No fluxo real: email → OTP → telefone → SENHA → nome/cidade/...
 //
-// O processarTelaOnboarding não reconhecia esse par e ficava tentando clicar
-// #forward-button (que não existe nessa tela — o submit é um button[type=submit]
-// diferente). Agora detectamos o par e preenchemos ambos antes de submeter.
+// A tela de senha aparece com #PASSWORD (visible) mas #username está
+// HIDDEN (visible: false, apenas attached ao DOM). O tratarTelaReAuth
+// antigo exigia isVisible para #username e falhava silenciosamente,
+// causando travamento no loop de onboarding.
+//
+// FIX: usa isAttached para #username — se estiver no DOM (mesmo hidden)
+// junto com #PASSWORD visível, é a tela de senha. Preenche senha,
+// dispara clickForwardButton e retorna true para o loop continuar
+// para as telas seguintes (telefone/nome/cidade já foram antes ou vêm depois).
+
+async function tratarTelaSenhaFluxo(
+  p: Page,
+  email: string,
+  senha: string,
+  cycle: number
+): Promise<boolean> {
+  // #PASSWORD visível é condição obrigatória
+  const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
+    .first().isVisible({ timeout: 2000 }).catch(() => false);
+  if (!temSenha) return false;
+
+  // #username attached (mesmo hidden) indica tela de senha do fluxo Uber
+  // Se não tiver #username no DOM, pode ser outra tela com senha — ainda trata
+  const temUsernameAttached = await p.locator('#username, input[id="username"]')
+    .first().isAttached().catch(() => false);
+
+  // Garante que não é a tela de re-auth com username VISÍVEL (tratada separado)
+  const usernameVisivel = await p.locator('#username, input[id="username"]')
+    .first().isVisible({ timeout: 500 }).catch(() => false);
+
+  // Se username está visível, deixa para tratarTelaReAuth
+  if (usernameVisivel) return false;
+
+  log('info', '🔑 Tela de senha do fluxo detectada (pós-OTP)', cycle);
+  await cogPause(400, 800);
+
+  // Se #username está no DOM (hidden), preenche silenciosamente para o React
+  if (temUsernameAttached) {
+    await forcarValorReact(p, '#username', email);
+    log('info', `✅ [senha-fluxo] Username hidden preenchido via React setter`, cycle);
+    await humanPause(randInt(sp(100), sp(200)));
+  }
+
+  // Preenche a senha com o padrão React-safe (limpa → forçar setter → humanTypeForce)
+  const senhaSels = [
+    '#PASSWORD',
+    'input[autocomplete="new-password"]',
+    'input[autocomplete="current-password"]',
+    'input[name="password"]',
+    'input[type="password"]',
+  ];
+
+  for (const sel of senhaSels) {
+    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+      // Limpa via React setter
+      await p.locator(sel).evaluate((el: HTMLInputElement) => {
+        const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSet) nativeSet.call(el, '');
+        else el.value = '';
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(80), sp(160)));
+
+      // Força valor via React setter para habilitar o forward-button
+      await forcarValorReact(p, sel, senha);
+      await humanPause(randInt(sp(120), sp(240)));
+
+      // Digita normalmente (Arkose-safe)
+      await humanTypeForce(p, sel, senha);
+
+      // Verifica valor final
+      const val = await p.locator(sel).inputValue().catch(() => '');
+      if (val !== senha) {
+        log('warn', `⚠️ [senha-fluxo] Valor incorreto após digitação — re-forçando`, cycle);
+        await forcarValorReact(p, sel, senha);
+        await humanPause(randInt(sp(200), sp(400)));
+      }
+
+      // Aguarda forward-button habilitar (até 3s)
+      const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
+      const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 3000 })
+        .then(() => fwdBtn.isEnabled({ timeout: 3000 }))
+        .catch(() => false);
+      if (!habilitado) {
+        log('warn', '⚠️ [senha-fluxo] forward-button ainda disabled — disparando blur', cycle);
+        await p.locator(sel).evaluate((el) => {
+          el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+        }).catch(() => {});
+        await humanPause(randInt(sp(300), sp(600)));
+      }
+
+      log('info', `✅ [senha-fluxo] Senha digitada (${sel})`, cycle);
+      break;
+    }
+  }
+
+  await cogPause(400, 900);
+
+  // Clica forward-button para avançar para a próxima tela do fluxo
+  await clickForwardButton(p, cycle);
+  log('info', '👉 [senha-fluxo] Avançado após senha', cycle);
+  await humanPause(randInt(sp(800), sp(1600)));
+  return true;
+}
+
+// ─── FIX #4 (mantido): Tela de re-autenticação com username VISÍVEL ───────────
+//
+// Tela onde AMBOS username E password estão visíveis ao mesmo tempo.
+// Diferente da tela de senha do fluxo normal onde #username fica hidden.
 
 async function tratarTelaReAuth(
   p: Page,
@@ -406,14 +510,15 @@ async function tratarTelaReAuth(
   senha: string,
   cycle: number
 ): Promise<boolean> {
+  // Ambos precisam estar VISÍVEIS para ser re-auth
   const temEmail = await p.locator('#username[type="email"], input[id="username"]')
-    .first().isVisible({ timeout: 3000 }).catch(() => false);
+    .first().isVisible({ timeout: 2000 }).catch(() => false);
   const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
     .first().isVisible({ timeout: 2000 }).catch(() => false);
 
   if (!temEmail || !temSenha) return false;
 
-  log('info', '🔐 Tela re-auth pós-OTP detectada (username + password)', cycle);
+  log('info', '🔐 Tela re-auth detectada (username + password visíveis)', cycle);
   await cogPause(400, 800);
 
   // Preenche email (username)
@@ -437,7 +542,6 @@ async function tratarTelaReAuth(
 
   await cogPause(400, 800);
 
-  // Submete — o botão nessa tela é button[type=submit] ou #forward-button
   const submitSels = [
     'button[type="submit"]',
     '#forward-button',
@@ -537,20 +641,9 @@ async function fecharContextoCiclo(cycle: number): Promise<void> {
 
 /**
  * FIX #3 — Digitar email no campo inicial.
- *
- * O campo #PHONE_NUMBER_or_EMAIL_ADDRESS do Uber é um React controlled input.
- * humanTypeForce já faz Ctrl+A + Delete, mas em algumas versões do Uber o
- * React re-renderiza o campo antes de receber os keydown events, resultando
- * em valor vazio no state interno do React mesmo com o DOM mostrando texto.
- *
- * Solução: antes de chamar humanTypeForce, forçamos o valor via nativeInputValueSetter
- * (hack React) para sincronizar o internal state, depois disparamos o evento
- * 'input' para que o React aceite o valor — e SÓ ENTÃO chamamos humanTypeForce
- * para que a cadeia completa de keydown/keyup seja registrada pelo Arkose.
  */
 async function forcarValorReact(p: Page, selector: string, value: string): Promise<void> {
   await p.locator(selector).evaluate((el: HTMLInputElement, val: string) => {
-    // Usa o setter nativo do HTMLInputElement para bypassar o React proxy
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype, 'value'
     )?.set;
@@ -559,7 +652,6 @@ async function forcarValorReact(p: Page, selector: string, value: string): Promi
     } else {
       el.value = val;
     }
-    // Dispara input + change para o React sincronizar o state interno
     el.dispatchEvent(new InputEvent('input',  { bubbles: true, cancelable: false, composed: true, data: val, inputType: 'insertText' }));
     el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
   }, value).catch(() => {});
@@ -584,7 +676,6 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
     if (visible) {
       log('info', `[DEBUG] Campo "${SEL}" → "${email}"`, cycle);
 
-      // FIX #3: limpa forçadamente via React nativeInputValueSetter antes de digitar
       await p.locator(SEL).evaluate((el: HTMLInputElement) => {
         const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
         if (nativeSet) nativeSet.call(el, '');
@@ -594,10 +685,8 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
       }).catch(() => {});
       await humanPause(randInt(sp(80), sp(160)));
 
-      // Digita normalmente com a cadeia completa de eventos (Arkose-safe)
       await humanTypeForce(p, SEL, email);
 
-      // Verifica se o valor ficou correto; se não, força via React setter
       const val = await p.locator(SEL).inputValue().catch(() => '');
       if (val !== email) {
         log('warn', `⚠️ Valor pós-digitação "${val}" ≠ email esperado — forçando via React setter`, cycle);
@@ -614,21 +703,6 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
   throw new Error('Campo de email/telefone não encontrado em nenhum seletor conhecido');
 }
 
-/**
- * FIX #5 — Tela de senha (etapa_digitarSenha).
- *
- * Diagnóstico via DevTools confirmou:
- *   - #PASSWORD  → visible: true, autocomplete: "new-password", value: [vazio]
- *   - #forward-button → disabled: true
- *
- * O #PASSWORD é um React controlled input. Apenas humanTypeForce não é
- * suficiente para habilitar o #forward-button porque o React state interno
- * nunca é sincronizado. Solução: forcarValorReact ANTES de humanTypeForce,
- * igual ao padrão já usado no campo de email (FIX #3).
- *
- * Após digitar, verificamos o valor e aguardamos o botão habilitar antes
- * de prosseguir para o clickForwardButton.
- */
 async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promise<void> {
   log('info', '🔑 Digitando senha...', cycle);
 
@@ -645,7 +719,6 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
     if (visible) {
       log('info', `🔑 Campo senha encontrado: "${SEL}"`, cycle);
 
-      // FIX #5a: limpa via React nativeInputValueSetter antes de digitar
       await p.locator(SEL).evaluate((el: HTMLInputElement) => {
         const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
         if (nativeSet) nativeSet.call(el, '');
@@ -655,14 +728,11 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
       }).catch(() => {});
       await humanPause(randInt(sp(80), sp(160)));
 
-      // FIX #5b: força o valor via React setter para habilitar o #forward-button
       await forcarValorReact(p, SEL, senha);
       await humanPause(randInt(sp(120), sp(240)));
 
-      // Digita normalmente para registrar keydown/keyup no Arkose
       await humanTypeForce(p, SEL, senha);
 
-      // FIX #5c: verifica valor final e re-força se necessário
       const val = await p.locator(SEL).inputValue().catch(() => '');
       if (val !== senha) {
         log('warn', `⚠️ Valor pós-digitação da senha incorreto — forçando via React setter`, cycle);
@@ -670,7 +740,6 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
         await humanPause(randInt(sp(200), sp(400)));
       }
 
-      // FIX #5d: aguarda o #forward-button habilitar (até 3s) antes de retornar
       const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
       const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 3000 })
         .then(() => fwdBtn.isEnabled({ timeout: 3000 }))
@@ -833,7 +902,11 @@ async function processarTelaOnboarding(
   if (await tratarHubKYC(p, cycle)) return true;
   if (await tratarTelaFotoPerfil(p, cycle)) return true;
 
-  // FIX #4: detecta tela de re-auth (username + password juntos) ANTES do fluxo genérico
+  // FIX #6: tela de senha isolada pós-OTP (username hidden + password visível)
+  // DEVE vir antes do handler genérico para não ser engolida por ele
+  if (await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle)) return true;
+
+  // FIX #4: tela re-auth onde username E password estão ambos visíveis
   if (await tratarTelaReAuth(p, payload.email, payload.senha, cycle)) return true;
 
   try {
@@ -1004,28 +1077,22 @@ async function _executarCiclo(
       return;
     }
 
-    // Etapa 1: sempre usa o EMAIL
+    // ── Etapa 1: Email ────────────────────────────────────────────────────────
     await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
     await cogPause(400, 900);
     await clickForwardButton(page, cycle);
     await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
 
-    const senhaVisible = await page.locator(
-      '#PASSWORD, input[autocomplete="new-password"], input[autocomplete="current-password"], input[type="password"]'
-    ).first().isVisible({ timeout: 8000 }).catch(() => false);
-
-    if (senhaVisible) {
-      await etapa_digitarSenha(page, payload.senha, cycle);
-      await cogPause(500, 1100);
-      await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
-    }
-
-    const nomeVisible = await page.locator(
+    // ── Etapa 2: Nome/Sobrenome (se aparecer antes do OTP) ────────────────────
+    // No fluxo Uber Motorista: email → nome/sobrenome → termos → OTP → tel → senha
+    // No fluxo Uber Passageiro bonjour: email → OTP → tel → senha → ...
+    // Verificamos se nome já apareceu aqui (alguns fluxos mostram antes do OTP)
+    const nomeVisiblePreOTP = await page.locator(
       '#FIRST_NAME, [autocomplete="given-name"]'
-    ).first().isVisible({ timeout: 8000 }).catch(() => false);
+    ).first().isVisible({ timeout: 5000 }).catch(() => false);
 
-    if (nomeVisible) {
+    if (nomeVisiblePreOTP) {
+      log('info', '👤 Tela de nome detectada antes do OTP', cycle);
       const nomeSels = ['#FIRST_NAME', '[autocomplete="given-name"]', '[name="firstName"]'];
       for (const sel of nomeSels) {
         if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -1045,15 +1112,17 @@ async function _executarCiclo(
       await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
     }
 
-    const termosVisible = await page.locator('[data-testid="accept-terms"]').first()
-      .isVisible({ timeout: 5000 }).catch(() => false);
-    if (termosVisible) {
+    // ── Etapa 3: Termos (se aparecer antes do OTP) ────────────────────────────
+    const termosVisiblePreOTP = await page.locator('[data-testid="accept-terms"]').first()
+      .isVisible({ timeout: 3000 }).catch(() => false);
+    if (termosVisiblePreOTP) {
       await tentarAceitarTermos(page);
       await cogPause(400, 800);
       await clickForwardButton(page, cycle);
       await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
     }
 
+    // ── Etapa 4: OTP ──────────────────────────────────────────────────────────
     const otpVisible = await page.locator(
       '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
@@ -1065,6 +1134,10 @@ async function _executarCiclo(
       log('info', '⏳ Aguardando navegação automática pós-OTP...', cycle);
       await aguardarNavegacaoEstabilizar(page, 8_000, 1_500);
 
+      // ── Etapas 5+: telefone → senha → nome → cidade → ... ─────────────────
+      // Tudo após o OTP é tratado pelo loop etapa_posOTP que chama
+      // processarTelaOnboarding em cada tela. O tratarTelaSenhaFluxo
+      // dentro do loop cuida da tela de senha com #username hidden.
       const resultado = await etapa_posOTP(
         page,
         { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
