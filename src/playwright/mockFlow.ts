@@ -30,10 +30,6 @@ const MOBILE_DEVICE = devices['iPhone 14'];
 
 // ─── Formato Tampermonkey ─────────────────────────────────────────────────────
 
-/**
- * Converte cookies do Playwright para o array de arrays usado no Tampermonkey:
- * [nome, valor, domínio, secure(0/1), httpOnly(0/1), expiresMs(-1 se session)]
- */
 function cookiesToTampermonkey(cookies: Cookie[]): [string, string, string, number, number, number][] {
   return cookies.map((c) => [
     c.name,
@@ -45,9 +41,6 @@ function cookiesToTampermonkey(cookies: Cookie[]): [string, string, string, numb
   ]);
 }
 
-/**
- * Gera o código completo do UserScript Tampermonkey pronto para colar.
- */
 function gerarTampermonkeyScript(cookies: Cookie[], email: string): string {
   const cookieArr = cookiesToTampermonkey(cookies);
   const cookieJson = JSON.stringify(cookieArr);
@@ -66,11 +59,6 @@ function gerarTampermonkeyScript(cookies: Cookie[], email: string): string {
 
 // ─── Detecção de URL ──────────────────────────────────────────────────────────
 
-/**
- * Sucesso REAL = saiu de auth.uber.com e chegou num destino Uber final.
- * bonjour.uber.com/hub é a tela do hub de KYC — ainda não é sucesso final,
- * mas é onde salvamos a conta (cadastro concluído, KYC pendente é normal).
- */
 function isSuccessUrl(url: string): boolean {
   return (
     url.includes('bonjour.uber.com/hub') ||
@@ -87,7 +75,6 @@ function isSuccessUrl(url: string): boolean {
   );
 }
 
-/** Ainda dentro do funil de cadastro/auth do Uber. */
 function isOnboardingUrl(url: string): boolean {
   return (
     url.includes('auth.uber.com') ||
@@ -263,11 +250,6 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
 
 // ─── Tela WhatsApp opt-in ─────────────────────────────────────────────────────
 
-/**
- * Detecta a tela "Fale com a Uber pelo WhatsApp" (data-testid="step whatsAppOptIn")
- * e clica em NÃO ATIVAR.
- * Retorna true se a tela estava presente e foi tratada.
- */
 async function tratarTelaWhatsApp(p: Page, cycle: number): Promise<boolean> {
   const isWhatsApp =
     await p.locator('[data-testid="step whatsAppOptIn"]').isVisible({ timeout: 3000 }).catch(() => false);
@@ -276,7 +258,6 @@ async function tratarTelaWhatsApp(p: Page, cycle: number): Promise<boolean> {
   log('info', '💬 Tela WhatsApp opt-in detectada — clicando NÃO ATIVAR', cycle);
   await cogPause(400, 900);
 
-  // Botão "NÃO ATIVAR" pelo texto (Playwright locator by text)
   const btn = p.locator('button', { hasText: /NÃO ATIVAR/i }).first();
   if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
     const box = await btn.boundingBox().catch(() => null);
@@ -288,7 +269,6 @@ async function tratarTelaWhatsApp(p: Page, cycle: number): Promise<boolean> {
     return true;
   }
 
-  // Fallback pelo testId do rodapé de navegação
   const nav = p.locator('[data-testid="step-bottom-navigation"] button').first();
   if (await nav.isVisible({ timeout: 2000 }).catch(() => false)) {
     await nav.click({ timeout: 5000 });
@@ -300,13 +280,8 @@ async function tratarTelaWhatsApp(p: Page, cycle: number): Promise<boolean> {
   return false;
 }
 
-// ─── Hub de KYC — clicar em "Foto do perfil" ─────────────────────────────────
+// ─── Hub de KYC ──────────────────────────────────────────────────────────────
 
-/**
- * Detecta a tela do hub (data-testid="hub") e clica no item "Foto do perfil"
- * (data-testid="stepItem profilePhoto").
- * Retorna true se estava no hub e navegou para a etapa de foto.
- */
 async function tratarHubKYC(p: Page, cycle: number): Promise<boolean> {
   const isHub =
     await p.locator('[data-testid="hub"]').isVisible({ timeout: 3000 }).catch(() => false);
@@ -330,13 +305,8 @@ async function tratarHubKYC(p: Page, cycle: number): Promise<boolean> {
   return false;
 }
 
-// ─── Tela de foto do perfil — clicar "Tirar foto" ────────────────────────────
+// ─── Tela de foto do perfil ───────────────────────────────────────────────────
 
-/**
- * Detecta a tela "Tire sua foto do perfil" (data-testid="step profilePhoto")
- * e clica no botão "Tirar foto" (data-testid="docUploadButton").
- * Retorna true se tratou a tela.
- */
 async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   const isFotoStep =
     await p.locator('[data-testid="step profilePhoto"]').isVisible({ timeout: 3000 }).catch(() => false);
@@ -345,7 +315,6 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   log('info', '📷 Tela de foto do perfil detectada — clicando Tirar foto', cycle);
   await cogPause(600, 1200);
 
-  // Botão principal pelo testId
   const btnFoto = p.locator('[data-testid="docUploadButton"]').first();
   if (await btnFoto.isVisible({ timeout: 5000 }).catch(() => false)) {
     const box = await btnFoto.boundingBox().catch(() => null);
@@ -357,7 +326,6 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
     return true;
   }
 
-  // Fallback por texto
   const btnTexto = p.locator('button', { hasText: /Tirar foto/i }).first();
   if (await btnTexto.isVisible({ timeout: 2000 }).catch(() => false)) {
     await btnTexto.click({ timeout: 5000 });
@@ -510,12 +478,50 @@ async function aguardarNavegacaoEstabilizar(p: Page, maxWaitMs = 12_000, stableM
 }
 
 /**
+ * Preenche o campo de telefone na tela pós-OTP.
+ * Aguarda o campo ficar visível antes de tentar preencher.
+ * Retorna true se encontrou e preencheu.
+ */
+async function preencherTelefone(p: Page, telefone: string, cycle: number): Promise<boolean> {
+  const PHONE_SELS = [
+    '[name="phoneNumber"]',
+    '[data-testid*="phone"]',
+    'input[type="tel"]',
+    '[id*="phone"]',
+    '[placeholder*="celular"]',
+    '[placeholder*="telefone"]',
+    '[placeholder*="phone"]',
+    'input[inputmode="tel"]',
+  ];
+
+  for (const sel of PHONE_SELS) {
+    try {
+      const el = p.locator(sel).first();
+      const visible = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      if (!visible) continue;
+
+      const val = await el.inputValue().catch(() => '');
+      if (val) {
+        log('info', `📱 [telefone] Campo "${sel}" já preenchido: "${val}"`, cycle);
+        return true;
+      }
+
+      log('info', `📱 Preenchendo telefone "${telefone}" em "${sel}"`, cycle);
+      await humanTypeForce(p, sel, telefone);
+      log('info', `✅ Telefone preenchido`, cycle);
+      return true;
+    } catch { /* continua */ }
+  }
+  return false;
+}
+
+/**
  * Processa UMA tela de onboarding do Uber (pós-OTP).
- * Antes de tentar campos genéricos, verifica telas específicas conhecidas:
+ * Ordem de verificação:
  *   1. WhatsApp opt-in → NÃO ATIVAR
  *   2. Hub KYC         → clica em Foto do perfil
  *   3. Tela de foto    → clica em Tirar foto
- * Depois faz a detecção genérica de nome/sobrenome/telefone/cidade/termos.
+ *   4. Campos genéricos: nome, sobrenome, telefone, cidade, termos
  */
 async function processarTelaOnboarding(
   p: Page,
@@ -529,6 +535,19 @@ async function processarTelaOnboarding(
   if (await tratarTelaWhatsApp(p, cycle)) return true;
   if (await tratarHubKYC(p, cycle)) return true;
   if (await tratarTelaFotoPerfil(p, cycle)) return true;
+
+  // ── Debug: logar inputs visíveis para diagnóstico ─────────────────────────
+  try {
+    const inputs = await p.$$eval('input:not([type="hidden"])', (els) =>
+      els.map((el) => {
+        const e = el as HTMLInputElement;
+        return `${e.tagName}[type=${e.type}][name=${e.name}][id=${e.id}][placeholder=${e.placeholder}][autocomplete=${e.autocomplete}]`;
+      })
+    );
+    if (inputs.length > 0) {
+      log('info', `🔎 [Tela ${telaIdx}] Inputs visíveis: ${inputs.slice(0, 6).join(' | ')}`, cycle);
+    }
+  } catch { /* ignora */ }
 
   // ── Detecção genérica de campos ───────────────────────────────────────────
   let fezAlgo = false;
@@ -563,17 +582,12 @@ async function processarTelaOnboarding(
 
   await humanPause(randInt(sp(150), sp(350)));
 
-  // — Telefone
-  for (const sel of ['[name="phoneNumber"]', '[data-testid*="phone"]', 'input[type="tel"]', '[id*="phone"]']) {
-    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
-      const val = await p.locator(sel).first().inputValue().catch(() => '');
-      if (!val && payload.telefone) {
-        await humanTypeForce(p, sel, payload.telefone);
-        log('info', `✅ [Tela ${telaIdx}] Telefone preenchido`, cycle);
-        fezAlgo = true;
-      }
-      break;
-    }
+  // — Telefone (com aguardo explícito)
+  const telefonePreenchido = await preencherTelefone(p, payload.telefone, cycle);
+  if (telefonePreenchido) {
+    fezAlgo = true;
+    // Pausa para o botão habilitado após preencher o telefone
+    await cogPause(600, 1200);
   }
 
   await humanPause(randInt(sp(150), sp(350)));
@@ -606,7 +620,7 @@ async function processarTelaOnboarding(
 
 /**
  * Loop pós-OTP: percorre TODAS as telas de onboarding do Uber até chegar
- * em isSuccessUrl (bonjour.uber.com/hub ou hub/step) ou atingir MAX_TELAS.
+ * em isSuccessUrl ou atingir MAX_TELAS.
  */
 async function etapa_posOTP(
   p: Page,
@@ -731,10 +745,15 @@ async function _executarCiclo(
     if (otpVisible) {
       const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
       await etapa_digitarOTP(page, otp, cycle);
-      await cogPause(400, 900);
-      await clickForwardButton(page, cycle).catch(() => {});
 
-      // 6. Loop pós-OTP: percorre todas as telas (WhatsApp, hub, foto, campos, etc.)
+      // ⚠️ NÃO chamar clickForwardButton aqui:
+      // O OTP de 4 dígitos é validado automaticamente — o Uber avança sozinho
+      // após o último dígito ser digitado. Clicar forçaria o botão disabled
+      // e causaria o loop infinito de telas.
+      log('info', '⏳ Aguardando navegação automática pós-OTP...', cycle);
+      await aguardarNavegacaoEstabilizar(page, 8_000, 1_500);
+
+      // 6. Loop pós-OTP: percorre todas as telas (telefone, nome, WhatsApp, hub, foto, etc.)
       const resultado = await etapa_posOTP(
         page,
         { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone },
@@ -744,11 +763,9 @@ async function _executarCiclo(
       if (resultado === 'success') {
         const urlFinal = page.url();
 
-        // ── Captura cookies reais do contexto ──────────────────────────────
         const cookiesRaw: Cookie[] = await ctx.cookies().catch(() => []);
         log('info', `🍪 ${cookiesRaw.length} cookies capturados`, cycle);
 
-        // Gera script Tampermonkey e loga para fácil cópia
         const tmScript = gerarTampermonkeyScript(cookiesRaw, payload.email);
         log('success', `📋 Tampermonkey Script:\n${tmScript}`, cycle);
 
