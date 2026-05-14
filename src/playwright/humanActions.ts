@@ -1,5 +1,5 @@
 /**
- * humanActions.ts — Parte 1/2
+ * humanActions.ts
  * Primitivas de interação humana anti-captcha (Arkose / TurnStile / hCaptcha).
  * Centraliza TODOS os timings e movimentos usados pelo mockFlow.
  */
@@ -63,7 +63,6 @@ export async function humanPause(baseMs: number): Promise<void> {
 /**
  * Pausa cognitiva — imita latência de decisão humana.
  * 20% chance de "distração" (pausa 2-4× mais longa).
- * Usa distribuição skewed para simular tempo de reação real.
  */
 export async function cogPause(minMs: number, maxMs: number): Promise<void> {
   const base = randInt(sp(minMs), sp(maxMs));
@@ -94,7 +93,6 @@ export async function humanMouseMove(p: Page, x: number, y: number): Promise<voi
   const startX = randInt(20, 380);
   const startY = randInt(60, 520);
 
-  // Overshoot sutil: o mouse "passa" levemente do destino antes de pousar
   const overshootX = x + randInt(-8, 8);
   const overshootY = y + randInt(-6, 6);
 
@@ -151,9 +149,6 @@ export async function humanMouseMove(p: Page, x: number, y: number): Promise<voi
 
 // ─── Hover ────────────────────────────────────────────────────────────────────
 
-/**
- * Hover realista: move o cursor para um ponto aleatório dentro do elemento.
- */
 export async function hoverElement(p: Page, selector: string): Promise<void> {
   try {
     const box = await p.locator(selector).first().boundingBox().catch(() => null);
@@ -165,20 +160,14 @@ export async function hoverElement(p: Page, selector: string): Promise<void> {
   } catch { /* ignora */ }
 }
 
-// ─── focusField — foco com pointer events reais (anti-Arkose) ─────────────────
+// ─── focusField ───────────────────────────────────────────────────────────────
 // O Arkose rastreia a cadeia: pointerover → pointerenter → pointermove
 // → pointerdown → pointerup → focus. Usar apenas .focus() ou .click()
 // pula toda essa cadeia e acende um sinal de automação.
 
-/**
- * Foca um campo disparando a cadeia completa de pointer events que um
- * usuário real geraria: hover externo → move em direção ao campo →
- * pointerdown + pointerup → focus nativo.
- */
 export async function focusField(p: Page, selector: string): Promise<void> {
   const box = await p.locator(selector).first().boundingBox().catch(() => null);
   if (!box) {
-    // Fallback gracioso se não conseguir o bounding box
     await p.focus(selector).catch(() => {});
     return;
   }
@@ -186,15 +175,11 @@ export async function focusField(p: Page, selector: string): Promise<void> {
   const targetX = Math.round(box.x + box.width  * randFloat(0.3, 0.7));
   const targetY = Math.round(box.y + box.height * randFloat(0.3, 0.7));
 
-  // 1. Mover para perto do campo (simula abordagem do cursor)
   await humanMouseMove(p, targetX + randInt(-60, 60), targetY + randInt(-40, 40));
   await humanPause(randInt(sp(120), sp(280)));
-
-  // 2. Mover para o centro do campo
   await humanMouseMove(p, targetX, targetY);
   await humanPause(randInt(sp(80), sp(180)));
 
-  // 3. Disparar pointer events via evaluate (cadeia completa)
   await p.evaluate(({ cx, cy }: { cx: number; cy: number }) => {
     const el = document.elementFromPoint(cx, cy) as HTMLElement | null;
     if (!el) return;
@@ -208,40 +193,27 @@ export async function focusField(p: Page, selector: string): Promise<void> {
   }, { cx: targetX, cy: targetY });
 
   await humanPause(randInt(25, 65));
-
-  // 4. mouse.down → foco efetivo
   await p.mouse.down();
   await new Promise<void>((r) => setTimeout(r, randInt(40, 100)));
   await p.mouse.up();
-
-  // 5. Dwell pós-foco: usuário "pousa" os olhos no campo antes de digitar
   await humanPause(randInt(sp(100), sp(250)));
 }
 
-// ─── _typeChar — digita um único caractere com keydown/keyup individuais ──────
-// Diferente de keyboard.type(), que emite eventos sintéticos, aqui cada
-// tecla passa por keydown → keypress → input → keyup separadamente,
-// o que é idêntico ao comportamento de um teclado físico.
+// ─── _typeChar ────────────────────────────────────────────────────────────────
+// Cada tecla passa por keydown → keypress → input → keyup separadamente,
+// idêntico ao comportamento de um teclado físico.
 
-/**
- * Digita um único caractere disparando a cadeia completa de eventos de teclado:
- * keydown → keypress → (InputEvent 'insertText') → keyup.
- * O delay entre down e up segue distribuição gaussiana (40-120ms).
- */
 export async function _typeChar(p: Page, ch: string, fast: boolean): Promise<void> {
   const holdMs = fast
     ? randInt(15, 45)
     : clamp(Math.round(gaussianRand() * 20 + 65), 35, 130);
 
-  // keydown
-  await p.keyboard.down(ch.length === 1 ? ch : ch);
+  await p.keyboard.down(ch);
   await new Promise<void>((r) => setTimeout(r, holdMs));
 
-  // Dispara InputEvent 'input' com insertText para frameworks reativos
   await p.evaluate((char: string) => {
     const el = document.activeElement as HTMLInputElement | null;
     if (!el) return;
-    // Alguns frameworks (React, Vue) ouvem apenas o evento 'input'
     el.dispatchEvent(new InputEvent('input', {
       bubbles: true,
       cancelable: false,
@@ -252,8 +224,7 @@ export async function _typeChar(p: Page, ch: string, fast: boolean): Promise<voi
     }));
   }, ch);
 
-  // keyup
-  await p.keyboard.up(ch.length === 1 ? ch : ch);
+  await p.keyboard.up(ch);
 }
 
 // ─── Digitação ────────────────────────────────────────────────────────────────
@@ -267,14 +238,9 @@ function sessionWpm(): number {
 
 function wpmToCharDelay(): number {
   const wpm = sessionWpm();
-  const msPerChar = 60_000 / (wpm * 5);
-  return Math.round(msPerChar);
+  return Math.round(60_000 / (wpm * 5));
 }
 
-/**
- * Digita texto de forma humana com WPM variável por sessão, typos e bursts.
- * Usa _typeChar internamente para cadeia completa de eventos de teclado.
- */
 export async function humanType(p: Page, selector: string, value: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   await focusField(p, selector);
@@ -288,7 +254,6 @@ export async function humanType(p: Page, selector: string, value: string): Promi
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
 
-    // Typo + backspace (modo normal)
     if (!fast && Math.random() < 0.04 && /[a-zA-Z]/.test(ch)) {
       const offset = Math.random() > 0.5 ? 1 : -1;
       const typoCode = ch.charCodeAt(0) + offset;
@@ -319,17 +284,11 @@ export async function humanType(p: Page, selector: string, value: string): Promi
 }
 
 /**
- * humanTypeForce — variante que limpa forçosamente e dispara InputEvent
- * após cada caractere para compatibilidade com React/Vue controlled inputs.
- * Também executa um dispatchEvent 'change' ao final para validação de campo.
- *
- * TOLERANTE a campos que somem durante a digitação (ex: tela de OTP da Uber
- * navega para a próxima tela enquanto os dígitos ainda estão sendo digitados).
- * Toda operação que interage com o locator é envolvida em try/catch para que
- * um StaleElementReferenceError ou timeout não derrube o ciclo inteiro.
+ * humanTypeForce — limpa forçosamente e dispara InputEvent após cada caractere.
+ * Compatível com React/Vue controlled inputs.
+ * Tolerante a campos que desaparecem durante digitação (ex: tela de OTP).
  */
 export async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
-  // Aguarda o campo aparecer antes de qualquer coisa
   const appeared = await p.waitForSelector(selector, { state: 'visible', timeout: 15000 })
     .then(() => true)
     .catch(() => false);
@@ -339,16 +298,12 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
     return;
   }
 
-  // 1. Focar com cadeia completa de pointer events
   await focusField(p, selector);
-
-  // 2. Selecionar tudo e deletar
   await p.keyboard.press('ControlOrMeta+a');
   await humanPause(randInt(25, 55));
   await p.keyboard.press('Delete');
   await humanPause(randInt(sp(50), sp(130)));
 
-  // 3. Verificar se ainda tem conteúdo (campos controlled ignoram Delete)
   const residual = await p.locator(selector).inputValue().catch(() => '');
   if (residual.length > 0) {
     await p.locator(selector).evaluate((el: HTMLInputElement) => {
@@ -357,18 +312,15 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
         bubbles: true, cancelable: false, composed: true,
         data: '', inputType: 'deleteContentBackward',
       }));
-    }).catch(() => { /* campo pode ter sumido — ignora */ });
+    }).catch(() => {});
     await humanPause(randInt(25, 55));
   }
 
-  // 4. Digitar caractere a caractere com cadeia keydown→InputEvent→keyup
   const fast = isSpeedMode();
   const baseCharDelay = fast ? randInt(12, 35) : wpmToCharDelay();
   let burstRemaining = randInt(3, 8);
 
   for (let i = 0; i < value.length; i++) {
-    // Se o campo sumiu durante a digitação (Uber navega para próxima tela
-    // antes de todos os dígitos do OTP serem enviados), para graciosamente.
     const stillVisible = await p.locator(selector).isVisible().catch(() => false);
     if (!stillVisible) {
       globalState.addLog('info',
@@ -378,7 +330,6 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
 
     const ch = value[i]!;
 
-    // Typo ocasional
     if (!fast && Math.random() < 0.04 && /[a-zA-Z]/.test(ch)) {
       const offset = Math.random() > 0.5 ? 1 : -1;
       const typoCode = ch.charCodeAt(0) + offset;
@@ -386,7 +337,6 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
         await _typeChar(p, String.fromCharCode(typoCode), false);
         await humanPause(randInt(40, 100));
         await p.keyboard.press('Backspace');
-        // Dispara input event após backspace para frameworks reativos
         await p.locator(selector).evaluate((el: HTMLInputElement) => {
           el.dispatchEvent(new InputEvent('input', {
             bubbles: true, cancelable: false, composed: true,
@@ -414,26 +364,19 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
     }
   }
 
-  // 5. Pausa pós-digitação: usuário confere o que digitou
   await humanPause(randInt(sp(200), sp(500)));
 
-  // 6. Disparar 'change' + 'blur' para ativar validação (tolerante a campo sumido)
   await p.locator(selector).evaluate((el: HTMLInputElement) => {
     el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
     el.dispatchEvent(new Event('blur',   { bubbles: true }));
-  }).catch(() => { /* campo pode ter sumido após último char — normal no OTP */ });
+  }).catch(() => {});
 
   const finalVal = await p.locator(selector).inputValue().catch(() => '(campo sumiu)');
-  const { globalState: _gs } = await import('../state/globalState');
-  _gs.addLog('info', `🔍 [DEBUG] Campo "${selector}" → "${finalVal}"`);
+  globalState.addLog('info', `🔍 [DEBUG] Campo "${selector}" → "${finalVal}"`);
 }
 
 // ─── Click ────────────────────────────────────────────────────────────────────
 
-/**
- * Click humano: hover → dwell variável → mouse.down → hold → mouse.up.
- * Arkose mede exatamente a duração do press (40-130ms é o range humano real).
- */
 export async function humanClick(p: Page, selector: string): Promise<void> {
   await p.waitForSelector(selector, { state: 'visible', timeout: 15000 });
   const box = await p.locator(selector).first().boundingBox();
@@ -454,16 +397,12 @@ export async function humanClick(p: Page, selector: string): Promise<void> {
 
 // ─── Forward button ───────────────────────────────────────────────────────────
 
-/**
- * Aguarda o #forward-button ficar habilitado e faz o click com pausa pensativa.
- */
 export async function clickForwardButton(p: Page, cycle: number): Promise<void> {
-  const { globalState: _gs } = await import('../state/globalState');
-  _gs.addLog('info', '⏳ Aguardando #forward-button habilitado...', cycle);
+  globalState.addLog('info', '⏳ Aguardando #forward-button habilitado...', cycle);
 
   await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 15000 })
     .catch(async () => {
-      _gs.addLog('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando mesmo assim...', cycle);
+      globalState.addLog('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando mesmo assim...', cycle);
     });
 
   if (!isSpeedMode()) {
@@ -477,14 +416,11 @@ export async function clickForwardButton(p: Page, cycle: number): Promise<void> 
   }
 
   await humanClick(p, '#forward-button');
-  _gs.addLog('info', '🖱️ #forward-button clicado', cycle);
+  globalState.addLog('info', '🖱️ #forward-button clicado', cycle);
 }
 
 // ─── Scroll ───────────────────────────────────────────────────────────────────
 
-/**
- * Scroll de leitura em segmentos não-uniformes + pausa de leitura + retorno.
- */
 export async function scrollIdle(p: Page): Promise<void> {
   if (isSpeedMode()) return;
   const segments = randInt(2, 3);
@@ -502,21 +438,14 @@ export async function scrollIdle(p: Page): Promise<void> {
 
 // ─── Aquecimento de página ────────────────────────────────────────────────────
 
-/**
- * pageWarmup: constrói histórico de interação ANTES de preencher o formulário.
- * O Arkose analisa o padrão de movimentos ANTES do submit.
- * Sequência: hover no campo → hesitar no botão → voltar ao campo → ler
- */
 export async function pageWarmup(p: Page, cycle: number): Promise<void> {
-  const { globalState: _gs } = await import('../state/globalState');
   if (isSpeedMode()) {
     await humanPause(randInt(300, 700));
     return;
   }
 
-  _gs.addLog('info', '🔥 Aquecendo página (simulando leitura)...', cycle);
+  globalState.addLog('info', '🔥 Aquecendo página (simulando leitura)...', cycle);
 
-  // 1. Movimentos aleatórios simulando olhar para o formulário
   const waypoints = [
     { x: randInt(60, 320), y: randInt(90, 230) },
     { x: randInt(40, 350), y: randInt(190, 380) },
@@ -527,10 +456,8 @@ export async function pageWarmup(p: Page, cycle: number): Promise<void> {
     await humanPause(randInt(180, 480));
   }
 
-  // 2. Scroll de leitura
   await scrollIdle(p);
 
-  // 3. Hover no campo de email → hesitar no botão → voltar
   try {
     const inputBox = await p.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').first().boundingBox().catch(() => null);
     if (inputBox) {
@@ -549,8 +476,6 @@ export async function pageWarmup(p: Page, cycle: number): Promise<void> {
           btnBox.y + btnBox.height * randFloat(0.3, 0.7)
         );
         await humanPause(randInt(180, 460));
-
-        // Volta para o campo (padrão de hesitação real)
         await humanMouseMove(
           p,
           inputBox.x + inputBox.width * randFloat(0.4, 0.6),
@@ -561,7 +486,6 @@ export async function pageWarmup(p: Page, cycle: number): Promise<void> {
     }
   } catch { /* ignora */ }
 
-  // 4. Pausa final "usuário decide começar a preencher"
   await cogPause(700, 1800);
-  _gs.addLog('info', '✅ Aquecimento concluído', cycle);
+  globalState.addLog('info', '✅ Aquecimento concluído', cycle);
 }
