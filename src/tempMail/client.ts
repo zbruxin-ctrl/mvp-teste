@@ -778,3 +778,30 @@ export class TempMailCClient implements IEmailClient {
     throw new Error(`⏰ Timeout aguardando OTP tempmailc (${Math.round(timeoutMs / 1000)}s)`);
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────────
+// createEmailClient — factory function
+// Mapeia o EmailProvider string para a implementação correta de IEmailClient.
+// Exportada para uso em mockFlow.ts e qualquer outro módulo que precise criar
+// um cliente de email sem depender diretamente das classes concretas.
+// ──────────────────────────────────────────────────────────────────────────────────
+
+export function createEmailClient(
+  provider: 'temp-mail.io' | 'mail.tm' | 'yopmail' | 'tempmailc',
+  apiKey: string
+): IEmailClient {
+  switch (provider) {
+    case 'temp-mail.io':
+      return new TempMailClient(apiKey);
+    case 'mail.tm':
+      return new MailTmClient();
+    case 'yopmail':
+      return new YOPmailClient();
+    case 'tempmailc':
+      return new TempMailCClient(apiKey);
+    default: {
+      const _exhaustive: never = provider;
+      throw new Error(`[createEmailClient] Provider desconhecido: ${_exhaustive}`);
+    }
+  }
+}
