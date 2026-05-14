@@ -7,7 +7,7 @@ export type CycleExecutor = (config: Config, cycle: number) => Promise<void>;
 // URL de cadastro fixa — não pode ser alterada pelo frontend
 export const CADASTRO_URL = 'https://bonjour.uber.com/';
 
-// ─── KYC State ─────────────────────────────────────────────────────────────────
+// ─── KYC State ────────────────────────────────────────────────────────────────────
 
 export interface KycSignal {
   provider: 'Socure' | 'Veriff' | string;
@@ -33,19 +33,7 @@ function kycLevel(score: number): KycProviderState['level'] {
   return 'WEAK';
 }
 
-// ─── Payload por ciclo ──────────────────────────────────────────────────────────
-
-export interface CyclePayload {
-  nome: string;
-  sobrenome: string;
-  email: string;
-  telefone: string;
-  senha: string;
-  localizacao: string;
-  codigoIndicacao: string;
-}
-
-// ─── Helpers de proxy ─────────────────────────────────────────────────────────────
+// ─── Helpers de proxy ──────────────────────────────────────────────────────────────
 
 export function parseProxyString(raw: string): ProxyConfig | null {
   raw = raw.trim();
@@ -78,7 +66,9 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   return null;
 }
 
-// ─── GlobalState ─────────────────────────────────────────────────────────────────
+// ─── GlobalState ──────────────────────────────────────────────────────────────────────
+
+const MAX_LOGS = 500;
 
 class GlobalState {
   private state: AppState = {
@@ -106,34 +96,7 @@ class GlobalState {
   private logs: LogEntry[] = [];
   private currentCycle = 0;
   private executor: CycleExecutor | null = null;
-
   private kycByCycle: KycByCycle = {};
-  private payloadByCycle: Record<number, CyclePayload> = {};
-
-  setPayload(cycle: number, payload: CyclePayload): void {
-    this.payloadByCycle[cycle] = payload;
-  }
-
-  getPayload(cycle: number): CyclePayload | undefined {
-    return this.payloadByCycle[cycle];
-  }
-
-  clearPayload(cycle: number): void {
-    delete this.payloadByCycle[cycle];
-  }
-
-  getProxyForCycle(cycle: number): ProxyConfig | undefined {
-    const proxies = this.state.config.proxies;
-    if (!proxies || proxies.length === 0) return undefined;
-    const idx = (cycle - 1) % proxies.length;
-    const proxy = proxies[idx]!;
-    this.addLog(
-      'info',
-      `🌐 Proxy #${idx + 1}/${proxies.length}: ${proxy.server}${proxy.username ? ` (auth: ${proxy.username})` : ''}`,
-      cycle
-    );
-    return proxy;
-  }
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
     if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
@@ -161,14 +124,6 @@ class GlobalState {
       `[${provider}] ${p.level} — score=${p.score} via ${source} (+${weight})${urlShort}`,
       cycle
     );
-  }
-
-  getKycSignals(cycle: number): KycSignal[] {
-    const cycleMap = this.kycByCycle[cycle];
-    if (!cycleMap) return [];
-    const result: KycSignal[] = [];
-    for (const state of Object.values(cycleMap)) result.push(...state.signals);
-    return result;
   }
 
   getKycState(): { byCycle: KycByCycle } {
@@ -204,6 +159,8 @@ class GlobalState {
 
   addLog(level: LogEntry['level'], message: string, cycle?: number): void {
     this.logs.unshift({ timestamp: new Date().toISOString(), level, message, cycle });
+    // Cap em memória: descarta logs mais antigos para evitar crescimento ilimitado
+    if (this.logs.length > MAX_LOGS) this.logs.length = MAX_LOGS;
   }
 
   stop(): void {
