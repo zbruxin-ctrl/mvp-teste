@@ -429,35 +429,89 @@ async function etapa_aguardarOTP(
   return otp;
 }
 
+/**
+ * Digita o OTP nos campos individuais do Uber (EMAIL_OTP_CODE-0..3).
+ *
+ * Estratégia em 3 camadas:
+ *  1. Campos com id="EMAIL_OTP_CODE-N" (padrão atual do Uber) → 1 dígito por campo via _typeChar
+ *  2. Campos com autocomplete="one-time-code" (múltiplos) → mesma lógica individual
+ *  3. Campo único (name="otpCode" ou similar) → humanTypeForce
+ */
 async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<void> {
   log('info', `🔢 Digitando OTP: ${otp}`, cycle);
-  const candidatos = [
+
+  // ── Camada 1: campos EMAIL_OTP_CODE-0..N (estrutura atual do Uber) ──────────
+  const primeroCampoUber = p.locator('#EMAIL_OTP_CODE-0');
+  if (await primeroCampoUber.isVisible({ timeout: 5000 }).catch(() => false)) {
+    log('info', `🔢 OTP em campos individuais EMAIL_OTP_CODE-N`, cycle);
+    for (let i = 0; i < otp.length; i++) {
+      const campo = p.locator(`#EMAIL_OTP_CODE-${i}`);
+      // aguarda o campo aparecer (pode ser lazy-mount)
+      await campo.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      await focusField(p, `#EMAIL_OTP_CODE-${i}`);
+      await humanPause(randInt(sp(60), sp(140)));
+      await _typeChar(p, otp[i]!, isSpeedMode());
+      // pausa inter-dígito humanizada
+      await humanPause(randInt(sp(80), sp(200)));
+    }
+    log('info', '✅ OTP digitado (EMAIL_OTP_CODE-N)', cycle);
+    // O Uber valida automaticamente após o último dígito — não clicar forward aqui
+    return;
+  }
+
+  // ── Camada 2: múltiplos campos autocomplete="one-time-code" ─────────────────
+  const camposOtp = p.locator('input[autocomplete="one-time-code"]');
+  const totalOtp = await camposOtp.count().catch(() => 0);
+  if (totalOtp >= 2) {
+    log('info', `🔢 OTP em ${totalOtp} campos autocomplete=one-time-code`, cycle);
+    for (let i = 0; i < Math.min(totalOtp, otp.length); i++) {
+      const campo = camposOtp.nth(i);
+      await campo.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
+      const box = await campo.boundingBox().catch(() => null);
+      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+      await campo.click({ timeout: 3000 }).catch(() => {});
+      await humanPause(randInt(sp(60), sp(130)));
+      await _typeChar(p, otp[i]!, isSpeedMode());
+      await humanPause(randInt(sp(80), sp(180)));
+    }
+    log('info', '✅ OTP digitado (autocomplete individual)', cycle);
+    return;
+  }
+
+  // ── Camada 3: campo único (name="otpCode", inputmode="numeric", etc.) ────────
+  const candidatosUnicos = [
     'input[name="otpCode"]',
     'input[autocomplete="one-time-code"]',
     '[data-testid*="otp"]',
     '[data-testid*="code"]',
     'input[inputmode="numeric"][maxlength="6"]',
     'input[inputmode="numeric"]',
+    'input[maxlength="1"]',
   ];
-  for (const sel of candidatos) {
-    if (await p.locator(sel).first().isVisible({ timeout: 5000 }).catch(() => false)) {
+  for (const sel of candidatosUnicos) {
+    if (await p.locator(sel).first().isVisible({ timeout: 3000 }).catch(() => false)) {
+      // Verifica se é campo único ou múltiplo
+      const count = await p.locator(sel).count();
+      if (count >= 2) {
+        log('info', `🔢 OTP em ${count} campos "${sel}"`, cycle);
+        for (let i = 0; i < Math.min(count, otp.length); i++) {
+          const campo = p.locator(sel).nth(i);
+          await campo.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
+          await campo.click({ timeout: 3000 }).catch(() => {});
+          await humanPause(randInt(sp(60), sp(120)));
+          await _typeChar(p, otp[i]!, isSpeedMode());
+          await humanPause(randInt(sp(80), sp(160)));
+        }
+        log('info', '✅ OTP digitado (múltiplos campos fallback)', cycle);
+        return;
+      }
+      // Campo único
       await humanTypeForce(p, sel, otp);
-      log('info', '✅ OTP digitado', cycle);
+      log('info', '✅ OTP digitado (campo único)', cycle);
       return;
     }
   }
-  // Fallback: campos de dígito único
-  const count = await p.locator('input[maxlength="1"]').count();
-  if (count >= 4) {
-    log('info', `🔢 Digitando OTP em ${count} campos individuais`, cycle);
-    for (let i = 0; i < Math.min(count, otp.length); i++) {
-      await focusField(p, `input[maxlength="1"]:nth-of-type(${i + 1})`);
-      await _typeChar(p, otp[i]!, isSpeedMode());
-      await humanPause(randInt(sp(80), sp(200)));
-    }
-    log('info', '✅ OTP digitado (campos individuais)', cycle);
-    return;
-  }
+
   throw new Error('Campo de OTP não encontrado');
 }
 
@@ -737,19 +791,17 @@ async function _executarCiclo(
       await humanPause(randInt(sp(1200), sp(2500)));
     }
 
-    // 5. OTP
+    // 5. OTP — aguarda qualquer um dos padrões conhecidos
     const otpVisible = await page.locator(
-      'input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
+      '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
 
     if (otpVisible) {
       const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
       await etapa_digitarOTP(page, otp, cycle);
 
-      // ⚠️ NÃO chamar clickForwardButton aqui:
       // O OTP de 4 dígitos é validado automaticamente — o Uber avança sozinho
-      // após o último dígito ser digitado. Clicar forçaria o botão disabled
-      // e causaria o loop infinito de telas.
+      // após o último dígito. NÃO chamar clickForwardButton aqui.
       log('info', '⏳ Aguardando navegação automática pós-OTP...', cycle);
       await aguardarNavegacaoEstabilizar(page, 8_000, 1_500);
 
