@@ -17,7 +17,11 @@ import {
   clickForwardButton, scrollIdle, pageWarmup,
 } from './humanActions';
 
-chromiumExtra.use(StealthPlugin());
+// FIX: NÃO chamar chromiumExtra.use() no topo do módulo.
+// Isso causava o módulo inteiro lançar erro durante o import,
+// resultando em MockPlaywrightFlow === undefined no server/index.ts.
+// O plugin é registrado UMA única vez dentro de ensureBrowser(), lazy.
+let stealthPluginRegistered = false;
 
 let browser: Browser | null = null;
 let browserLaunching = false;
@@ -193,28 +197,9 @@ async function dispensarCookies(p: Page): Promise<void> {
 }
 
 // ─── Aceitar termos ───────────────────────────────────────────────────────────
-/**
- * DIAGNÓSTICO REAL (Uber auth.uber.com):
- *   - input[type=checkbox] existe mas tem id=null, w=0, h=0 (escondido via CSS)
- *   - parent_tag=LABEL → o input está DENTRO do <label> (NÃO associado por for=)
- *   - label:has-text("Concordo") é visível com rect 358×24
- *   - data-testid="accept-terms" é o container confiável
- *
- * BUG ROOT (forcarCheckedJS):
- *   - forcarCheckedJS disparava MouseEvent/change/input no próprio <input> oculto.
- *   - O React do Uber NÃO escuta no input — ele escuta no <label> pai (onClick do componente).
- *   - Resultado: o estado React nunca atualizava, o forward-button permanecia disabled.
- *
- * FIX: novo helper forcarCheckViaLabel
- *   - Localiza o <label> pai via ancestor::label[1] (XPath)
- *   - Dispara element.click() nativo do DOM no label → é exatamente o que o React Uber escuta
- *   - Fallback: se não houver label pai, usa o nativeSet + dispatchEvent no input (comportamento anterior)
- *   - forcarCheckedJS REMOVIDO — não existe mais referência
- */
 async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
   let marcouAlgum = false;
 
-  // ── Helper: confirma se um checkbox (por locator) está marcado ──
   async function estaChecked(cb: import('playwright').Locator): Promise<boolean> {
     return cb.evaluate((el: HTMLInputElement) =>
       el.type === 'checkbox'
@@ -223,27 +208,20 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     ).catch(() => false);
   }
 
-  // ── Novo helper: dispara click nativo no label pai que o React Uber escuta ──
-  // O React registra onClick no <label> (ou no container), não no <input> oculto.
-  // element.click() no label é o único evento que o reconciliador do React processa.
   async function forcarCheckViaLabel(
     cb: import('playwright').Locator,
     idx: number
   ): Promise<void> {
-    // Tenta encontrar e clicar o label ancestor via XPath
     const labelPai = cb.locator('xpath=ancestor::label[1]');
     const lpCount = await labelPai.count().catch(() => 0);
 
     if (lpCount > 0) {
-      // Dispara element.click() no label via page.evaluate — é o click nativo do DOM
-      // que o React intercepta, ao contrário de dispatchEvent no input filho.
       await labelPai.first().evaluate((el: HTMLElement) => {
         el.click();
       }).catch(() => {});
       await humanPause(randInt(sp(40), sp(80)));
       if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — click nativo no label pai (forcarCheckViaLabel)`, cycle);
     } else {
-      // Fallback: sem label pai — usa nativeSet + eventos no próprio input
       await cb.evaluate((el: HTMLInputElement) => {
         if (el.type === 'checkbox') {
           const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
@@ -261,9 +239,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // PASSO 1 — PRIORIDADE MÁXIMA: [data-testid="accept-terms"] label visível
-  // ─────────────────────────────────────────────────────────────────────────────
   const containerTermos = p.locator('[data-testid="accept-terms"]');
   const containerCount = await containerTermos.count().catch(() => 0);
   if (containerCount > 0) {
@@ -277,23 +252,18 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         if (lbox && lbox.width > 0 && lbox.height > 0) {
           await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
           await humanPause(randInt(sp(40), sp(80)));
-
-          // Passo 1A: click nativo no label filho via element.click() (o que React Uber escuta)
           await labelFilho.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
           await humanPause(randInt(sp(80), sp(150)));
           if (cycle !== undefined) log('info', '[termos] [accept-terms] label filho — element.click() nativo (Passo 1A)', cycle);
 
-          // Verifica se o React atualizou o estado
           const cbInterno = containerTermos.first().locator('input[type="checkbox"]').first();
           const cbCount = await cbInterno.count().catch(() => 0);
           if (cbCount > 0 && !(await estaChecked(cbInterno))) {
-            // React não respondeu ao click no label filho — tenta via label pai do input
             await forcarCheckViaLabel(cbInterno, 0);
           }
           marcouAlgum = true;
         }
       } else {
-        // Sem label filho — dispara element.click() direto no container
         const cbox = await containerTermos.first().boundingBox().catch(() => null);
         if (cbox && cbox.width > 0) {
           await humanMouseMove(p, cbox.x + cbox.width * randFloat(0.2, 0.5), cbox.y + cbox.height * randFloat(0.3, 0.7));
@@ -313,11 +283,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     return true;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // PASSO 2 — label visível com texto de termos
-  // Clica via element.click() no label — o browser propaga ao input associado
-  // e o React escuta o onClick do label.
-  // ─────────────────────────────────────────────────────────────────────────────
   const labelTextoSels = [
     'label:has-text("Concordo")',
     'label:has-text("Agree")',
@@ -337,13 +302,10 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
 
       await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
       await humanPause(randInt(sp(40), sp(80)));
-
-      // element.click() nativo no label — não no input filho
       await lbl.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
       await humanPause(randInt(sp(80), sp(150)));
       if (cycle !== undefined) log('info', `[termos] Label texto — element.click(): "${sel}" (Passo 2)`, cycle);
 
-      // Verifica se o React atualizou; se não, usa forcarCheckViaLabel no input interno
       const cbInterno = lbl.locator('input[type="checkbox"]').first();
       const cbCount = await cbInterno.count().catch(() => 0);
       if (cbCount > 0 && !(await estaChecked(cbInterno))) {
@@ -361,10 +323,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     return true;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // PASSO 3 — input[type=checkbox] → forcarCheckViaLabel (ancestor label)
-  // Usa o novo helper que dispara click no label pai, não no input.
-  // ─────────────────────────────────────────────────────────────────────────────
   const nativos = p.locator('input[type="checkbox"]');
   const nCount = await nativos.count().catch(() => 0);
 
@@ -380,7 +338,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         continue;
       }
 
-      // Tenta click no ancestor label via XPath primeiro (caminho correto para React Uber)
       let clicked = false;
       try {
         const labelPai = cb.locator('xpath=ancestor::label[1]');
@@ -390,7 +347,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
           if (lbox && lbox.width > 0 && lbox.height > 0) {
             await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
             await humanPause(randInt(sp(40), sp(80)));
-            // element.click() nativo no label pai — React escuta aqui
             await labelPai.first().evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
             await humanPause(randInt(sp(80), sp(150)));
             if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — element.click() no ancestor label (Passo 3A)`, cycle);
@@ -399,7 +355,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         }
       } catch { /* fallback */ }
 
-      // Se label não encontrado, tenta click({ force: true }) direto no input oculto
       if (!clicked) {
         try {
           await cb.click({ force: true, timeout: 3000 });
@@ -409,7 +364,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         } catch { /* fallback */ }
       }
 
-      // Confirma checked; se não, usa forcarCheckViaLabel (dispara click no label pai)
       const confirmed = await estaChecked(cb);
       if (!confirmed) {
         await forcarCheckViaLabel(cb, i);
@@ -419,9 +373,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     } catch { /* continua */ }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // PASSO 4 — [role=checkbox] visíveis
-  // ─────────────────────────────────────────────────────────────────────────────
   const roles = p.locator('[role="checkbox"]');
   const rCount = await roles.count().catch(() => 0);
   for (let i = 0; i < rCount; i++) {
@@ -438,8 +389,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
       const box = await cb.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
       await humanPause(randInt(sp(40), sp(80)));
-
-      // element.click() nativo — React escuta aqui
       await cb.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
       await humanPause(randInt(sp(80), sp(150)));
 
@@ -900,6 +849,15 @@ async function ensureBrowser(headless = false, proxyConfig?: string): Promise<vo
   browserLaunching = true;
   try {
     if (browser) { await browser.close().catch(() => {}); browser = null; }
+
+    // FIX: registra o plugin stealth AQUI, lazy, uma única vez.
+    // Antes estava no topo do módulo (chromiumExtra.use(StealthPlugin()))
+    // o que fazia o import lançar erro e exportar undefined.
+    if (!stealthPluginRegistered) {
+      chromiumExtra.use(StealthPlugin());
+      stealthPluginRegistered = true;
+    }
+
     const launchOpts: any = {
       headless,
       args: [
