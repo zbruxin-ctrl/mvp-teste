@@ -998,10 +998,27 @@ async function processarTelaOnboarding(
 
   await humanPause(randInt(sp(150), sp(350)));
 
+  // FIX: após selecionarCidade o Uber pode navegar automaticamente.
+  // Captura a URL antes, seleciona a cidade, e verifica se houve navegação.
+  // Só chama clickForwardButton se a URL NÃO mudou (página ainda é a mesma).
   if (await p.locator('[data-testid="flow-type-city-selector-v2-input"]').first().isVisible({ timeout: 1500 }).catch(() => false)) {
+    const urlAntesCidade = p.url();
     await selecionarCidade(p, payload.cidade, cycle);
     fezAlgo = true;
     await humanPause(randInt(sp(400), sp(800)));
+
+    // Aguarda brevemente para ver se o Uber navegou sozinho após a seleção
+    const urlPosCidade = await aguardarNavegacaoEstabilizar(p, 3_000, 800);
+
+    if (urlPosCidade !== urlAntesCidade) {
+      // Uber já avançou automaticamente — não clica no forward-button
+      log('info', `📍 [Tela ${telaIdx}] Uber navegou automaticamente após cidade: ${urlPosCidade}`, cycle);
+      // Tenta preencher invite code na nova tela se ainda aparecer
+      await preencherInviteCode(p, payload.inviteCode, cycle);
+      return true;
+    }
+
+    // URL não mudou — continua o fluxo normal (preenche invite code + clica avançar)
     await preencherInviteCode(p, payload.inviteCode, cycle);
   }
 
