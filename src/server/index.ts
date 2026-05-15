@@ -22,8 +22,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Serve o frontend compilado em dist/frontend
-app.use(express.static(path.join(__dirname, '../frontend')));
+// Caminho absoluto do diretório frontend (funciona tanto em dev quanto em produção)
+const FRONTEND_DIR = path.resolve(__dirname, '../frontend');
+
+// Serve arquivos estáticos do frontend
+app.use(express.static(FRONTEND_DIR));
 
 globalState.setExecutor(async (config, cycle) => {
   await MockPlaywrightFlow.init(config.headless);
@@ -196,14 +199,16 @@ app.delete('/api/accounts/:id', requireAuth, (req, res) => {
   res.json({ ok: removed });
 });
 
-// Fallback: qualquer rota desconhecida serve o index.html (SPA)
+// Fallback SPA: força Content-Type correto para evitar que o browser interprete como download/base64
 app.get('*', (_req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.sendFile(path.join(FRONTEND_DIR, 'index.html'));
 });
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Servidor rodando em http://localhost:${PORT}`);
   console.log(`🔑 Senha do painel: connect@10\n`);
+  console.log(`📁 Frontend dir: ${FRONTEND_DIR}`);
 });
 
 async function gracefulShutdown(signal: string) {
