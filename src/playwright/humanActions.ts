@@ -396,13 +396,20 @@ export async function humanClick(p: Page, selector: string): Promise<void> {
 }
 
 // ─── Forward button ───────────────────────────────────────────────────────────
+// FIX: versão tolerante a falhas.
+// Antes: waitForSelector lançava exceção se #forward-button não existia na
+// tela de localização (Uber usa botão diferente), o que subia até o catch do
+// _executarCiclo e fechava o contexto silenciosamente.
+// Agora: .catch(() => {}) no waitForSelector + lista de fallback tentada em
+// sequência + swallow silencioso se nenhum seletor existir na página.
 
 export async function clickForwardButton(p: Page, cycle: number): Promise<void> {
-  globalState.addLog('info', '⏳ Aguardando #forward-button habilitado...', cycle);
+  globalState.addLog('info', '⏳ Aguardando botão de avançar...', cycle);
 
-  await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 15000 })
-    .catch(async () => {
-      globalState.addLog('warn', '⚠️ #forward-button:not([disabled]) não encontrado, tentando mesmo assim...', cycle);
+  // Aguarda #forward-button habilitado, mas NÃO lança exceção se não existir
+  await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 8000 })
+    .catch(() => {
+      globalState.addLog('warn', '⚠️ #forward-button:not([disabled]) não encontrado — tentando fallbacks...', cycle);
     });
 
   if (!isSpeedMode()) {
@@ -415,8 +422,38 @@ export async function clickForwardButton(p: Page, cycle: number): Promise<void> 
     await cogPause(400, 1400);
   }
 
-  await humanClick(p, '#forward-button');
-  globalState.addLog('info', '🖱️ #forward-button clicado', cycle);
+  // Lista de seletores tentados em ordem de prioridade
+  const FORWARD_SELS = [
+    '#forward-button',
+    '[data-testid="forward-button"]',
+    '[data-testid="submit-button"]',
+    'button[type="submit"]',
+    'button:has-text("Continuar")',
+    'button:has-text("Continue")',
+    'button:has-text("Próximo")',
+    'button:has-text("Next")',
+    'button:has-text("Avançar")',
+    '[data-testid="step-bottom-navigation"] button',
+  ];
+
+  for (const sel of FORWARD_SELS) {
+    try {
+      const el = p.locator(sel).first();
+      const visible = await el.isVisible({ timeout: 1500 }).catch(() => false);
+      if (!visible) continue;
+
+      const box = await el.boundingBox().catch(() => null);
+      if (box) {
+        await humanMouseMove(p, box.x + box.width * randFloat(0.22, 0.78), box.y + box.height * randFloat(0.22, 0.78));
+        await humanPause(randInt(sp(80), sp(200)));
+      }
+      await el.click({ force: true, timeout: 5000 });
+      globalState.addLog('info', `🖱️ Botão avançar clicado (${sel})`, cycle);
+      return;
+    } catch { /* tenta próximo */ }
+  }
+
+  globalState.addLog('warn', '⚠️ Nenhum botão de avançar encontrado — continuando sem clicar', cycle);
 }
 
 // ─── Scroll ───────────────────────────────────────────────────────────────────
