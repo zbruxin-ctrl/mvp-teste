@@ -49,18 +49,11 @@ function clamp(value: number, min: number, max: number): number {
 /** Retorna true se o char pode ser passado para keyboard.down/up sem erro. */
 function isAsciiKey(ch: string): boolean {
   const code = ch.charCodeAt(0);
-  // Playwright aceita keyboard.down apenas para chars ASCII imprimíveis (32-126)
-  // e chars de controle mapeados (ex: Enter, Tab). Para tudo acima de 127
-  // (acentuados, ç, ã, etc.) é necessário usar keyboard.type.
   return ch.length === 1 && code >= 32 && code <= 126;
 }
 
 // ─── Pausas ───────────────────────────────────────────────────────────────────
 
-/**
- * Pausa com jitter gaussiano em torno do valor base.
- * Evita padrões periódicos detectados por análise estatística de timing.
- */
 export async function humanPause(baseMs: number): Promise<void> {
   const effective = sp(baseMs);
   const stddev = effective * 0.12;
@@ -71,20 +64,18 @@ export async function humanPause(baseMs: number): Promise<void> {
 
 /**
  * Pausa cognitiva — imita latência de decisão humana.
- * 20% chance de "distração" (pausa 2-4× mais longa).
+ * Distração reduzida para 10% e cap em 1200ms para não explodir o ciclo.
  */
 export async function cogPause(minMs: number, maxMs: number): Promise<void> {
   const base = randInt(sp(minMs), sp(maxMs));
   const skewed = base + Math.max(0, Math.round(gaussianRand() * base * 0.08));
-  const distracted = !isSpeedMode() && Math.random() < 0.20
-    ? randInt(800, 3200)
+  // FIX: distração reduzida de 20%→10% e cap 3200ms→1200ms
+  const distracted = !isSpeedMode() && Math.random() < 0.10
+    ? randInt(400, 1200)
     : 0;
   await new Promise<void>((r) => setTimeout(r, Math.max(30, skewed + distracted)));
 }
 
-/**
- * Micro-pausa — entre eventos de baixa latência (ex.: entre dígitos do OTP).
- */
 export async function microPause(): Promise<void> {
   const base = isSpeedMode() ? randInt(8, 25) : randInt(18, 55);
   await new Promise<void>((r) => setTimeout(r, base));
@@ -92,11 +83,6 @@ export async function microPause(): Promise<void> {
 
 // ─── Movimento de mouse ───────────────────────────────────────────────────────
 
-/**
- * Move o mouse em curva Bézier cúbica com ease-in-out + overshoot leve.
- * Velocidade não-uniforme via seno (mais lento no início e fim).
- * Micro-tremor pós-chegada em modo normal.
- */
 export async function humanMouseMove(p: Page, x: number, y: number): Promise<void> {
   const fast = isSpeedMode();
   const startX = randInt(20, 380);
@@ -170,9 +156,6 @@ export async function hoverElement(p: Page, selector: string): Promise<void> {
 }
 
 // ─── focusField ───────────────────────────────────────────────────────────────
-// O Arkose rastreia a cadeia: pointerover → pointerenter → pointermove
-// → pointerdown → pointerup → focus. Usar apenas .focus() ou .click()
-// pula toda essa cadeia e acende um sinal de automação.
 
 export async function focusField(p: Page, selector: string): Promise<void> {
   const box = await p.locator(selector).first().boundingBox().catch(() => null);
@@ -209,11 +192,6 @@ export async function focusField(p: Page, selector: string): Promise<void> {
 }
 
 // ─── _typeChar ────────────────────────────────────────────────────────────────
-// FIX: keyboard.down/up falha com "Unknown key" para chars não-ASCII
-// (acentuados, ç, ã, etc.). A detecção isAsciiKey() decide o caminho:
-//   ASCII (32-126)  → keyboard.down + holdMs + InputEvent + keyboard.up
-//   Non-ASCII       → keyboard.type (Playwright converte internamente) +
-//                     InputEvent manual para manter a cadeia de eventos.
 
 export async function _typeChar(p: Page, ch: string, fast: boolean): Promise<void> {
   const holdMs = fast
@@ -221,7 +199,6 @@ export async function _typeChar(p: Page, ch: string, fast: boolean): Promise<voi
     : clamp(Math.round(gaussianRand() * 20 + 65), 35, 130);
 
   if (isAsciiKey(ch)) {
-    // Caminho original: down → hold → InputEvent → up
     await p.keyboard.down(ch);
     await new Promise<void>((r) => setTimeout(r, holdMs));
     await p.evaluate((char: string) => {
@@ -238,9 +215,7 @@ export async function _typeChar(p: Page, ch: string, fast: boolean): Promise<voi
     }, ch);
     await p.keyboard.up(ch);
   } else {
-    // Caminho Unicode: keyboard.type insere o char sem exigir nome de tecla
     await p.keyboard.type(ch, { delay: holdMs });
-    // Dispara InputEvent adicional para manter compatibilidade com React
     await p.evaluate((char: string) => {
       const el = document.activeElement as HTMLInputElement | null;
       if (!el) return;
@@ -283,8 +258,6 @@ export async function humanType(p: Page, selector: string, value: string): Promi
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
 
-    // Guard: só gera typo para ASCII imprimível (32-126) para não produzir
-    // chars acentuados via charCodeAt+offset que quebrariam keyboard.down
     if (!fast && Math.random() < 0.04 && /[a-zA-Z]/.test(ch)) {
       const offset = Math.random() > 0.5 ? 1 : -1;
       const typoCode = ch.charCodeAt(0) + offset;
@@ -314,11 +287,6 @@ export async function humanType(p: Page, selector: string, value: string): Promi
   }
 }
 
-/**
- * humanTypeForce — limpa forçosamente e dispara InputEvent após cada caractere.
- * Compatível com React/Vue controlled inputs.
- * Tolerante a campos que desaparecem durante digitação (ex: tela de OTP).
- */
 export async function humanTypeForce(p: Page, selector: string, value: string): Promise<void> {
   const appeared = await p.waitForSelector(selector, { state: 'visible', timeout: 15000 })
     .then(() => true)
@@ -361,8 +329,6 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
 
     const ch = value[i]!;
 
-    // Guard: só gera typo para ASCII imprimível (32-126) para não produzir
-    // chars acentuados via charCodeAt+offset que quebrariam keyboard.down
     if (!fast && Math.random() < 0.04 && /[a-zA-Z]/.test(ch)) {
       const offset = Math.random() > 0.5 ? 1 : -1;
       const typoCode = ch.charCodeAt(0) + offset;
@@ -429,33 +395,25 @@ export async function humanClick(p: Page, selector: string): Promise<void> {
 }
 
 // ─── Forward button ───────────────────────────────────────────────────────────
-// FIX: versão tolerante a falhas.
-// Antes: waitForSelector lançava exceção se #forward-button não existia na
-// tela de localização (Uber usa botão diferente), o que subia até o catch do
-// _executarCiclo e fechava o contexto silenciosamente.
-// Agora: .catch(() => {}) no waitForSelector + lista de fallback tentada em
-// sequência + swallow silencioso se nenhum seletor existir na página.
+// FIX PERF: 3 mudanças para eliminar gargalo de ~11s por click:
+//   1. waitForSelector timeout: 8000 → 2000ms
+//   2. cogPause: (400,1400) → (150,500) — corta ~900ms de média
+//   3. scroll aleatório 30% removido — elimina até 800ms extras por click
 
 export async function clickForwardButton(p: Page, cycle: number): Promise<void> {
   globalState.addLog('info', '⏳ Aguardando botão de avançar...', cycle);
 
-  // Aguarda #forward-button habilitado, mas NÃO lança exceção se não existir
-  await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 8000 })
+  // FIX 1: timeout 8000 → 2000
+  await p.waitForSelector('#forward-button:not([disabled])', { state: 'visible', timeout: 2000 })
     .catch(() => {
       globalState.addLog('warn', '⚠️ #forward-button:not([disabled]) não encontrado — tentando fallbacks...', cycle);
     });
 
+  // FIX 2: cogPause cortado de (400,1400) → (150,500). Scroll removido.
   if (!isSpeedMode()) {
-    if (Math.random() < 0.30) {
-      await p.mouse.wheel(0, randInt(20, 60));
-      await humanPause(randInt(200, 500));
-      await p.mouse.wheel(0, -randInt(20, 60));
-      await humanPause(randInt(100, 300));
-    }
-    await cogPause(400, 1400);
+    await cogPause(150, 500);
   }
 
-  // Lista de seletores tentados em ordem de prioridade
   const FORWARD_SELS = [
     '#forward-button',
     '[data-testid="forward-button"]',
@@ -556,6 +514,6 @@ export async function pageWarmup(p: Page, cycle: number): Promise<void> {
     }
   } catch { /* ignora */ }
 
-  await cogPause(700, 1800);
+  await cogPause(400, 900);
   globalState.addLog('info', '✅ Aquecimento concluído', cycle);
 }
