@@ -125,7 +125,6 @@ function isVeriffUrl(url: string): boolean {
 
 async function detectarVeriff(p: Page): Promise<boolean> {
   if (isVeriffUrl(p.url())) return true;
-  // Elementos presentes na sessão Veriff embutida em iframe ou diretamente
   const seletoresVeriff = [
     '[data-testid="veriff-container"]',
     'iframe[src*="veriff"]',
@@ -194,54 +193,181 @@ async function dispensarCookies(p: Page): Promise<void> {
 }
 
 // ─── Aceitar termos ───────────────────────────────────────────────────────────
+/**
+ * Marca TODOS os checkboxes de termos presentes na tela.
+ *
+ * Estratégia por ordem de prioridade para cada checkbox encontrado:
+ *   1. Clica no <label> associado (for=id) — funciona em checkboxes customizados Uber
+ *      que usam label estilizado e escondem o input nativo
+ *   2. Se label não encontrado, tenta click() direto no input com { force: true }
+ *   3. Se ainda unchecked, tenta check() com { force: true } como último recurso
+ *   4. Verifica via JS se ficou checked; se não, repete mais uma vez via JS dispatchEvent
+ *
+ * Aguarda até 2s o forward-button habilitar após marcar todos os checkboxes.
+ */
+async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
+  // ── Seletores de container de termos conhecidos (prioridade 1) ──
+  const containersSels = [
+    '[data-testid="accept-terms"]',
+    '[data-testid*="terms"]',
+    '[data-testid*="consent"]',
+    '[data-testid*="agree"]',
+  ];
 
-async function tentarAceitarTermos(p: Page): Promise<boolean> {
-  try {
-    const uberTerms = p.locator('[data-testid="accept-terms"]');
-    if (await uberTerms.isVisible({ timeout: 1000 }).catch(() => false)) {
-      const cb = p.locator('input[type="checkbox"]').first();
-      await cb.waitFor({ state: 'attached', timeout: 2000 });
-      const box = await cb.boundingBox().catch(() => null);
-      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(40), sp(80)));
-      await cb.check({ force: true, timeout: 4000 });
-      globalState.addLog('info', 'Termos Uber aceitos (accept-terms)');
+  // Coleta todos os checkboxes visíveis/attached da página
+  async function coletarCheckboxes() {
+    // inputs nativos
+    const nativos = p.locator('input[type="checkbox"]');
+    const nCount = await nativos.count().catch(() => 0);
+    // role=checkbox (customizados)
+    const roles = p.locator('[role="checkbox"]');
+    const rCount = await roles.count().catch(() => 0);
+    return { nativos, nCount, roles, rCount };
+  }
+
+  const { nCount, rCount } = await coletarCheckboxes();
+  if (nCount === 0 && rCount === 0) return false;
+
+  let marcouAlgum = false;
+
+  // ── Função core: marcar um único checkbox com todas as estratégias ──
+  async function marcarCheckbox(cb: import('playwright').Locator, idx: number): Promise<boolean> {
+    // Verifica se já está marcado
+    const jaMarcado = await cb.evaluate((el: HTMLInputElement) =>
+      el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
+    ).catch(() => false);
+    if (jaMarcado) {
+      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} ja marcado — pulando`, cycle);
       return true;
     }
-  } catch { /* continua */ }
 
-  const candidatos: Array<() => Promise<void>> = [
-    async () => {
-      const el = p.locator('input[type="checkbox"]').first();
-      await el.waitFor({ state: 'attached', timeout: 2000 });
-      if (!await el.isVisible({ timeout: 1000 }).catch(() => false)) throw new Error('not visible');
-      const box = await el.boundingBox().catch(() => null);
-      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+    await cb.waitFor({ state: 'attached', timeout: 2000 }).catch(() => {});
+
+    // Move mouse para o centro do checkbox
+    const box = await cb.boundingBox().catch(() => null);
+    if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
+    await humanPause(randInt(sp(40), sp(80)));
+
+    // Estratégia 1: clicar no <label for="id"> associado ao input
+    let clicouLabel = false;
+    try {
+      const id = await cb.getAttribute('id').catch(() => null);
+      if (id) {
+        const label = p.locator(`label[for="${id}"]`).first();
+        const labelVisible = await label.isVisible({ timeout: 800 }).catch(() => false);
+        if (labelVisible) {
+          const lbox = await label.boundingBox().catch(() => null);
+          if (lbox) await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
+          await humanPause(randInt(sp(30), sp(70)));
+          await label.click({ force: true, timeout: 3000 });
+          clicouLabel = true;
+          if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} marcado via label[for="${id}"]`, cycle);
+        }
+      }
+    } catch { /* fallback */ }
+
+    // Estratégia 2: click direto no input com force
+    if (!clicouLabel) {
+      try {
+        await cb.click({ force: true, timeout: 3000 });
+        if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} marcado via click(force)`, cycle);
+      } catch { /* fallback */ }
+    }
+
+    await humanPause(randInt(sp(60), sp(120)));
+
+    // Verifica se ficou marcado
+    const checkedApos = await cb.evaluate((el: HTMLInputElement) =>
+      el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
+    ).catch(() => false);
+
+    // Estratégia 3: check() nativo como último recurso
+    if (!checkedApos) {
+      try {
+        await cb.check({ force: true, timeout: 3000 });
+        if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} marcado via .check(force)`, cycle);
+      } catch { /* ignora */ }
       await humanPause(randInt(sp(40), sp(80)));
-      await el.check({ force: true, timeout: 4000 });
-    },
-    async () => {
-      const el = p.locator('[role="checkbox"]').first();
-      await el.waitFor({ state: 'attached', timeout: 2000 });
-      if (!await el.isVisible({ timeout: 1000 }).catch(() => false)) throw new Error('not visible');
-      const box = await el.boundingBox().catch(() => null);
-      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(30), sp(70)));
-      await el.click({ force: true, timeout: 4000 });
-    },
-    async () => {
-      const el = p.locator('label:has-text("Concordo"), label:has-text("Agree"), label:has-text("aceito"), label:has-text("accept")').first();
-      await el.waitFor({ state: 'attached', timeout: 2000 });
-      const box = await el.boundingBox().catch(() => null);
-      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(30), sp(70)));
-      await el.click({ force: true, timeout: 4000 });
-    },
-  ];
-  for (const fn of candidatos) {
-    try { await fn(); globalState.addLog('info', 'Termos aceitos'); return true; } catch { /* tenta próximo */ }
+    }
+
+    // Estratégia 4: forçar via JS change event (checkbox React customizado)
+    const checkedFinal = await cb.evaluate((el: HTMLInputElement) =>
+      el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
+    ).catch(() => false);
+    if (!checkedFinal) {
+      await cb.evaluate((el: HTMLInputElement) => {
+        if (el.type === 'checkbox') {
+          const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
+          if (nativeSet) nativeSet.call(el, true);
+          else el.checked = true;
+        } else {
+          el.setAttribute('aria-checked', 'true');
+        }
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('input',  { bubbles: true, cancelable: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(40), sp(80)));
+      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} forcado via JS setter+events`, cycle);
+    }
+
+    return true;
   }
-  return false;
+
+  // ── Marcar todos os inputs[type=checkbox] ──
+  const { nativos, nCount: nc2 } = await coletarCheckboxes();
+  for (let i = 0; i < nc2; i++) {
+    try {
+      const cb = nativos.nth(i);
+      const visible = await cb.isVisible({ timeout: 800 }).catch(() => false);
+      const attached = await cb.count().then((n) => n > 0).catch(() => false);
+      if (!visible && !attached) continue;
+      await marcarCheckbox(cb, i);
+      marcouAlgum = true;
+    } catch { /* continua */ }
+  }
+
+  // ── Marcar todos os [role=checkbox] não já cobertos ──
+  const { roles, rCount: rc2 } = await coletarCheckboxes();
+  for (let i = 0; i < rc2; i++) {
+    try {
+      const cb = roles.nth(i);
+      const visible = await cb.isVisible({ timeout: 800 }).catch(() => false);
+      if (!visible) continue;
+      await marcarCheckbox(cb, i + 1000);
+      marcouAlgum = true;
+    } catch { /* continua */ }
+  }
+
+  // ── Fallback: labels de termos com texto ──
+  if (!marcouAlgum) {
+    const labelSel = 'label:has-text("Concordo"), label:has-text("Agree"), label:has-text("aceito"), label:has-text("accept"), label:has-text("termos"), label:has-text("terms")';
+    const labels = p.locator(labelSel);
+    const lCount = await labels.count().catch(() => 0);
+    for (let i = 0; i < lCount; i++) {
+      try {
+        const lbl = labels.nth(i);
+        if (!await lbl.isVisible({ timeout: 800 }).catch(() => false)) continue;
+        const lbox = await lbl.boundingBox().catch(() => null);
+        if (lbox) await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
+        await humanPause(randInt(sp(30), sp(70)));
+        await lbl.click({ force: true, timeout: 3000 });
+        marcouAlgum = true;
+        if (cycle !== undefined) log('info', `[termos] Label de texto clicado (fallback)`, cycle);
+      } catch { /* continua */ }
+    }
+  }
+
+  if (marcouAlgum) {
+    if (cycle !== undefined) log('info', '[termos] Termos aceitos', cycle);
+    // Aguarda o forward-button habilitar (até 2s) após marcar
+    await p.locator('#forward-button, [data-testid="forward-button"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 2000 })
+      .catch(() => {});
+  }
+
+  return marcouAlgum;
 }
 
 // ─── Seleciona cidade + preenche invite code ──────────────────────────────────
@@ -979,10 +1105,8 @@ async function processarTelaOnboarding(
 ): Promise<boolean> {
   log('info', `[Tela ${telaIdx}] Verificando tela de onboarding...`, cycle);
 
-  // FIX 1: dispensar cookies no início de CADA tela
   await dispensarCookies(p);
 
-  // VERIFF CHECK: se chegou no KYC Veriff, fecha o contexto e encerra
   if (await detectarVeriff(p)) {
     log('warn', `[Tela ${telaIdx}] KYC Veriff detectado — encerrando ciclo`, cycle);
     throw new Error('VERIFF_DETECTED');
@@ -1018,7 +1142,7 @@ async function processarTelaOnboarding(
     }
 
     await cogPause(150, 300);
-    const aceitouAposCidade = await tentarAceitarTermos(p);
+    const aceitouAposCidade = await tentarAceitarTermos(p, cycle);
     if (aceitouAposCidade) await cogPause(150, 300);
 
     await dispensarCookies(p);
@@ -1097,8 +1221,10 @@ async function processarTelaOnboarding(
 
   await cogPause(150, 350);
 
-  const aceitou = await tentarAceitarTermos(p);
-  if (aceitou) { fezAlgo = true; await cogPause(150, 300); }
+  // FIX B: tentarAceitarTermos agora recebe cycle para logging e usa estratégia
+  // multicamada com verificação de checked + fallback JS setter
+  const aceitou = await tentarAceitarTermos(p, cycle);
+  if (aceitou) { fezAlgo = true; await cogPause(200, 400); }
 
   const temBotao = await p.locator(
     '#forward-button, [data-testid="forward-button"], [data-testid="submit-button"], button[type="submit"]'
@@ -1135,7 +1261,6 @@ async function etapa_posEmail(
   const MAX_TELA_TIMEOUT_MS = 10_000;
 
   for (let tela = 1; tela <= MAX_TELAS; tela++) {
-    // Stall-guard: cada iteração do loop tem no máximo STEP_STALL_TIMEOUT_MS
     const stallController = new AbortController();
     const stallTimer = setTimeout(() => {
       log('error', `[Tela ${tela}] Etapa travada por mais de ${STEP_STALL_TIMEOUT_MS / 60000} minutos — abortando ciclo`, cycle);
@@ -1153,7 +1278,6 @@ async function etapa_posEmail(
         return 'success';
       }
 
-      // Veriff check no loop principal também
       if (isVeriffUrl(url) || await detectarVeriff(p)) {
         log('warn', `[Tela ${tela}] KYC Veriff detectado no loop principal — encerrando`, cycle);
         clearTimeout(stallTimer);
@@ -1272,7 +1396,7 @@ async function _executarCiclo(
         }
       }
       await cogPause(200, 400);
-      await tentarAceitarTermos(page);
+      await tentarAceitarTermos(page, cycle);
       await clickForwardButton(page, cycle);
       await aguardarNavegacaoEstabilizar(page, 4_000, 600);
     }
@@ -1280,7 +1404,7 @@ async function _executarCiclo(
     const termosVisiblePreSenha = await page.locator('[data-testid="accept-terms"]').first()
       .isVisible({ timeout: 1500 }).catch(() => false);
     if (termosVisiblePreSenha) {
-      await tentarAceitarTermos(page);
+      await tentarAceitarTermos(page, cycle);
       await cogPause(200, 400);
       await clickForwardButton(page, cycle);
       await aguardarNavegacaoEstabilizar(page, 4_000, 600);
@@ -1373,8 +1497,6 @@ export class MockPlaywrightFlow {
   }
 
   static async execute(cadastroUrl: string, opts: FlowOpts, cycle: number): Promise<void> {
-    // Sem timeout global de ciclo.
-    // A guia fecha APENAS em: (1) Veriff detectado, (2) stall >5min por etapa.
     await _executarCiclo(cycle, { cadastroUrl, ...opts });
   }
 
