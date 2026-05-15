@@ -1613,3 +1613,38 @@ export async function executarCiclo(
   await ensureBrowser(opts.headless ?? false, opts.proxyConfig);
   await _executarCiclo(cycle, opts);
 }
+
+// ─── MockPlaywrightFlow namespace (compatibilidade com server/index.ts) ────────
+// server/index.ts chama MockPlaywrightFlow.init(), .execute() e .cleanup().
+// Este objeto expõe a mesma API esperada, delegando para as funções internas.
+
+export const MockPlaywrightFlow = {
+  /** Inicializa (garante) o browser com o modo headless informado. */
+  async init(headless = false): Promise<void> {
+    await ensureBrowser(headless);
+  },
+
+  /**
+   * Executa um ciclo completo de cadastro.
+   * Assinatura compatível com a chamada em server/index.ts:
+   *   MockPlaywrightFlow.execute(CADASTRO_URL, { emailProvider, tempMailApiKey, otpTimeout, extraDelay, inviteCode }, cycle)
+   */
+  async execute(
+    cadastroUrl: string,
+    opts: {
+      emailProvider: EmailProvider;
+      tempMailApiKey: string;
+      otpTimeout: number;
+      extraDelay: number;
+      inviteCode: string;
+    },
+    cycle: number
+  ): Promise<void> {
+    await _executarCiclo(cycle, { cadastroUrl, ...opts });
+  },
+
+  /** Fecha o browser global (chamado no gracefulShutdown). */
+  async cleanup(): Promise<void> {
+    await closeBrowser();
+  },
+};
