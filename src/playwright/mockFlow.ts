@@ -25,8 +25,12 @@ let currentLaunchProxy: string | null = null;
 
 const contextosPorCiclo = new Map<number, import('playwright').BrowserContext>();
 
-// FIX TIMING: ciclo total máx 90s (era 10min)
-const CYCLE_TIMEOUT_MS = 90 * 1_000;
+// Sem timeout global de ciclo.
+// A guia fecha APENAS em dois casos:
+//   1. KYC Veriff detectado (isVeriffUrl / elemento veriff na tela)
+//   2. Uma única etapa ficou travada por mais de STEP_STALL_TIMEOUT_MS
+const STEP_STALL_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutos por etapa
+
 const MOBILE_DEVICE = {
   ...devices['iPhone 14'],
   viewport: { width: 390, height: 844 },
@@ -105,6 +109,36 @@ function isOnboardingUrl(url: string): boolean {
     url.includes('/verify') ||
     url.includes('/confirm')
   );
+}
+
+/** Retorna true se a URL ou conteúdo da página indica KYC Veriff. */
+function isVeriffUrl(url: string): boolean {
+  return (
+    url.includes('veriff.com') ||
+    url.includes('veriff.me') ||
+    url.includes('veriff.app') ||
+    url.includes('kyc.uber') ||
+    url.includes('/veriff') ||
+    url.includes('identity-verification')
+  );
+}
+
+async function detectarVeriff(p: Page): Promise<boolean> {
+  if (isVeriffUrl(p.url())) return true;
+  // Elementos presentes na sessão Veriff embutida em iframe ou diretamente
+  const seletoresVeriff = [
+    '[data-testid="veriff-container"]',
+    'iframe[src*="veriff"]',
+    '.veriff-container',
+    '[class*="veriff"]',
+    'img[alt*="Veriff"]',
+    'button:has-text("Start verification")',
+    'button:has-text("Iniciar verificação")',
+  ];
+  for (const sel of seletoresVeriff) {
+    if (await p.locator(sel).first().isVisible({ timeout: 500 }).catch(() => false)) return true;
+  }
+  return false;
 }
 
 // ─── Logger ───────────────────────────────────────────────────────────────────
@@ -398,8 +432,6 @@ async function tratarTelaSenhaFluxo(
   if (!temSenha) return false;
 
   // FIX A: se o input de cidade ainda está visível, NÃO tratar como tela de senha.
-  // O autofill do browser pode injetar input[type=password] oculto na tela de
-  // localização, fazendo o fluxo digitar a senha no campo de cidade visível.
   const cidadeAindaVisivel = await p.locator(
     '[data-testid="flow-type-city-selector-v2-input"]'
   ).first().isVisible({ timeout: 300 }).catch(() => false);
@@ -950,16 +982,18 @@ async function processarTelaOnboarding(
   // FIX 1: dispensar cookies no início de CADA tela
   await dispensarCookies(p);
 
+  // VERIFF CHECK: se chegou no KYC Veriff, fecha o contexto e encerra
+  if (await detectarVeriff(p)) {
+    log('warn', `[Tela ${telaIdx}] KYC Veriff detectado — encerrando ciclo`, cycle);
+    throw new Error('VERIFF_DETECTED');
+  }
+
   // FIX A: verificar cidade PRIMEIRO, antes de tratarTelaSenha/ReAuth.
-  // O autofill do browser injeta input[type=password] oculto na tela de
-  // localização. Se tratarTelaSenhaFluxo rodar antes, ele detecta esse campo
-  // oculto e digita a senha (connect@10) no campo de cidade visível.
   const INPUT_CIDADE_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
   if (await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 1000 }).catch(() => false)) {
     const urlAntesCidade = p.url();
     await selecionarCidade(p, payload.cidade, cycle);
 
-    // FIX 2: aguarda até 4s o input de cidade sumir OU URL mudar
     log('info', `[Tela ${telaIdx}] Aguardando Uber avancar apos cidade...`, cycle);
     const fimEspera = Date.now() + 4_000;
     let cidadeAindaVisivel = true;
@@ -983,12 +1017,10 @@ async function processarTelaOnboarding(
       await preencherInviteCode(p, payload.inviteCode, cycle);
     }
 
-    // Após cidade, continua para forward-button abaixo
     await cogPause(150, 300);
     const aceitouAposCidade = await tentarAceitarTermos(p);
     if (aceitouAposCidade) await cogPause(150, 300);
 
-    // FIX 3: redispensa cookies e revalida antes de avançar
     await dispensarCookies(p);
     const isTelaSenhaAposCidade = await p.locator(
       '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
@@ -1077,7 +1109,6 @@ async function processarTelaOnboarding(
     return false;
   }
 
-  // FIX 3: redispensa cookies e revalida antes de avançar
   await dispensarCookies(p);
   const isTelaSenha = await p.locator(
     '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
@@ -1093,6 +1124,8 @@ async function processarTelaOnboarding(
   return true;
 }
 
+// ─── etapa_posEmail com stall-guard por etapa ─────────────────────────────────
+
 async function etapa_posEmail(
   p: Page,
   payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string; email: string; senha: string },
@@ -1102,40 +1135,63 @@ async function etapa_posEmail(
   const MAX_TELA_TIMEOUT_MS = 10_000;
 
   for (let tela = 1; tela <= MAX_TELAS; tela++) {
-    const url = await aguardarNavegacaoEstabilizar(p, MAX_TELA_TIMEOUT_MS, 600);
-    log('info', `[Tela ${tela}] URL: ${url}`, cycle);
+    // Stall-guard: cada iteração do loop tem no máximo STEP_STALL_TIMEOUT_MS
+    const stallController = new AbortController();
+    const stallTimer = setTimeout(() => {
+      log('error', `[Tela ${tela}] Etapa travada por mais de ${STEP_STALL_TIMEOUT_MS / 60000} minutos — abortando ciclo`, cycle);
+      stallController.abort();
+      fecharContextoCiclo(cycle).catch(() => {});
+    }, STEP_STALL_TIMEOUT_MS);
 
-    if (isSuccessUrl(url)) {
-      log('success', `Destino final detectado! URL: ${url}`, cycle);
-      return 'success';
-    }
+    try {
+      const url = await aguardarNavegacaoEstabilizar(p, MAX_TELA_TIMEOUT_MS, 600);
+      log('info', `[Tela ${tela}] URL: ${url}`, cycle);
 
-    const isHubOrFoto =
-      await p.locator('[data-testid="hub"], [data-testid="step profilePhoto"]')
-        .first().isVisible({ timeout: 1500 }).catch(() => false);
-    if (isHubOrFoto) {
-      log('success', 'Hub/Foto detectado — conta criada com sucesso', cycle);
-      return 'success';
-    }
-
-    if (!isOnboardingUrl(url)) {
-      log('warn', `URL nao reconhecida: ${url}`, cycle);
-      return 'unknown';
-    }
-
-    await p.waitForSelector(
-      'input:not([type="hidden"]), button, [role="checkbox"], #forward-button, [data-testid="hub"], [data-testid="step whatsAppOptIn"], [data-testid="step profilePhoto"], [data-testid="submit-button"]',
-      { timeout: 6_000 }
-    ).catch(() => {});
-
-    const clicou = await processarTelaOnboarding(p, payload, cycle, tela);
-
-    if (!clicou) {
-      const urlApos = await aguardarNavegacaoEstabilizar(p, 4_000, 1_000);
-      if (urlApos === url) {
-        log('warn', `[Tela ${tela}] URL nao avancou. Abortando loop.`, cycle);
-        return isSuccessUrl(urlApos) ? 'success' : 'onboarding';
+      if (isSuccessUrl(url)) {
+        log('success', `Destino final detectado! URL: ${url}`, cycle);
+        clearTimeout(stallTimer);
+        return 'success';
       }
+
+      // Veriff check no loop principal também
+      if (isVeriffUrl(url) || await detectarVeriff(p)) {
+        log('warn', `[Tela ${tela}] KYC Veriff detectado no loop principal — encerrando`, cycle);
+        clearTimeout(stallTimer);
+        throw new Error('VERIFF_DETECTED');
+      }
+
+      const isHubOrFoto =
+        await p.locator('[data-testid="hub"], [data-testid="step profilePhoto"]')
+          .first().isVisible({ timeout: 1500 }).catch(() => false);
+      if (isHubOrFoto) {
+        log('success', 'Hub/Foto detectado — conta criada com sucesso', cycle);
+        clearTimeout(stallTimer);
+        return 'success';
+      }
+
+      if (!isOnboardingUrl(url)) {
+        log('warn', `URL nao reconhecida: ${url}`, cycle);
+        clearTimeout(stallTimer);
+        return 'unknown';
+      }
+
+      await p.waitForSelector(
+        'input:not([type="hidden"]), button, [role="checkbox"], #forward-button, [data-testid="hub"], [data-testid="step whatsAppOptIn"], [data-testid="step profilePhoto"], [data-testid="submit-button"]',
+        { timeout: 6_000 }
+      ).catch(() => {});
+
+      const clicou = await processarTelaOnboarding(p, payload, cycle, tela);
+
+      if (!clicou) {
+        const urlApos = await aguardarNavegacaoEstabilizar(p, 4_000, 1_000);
+        if (urlApos === url) {
+          log('warn', `[Tela ${tela}] URL nao avancou. Abortando loop.`, cycle);
+          clearTimeout(stallTimer);
+          return isSuccessUrl(urlApos) ? 'success' : 'onboarding';
+        }
+      }
+    } finally {
+      clearTimeout(stallTimer);
     }
   }
 
@@ -1287,8 +1343,12 @@ async function _executarCiclo(
     }
 
   } catch (err: any) {
-    log('error', `Erro no ciclo: ${err?.message ?? err}`, cycle);
-    throw err;
+    if (err?.message === 'VERIFF_DETECTED') {
+      log('warn', `Ciclo ${cycle} encerrado: KYC Veriff detectado`, cycle);
+    } else {
+      log('error', `Erro no ciclo: ${err?.message ?? err}`, cycle);
+      throw err;
+    }
   } finally {
     await fecharContextoCiclo(cycle);
   }
@@ -1313,15 +1373,9 @@ export class MockPlaywrightFlow {
   }
 
   static async execute(cadastroUrl: string, opts: FlowOpts, cycle: number): Promise<void> {
-    const timeoutHandle = setTimeout(() => {
-      log('error', `Ciclo ${cycle} excedeu timeout de ${CYCLE_TIMEOUT_MS / 1000}s`, cycle);
-      fecharContextoCiclo(cycle).catch(() => {});
-    }, CYCLE_TIMEOUT_MS);
-    try {
-      await _executarCiclo(cycle, { cadastroUrl, ...opts });
-    } finally {
-      clearTimeout(timeoutHandle);
-    }
+    // Sem timeout global de ciclo.
+    // A guia fecha APENAS em: (1) Veriff detectado, (2) stall >5min por etapa.
+    await _executarCiclo(cycle, { cadastroUrl, ...opts });
   }
 
   static async cleanup(): Promise<void> { await closeBrowser(); }
