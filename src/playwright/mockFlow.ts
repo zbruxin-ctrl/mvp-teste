@@ -147,11 +147,11 @@ async function dispensarCookies(p: Page): Promise<void> {
   for (const seletor of candidatos) {
     try {
       const el = p.locator(seletor).first();
-      if (await el.isVisible({ timeout: 1500 }).catch(() => false)) {
+      if (await el.isVisible({ timeout: 800 }).catch(() => false)) {
         await hoverElement(p, seletor);
-        await el.click({ timeout: 3000 });
+        await el.click({ timeout: 2000 });
         globalState.addLog('info', `🍪 Banner de cookies dispensado (${seletor})`);
-        await humanPause(randInt(sp(300), sp(600)));
+        await humanPause(randInt(sp(150), sp(300)));
         return;
       }
     } catch { /* ignora */ }
@@ -163,13 +163,13 @@ async function dispensarCookies(p: Page): Promise<void> {
 async function tentarAceitarTermos(p: Page): Promise<boolean> {
   try {
     const uberTerms = p.locator('[data-testid="accept-terms"]');
-    if (await uberTerms.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await uberTerms.isVisible({ timeout: 1500 }).catch(() => false)) {
       const cb = p.locator('input[type="checkbox"]').first();
-      await cb.waitFor({ state: 'attached', timeout: 3000 });
+      await cb.waitFor({ state: 'attached', timeout: 2000 });
       const box = await cb.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(80), sp(160)));
-      await cb.check({ force: true, timeout: 5000 });
+      await humanPause(randInt(sp(60), sp(120)));
+      await cb.check({ force: true, timeout: 4000 });
       globalState.addLog('info', '☑️ Termos Uber aceitos (accept-terms)');
       return true;
     }
@@ -178,29 +178,29 @@ async function tentarAceitarTermos(p: Page): Promise<boolean> {
   const candidatos: Array<() => Promise<void>> = [
     async () => {
       const el = p.locator('input[type="checkbox"]').first();
-      await el.waitFor({ state: 'attached', timeout: 4000 });
-      if (!await el.isVisible({ timeout: 2000 }).catch(() => false)) throw new Error('not visible');
+      await el.waitFor({ state: 'attached', timeout: 3000 });
+      if (!await el.isVisible({ timeout: 1500 }).catch(() => false)) throw new Error('not visible');
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(80), sp(160)));
-      await el.check({ force: true, timeout: 5000 });
+      await humanPause(randInt(sp(60), sp(120)));
+      await el.check({ force: true, timeout: 4000 });
     },
     async () => {
       const el = p.locator('[role="checkbox"]').first();
-      await el.waitFor({ state: 'attached', timeout: 4000 });
-      if (!await el.isVisible({ timeout: 2000 }).catch(() => false)) throw new Error('not visible');
+      await el.waitFor({ state: 'attached', timeout: 3000 });
+      if (!await el.isVisible({ timeout: 1500 }).catch(() => false)) throw new Error('not visible');
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(60), sp(140)));
-      await el.click({ force: true, timeout: 5000 });
+      await humanPause(randInt(sp(50), sp(100)));
+      await el.click({ force: true, timeout: 4000 });
     },
     async () => {
       const el = p.locator('label:has-text("Concordo"), label:has-text("Agree"), label:has-text("aceito"), label:has-text("accept")').first();
-      await el.waitFor({ state: 'attached', timeout: 4000 });
+      await el.waitFor({ state: 'attached', timeout: 3000 });
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await humanPause(randInt(sp(60), sp(140)));
-      await el.click({ force: true, timeout: 5000 });
+      await humanPause(randInt(sp(50), sp(100)));
+      await el.click({ force: true, timeout: 4000 });
     },
   ];
   for (const fn of candidatos) {
@@ -226,20 +226,20 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   await p.waitForSelector(INPUT_SEL, { state: 'visible', timeout: 15000 });
   await focusField(p, INPUT_SEL);
   await p.fill(INPUT_SEL, '');
-  await humanPause(randInt(sp(100), sp(200)));
+  await humanPause(randInt(sp(80), sp(150)));
   for (const ch of nomeBusca) {
     await _typeChar(p, ch, isSpeedMode());
-    if (!isSpeedMode() && Math.random() < 0.08) await humanPause(randInt(80, 200));
+    if (!isSpeedMode() && Math.random() < 0.08) await humanPause(randInt(60, 150));
   }
 
   let itemSel: string | null = null;
-  const pollMs = isSpeedMode() ? 200 : 500;
-  const fimDropdown = Date.now() + 8_000;
+  const pollMs = isSpeedMode() ? 150 : 350;
+  const fimDropdown = Date.now() + 7_000;
   while (Date.now() < fimDropdown) {
     for (const sel of DROPDOWN_ITEM_SELS) {
       try {
         if (await p.locator(sel).count() > 0 &&
-            await p.locator(sel).first().isVisible({ timeout: 800 }).catch(() => false)) {
+            await p.locator(sel).first().isVisible({ timeout: 600 }).catch(() => false)) {
           itemSel = sel; break;
         }
       } catch { /* continua */ }
@@ -251,12 +251,12 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   if (!itemSel) {
     log('warn', '⚠️ Dropdown não detectado, tentando ArrowDown+Enter', cycle);
     await p.keyboard.press('ArrowDown');
-    await humanPause(randInt(sp(150), sp(300)));
+    await humanPause(randInt(sp(100), sp(200)));
     await p.keyboard.press('Enter');
     return;
   }
 
-  await humanPause(randInt(sp(300), sp(600)));
+  await humanPause(randInt(sp(200), sp(400)));
   const opcoes = p.locator(itemSel);
   const total = await opcoes.count();
   let clicou = false;
@@ -267,8 +267,8 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
       if (norm(texto).includes(nomeBuscaNorm)) {
         const box = await opcao.boundingBox().catch(() => null);
         if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.25, 0.75), box.y + box.height * randFloat(0.25, 0.75));
-        await humanPause(randInt(sp(120), sp(280)));
-        await opcao.click({ timeout: 5000 });
+        await humanPause(randInt(sp(80), sp(180)));
+        await opcao.click({ timeout: 4000 });
         clicou = true;
         log('info', `📍 Cidade selecionada: "${texto.trim()}"`, cycle);
         break;
@@ -277,7 +277,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
   }
   if (!clicou) {
     await p.keyboard.press('ArrowDown');
-    await humanPause(randInt(sp(150), sp(300)));
+    await humanPause(randInt(sp(100), sp(200)));
     await p.keyboard.press('Enter');
   }
 }
@@ -285,7 +285,7 @@ async function selecionarCidade(p: Page, cidade: string, cycle: number): Promise
 async function preencherInviteCode(p: Page, inviteCode: string, cycle: number): Promise<void> {
   if (!inviteCode) return;
   const SEL = '[data-testid="signup-step::invite-code-input"]';
-  const visible = await p.locator(SEL).first().isVisible({ timeout: 3000 }).catch(() => false);
+  const visible = await p.locator(SEL).first().isVisible({ timeout: 2000 }).catch(() => false);
   if (!visible) return;
   const val = await p.locator(SEL).first().inputValue().catch(() => '');
   if (val) { log('info', `🎟️ Invite code já preenchido: "${val}"`, cycle); return; }
@@ -298,28 +298,28 @@ async function preencherInviteCode(p: Page, inviteCode: string, cycle: number): 
 
 async function tratarTelaWhatsApp(p: Page, cycle: number): Promise<boolean> {
   const isWhatsApp =
-    await p.locator('[data-testid="step whatsAppOptIn"]').isVisible({ timeout: 3000 }).catch(() => false);
+    await p.locator('[data-testid="step whatsAppOptIn"]').isVisible({ timeout: 2000 }).catch(() => false);
   if (!isWhatsApp) return false;
 
   log('info', '💬 Tela WhatsApp opt-in detectada — clicando NÃO ATIVAR', cycle);
-  await cogPause(400, 900);
+  await cogPause(200, 500);
 
   const btn = p.locator('button', { hasText: /NÃO ATIVAR/i }).first();
-  if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+  if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
     const box = await btn.boundingBox().catch(() => null);
     if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
-    await humanPause(randInt(sp(120), sp(280)));
-    await btn.click({ timeout: 5000 });
+    await humanPause(randInt(sp(80), sp(180)));
+    await btn.click({ timeout: 4000 });
     log('info', '✅ WhatsApp opt-in recusado', cycle);
-    await humanPause(randInt(sp(600), sp(1200)));
+    await humanPause(randInt(sp(400), sp(700)));
     return true;
   }
 
   const nav = p.locator('[data-testid="step-bottom-navigation"] button').first();
-  if (await nav.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await nav.click({ timeout: 5000 });
+  if (await nav.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await nav.click({ timeout: 4000 });
     log('info', '✅ WhatsApp opt-in recusado (fallback nav)', cycle);
-    await humanPause(randInt(sp(600), sp(1200)));
+    await humanPause(randInt(sp(400), sp(700)));
     return true;
   }
 
@@ -330,20 +330,20 @@ async function tratarTelaWhatsApp(p: Page, cycle: number): Promise<boolean> {
 
 async function tratarHubKYC(p: Page, cycle: number): Promise<boolean> {
   const isHub =
-    await p.locator('[data-testid="hub"]').isVisible({ timeout: 3000 }).catch(() => false);
+    await p.locator('[data-testid="hub"]').isVisible({ timeout: 2000 }).catch(() => false);
   if (!isHub) return false;
 
   log('info', '🏠 Hub KYC detectado — clicando em Foto do perfil', cycle);
-  await cogPause(500, 1000);
+  await cogPause(300, 600);
 
   const fotoItem = p.locator('[data-testid="stepItem profilePhoto"]').first();
-  if (await fotoItem.isVisible({ timeout: 5000 }).catch(() => false)) {
+  if (await fotoItem.isVisible({ timeout: 4000 }).catch(() => false)) {
     const box = await fotoItem.boundingBox().catch(() => null);
     if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.2, 0.8), box.y + box.height * randFloat(0.2, 0.8));
-    await humanPause(randInt(sp(200), sp(400)));
-    await fotoItem.click({ force: true, timeout: 5000 });
+    await humanPause(randInt(sp(150), sp(280)));
+    await fotoItem.click({ force: true, timeout: 4000 });
     log('info', '📸 Navegando para etapa de foto do perfil', cycle);
-    await humanPause(randInt(sp(800), sp(1500)));
+    await humanPause(randInt(sp(500), sp(900)));
     return true;
   }
 
@@ -355,28 +355,28 @@ async function tratarHubKYC(p: Page, cycle: number): Promise<boolean> {
 
 async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   const isFotoStep =
-    await p.locator('[data-testid="step profilePhoto"]').isVisible({ timeout: 3000 }).catch(() => false);
+    await p.locator('[data-testid="step profilePhoto"]').isVisible({ timeout: 2000 }).catch(() => false);
   if (!isFotoStep) return false;
 
   log('info', '📷 Tela de foto do perfil detectada — clicando Tirar foto', cycle);
-  await cogPause(600, 1200);
+  await cogPause(300, 700);
 
   const btnFoto = p.locator('[data-testid="docUploadButton"]').first();
-  if (await btnFoto.isVisible({ timeout: 5000 }).catch(() => false)) {
+  if (await btnFoto.isVisible({ timeout: 4000 }).catch(() => false)) {
     const box = await btnFoto.boundingBox().catch(() => null);
     if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
-    await humanPause(randInt(sp(200), sp(450)));
-    await btnFoto.click({ force: true, timeout: 5000 });
+    await humanPause(randInt(sp(150), sp(300)));
+    await btnFoto.click({ force: true, timeout: 4000 });
     log('info', '✅ Botão "Tirar foto" clicado', cycle);
-    await humanPause(randInt(sp(800), sp(1500)));
+    await humanPause(randInt(sp(500), sp(900)));
     return true;
   }
 
   const btnTexto = p.locator('button', { hasText: /Tirar foto/i }).first();
-  if (await btnTexto.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await btnTexto.click({ force: true, timeout: 5000 });
+  if (await btnTexto.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await btnTexto.click({ force: true, timeout: 4000 });
     log('info', '✅ Botão "Tirar foto" clicado (fallback texto)', cycle);
-    await humanPause(randInt(sp(800), sp(1500)));
+    await humanPause(randInt(sp(500), sp(900)));
     return true;
   }
 
@@ -393,8 +393,19 @@ async function tratarTelaSenhaFluxo(
   cycle: number
 ): Promise<boolean> {
   const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
-    .first().isVisible({ timeout: 2000 }).catch(() => false);
+    .first().isVisible({ timeout: 1500 }).catch(() => false);
   if (!temSenha) return false;
+
+  // FIX A: se o input de cidade ainda está visível, NÃO tratar como tela de senha.
+  // O autofill do browser pode injetar input[type=password] oculto na tela de
+  // localização, fazendo o fluxo digitar a senha no campo de cidade visível.
+  const cidadeAindaVisivel = await p.locator(
+    '[data-testid="flow-type-city-selector-v2-input"]'
+  ).first().isVisible({ timeout: 300 }).catch(() => false);
+  if (cidadeAindaVisivel) {
+    log('info', '📍 [tratarTelaSenhaFluxo] Input de cidade visível — ignorando campo password (autofill)', cycle);
+    return false;
+  }
 
   const usernameVisivel = await p.locator('#username, input[id="username"]')
     .first().isVisible({ timeout: 500 }).catch(() => false);
@@ -405,12 +416,12 @@ async function tratarTelaSenhaFluxo(
     .count().then((n) => n > 0).catch(() => false);
 
   log('info', '🔑 Tela de senha do fluxo detectada (pós-email)', cycle);
-  await cogPause(400, 800);
+  await cogPause(300, 600);
 
   if (temUsernameAttached) {
     await forcarValorReact(p, '#username', email);
     log('info', `✅ [senha-fluxo] Username hidden preenchido via React setter`, cycle);
-    await humanPause(randInt(sp(100), sp(200)));
+    await humanPause(randInt(sp(80), sp(150)));
   }
 
   const senhaSels = [
@@ -422,7 +433,7 @@ async function tratarTelaSenhaFluxo(
   ];
 
   for (const sel of senhaSels) {
-    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
       await p.locator(sel).evaluate((el: HTMLInputElement) => {
         const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
         if (nativeSet) nativeSet.call(el, '');
@@ -430,29 +441,29 @@ async function tratarTelaSenhaFluxo(
         el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }).catch(() => {});
-      await humanPause(randInt(sp(80), sp(160)));
+      await humanPause(randInt(sp(60), sp(120)));
 
       await forcarValorReact(p, sel, senha);
-      await humanPause(randInt(sp(120), sp(240)));
+      await humanPause(randInt(sp(80), sp(160)));
       await humanTypeForce(p, sel, senha);
 
       const val = await p.locator(sel).inputValue().catch(() => '');
       if (val !== senha) {
         log('warn', `⚠️ [senha-fluxo] Valor incorreto após digitação — re-forçando`, cycle);
         await forcarValorReact(p, sel, senha);
-        await humanPause(randInt(sp(200), sp(400)));
+        await humanPause(randInt(sp(150), sp(300)));
       }
 
       const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
-      const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 3000 })
-        .then(() => fwdBtn.isEnabled({ timeout: 3000 }))
+      const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 2000 })
+        .then(() => fwdBtn.isEnabled({ timeout: 2000 }))
         .catch(() => false);
       if (!habilitado) {
         log('warn', '⚠️ [senha-fluxo] forward-button ainda disabled — disparando blur', cycle);
         await p.locator(sel).evaluate((el) => {
           el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
         }).catch(() => {});
-        await humanPause(randInt(sp(300), sp(600)));
+        await humanPause(randInt(sp(200), sp(400)));
       }
 
       log('info', `✅ [senha-fluxo] Senha digitada (${sel})`, cycle);
@@ -460,10 +471,10 @@ async function tratarTelaSenhaFluxo(
     }
   }
 
-  await cogPause(400, 900);
+  await cogPause(300, 600);
   await clickForwardButton(p, cycle);
   log('info', '👉 [senha-fluxo] Avançado após senha', cycle);
-  await humanPause(randInt(sp(800), sp(1600)));
+  await humanPause(randInt(sp(500), sp(1000)));
   return true;
 }
 
@@ -476,14 +487,23 @@ async function tratarTelaReAuth(
   cycle: number
 ): Promise<boolean> {
   const temEmail = await p.locator('#username, input[id="username"]')
-    .first().isVisible({ timeout: 2000 }).catch(() => false);
+    .first().isVisible({ timeout: 1500 }).catch(() => false);
   const temSenha = await p.locator('#PASSWORD, input[autocomplete="new-password"], input[type="password"]')
-    .first().isVisible({ timeout: 2000 }).catch(() => false);
+    .first().isVisible({ timeout: 1500 }).catch(() => false);
 
   if (!temEmail || !temSenha) return false;
 
+  // FIX A: mesma guarda — se cidade visível, não é tela de re-auth
+  const cidadeAindaVisivelReAuth = await p.locator(
+    '[data-testid="flow-type-city-selector-v2-input"]'
+  ).first().isVisible({ timeout: 300 }).catch(() => false);
+  if (cidadeAindaVisivelReAuth) {
+    log('info', '📍 [tratarTelaReAuth] Input de cidade visível — ignorando re-auth (autofill)', cycle);
+    return false;
+  }
+
   log('info', '🔐 Tela re-auth detectada (username + password visíveis)', cycle);
-  await cogPause(400, 800);
+  await cogPause(300, 600);
 
   const emailSel = '#username';
 
@@ -494,23 +514,23 @@ async function tratarTelaReAuth(
     el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }).catch(() => {});
-  await humanPause(randInt(sp(80), sp(160)));
+  await humanPause(randInt(sp(60), sp(120)));
 
   await forcarValorReact(p, emailSel, email);
-  await humanPause(randInt(sp(100), sp(200)));
+  await humanPause(randInt(sp(80), sp(150)));
   await humanTypeForce(p, emailSel, email);
 
   const emailVal = await p.locator(emailSel).inputValue().catch(() => '');
   if (emailVal !== email) {
     log('warn', `⚠️ [re-auth] Email incorreto após digitação — re-forçando`, cycle);
     await forcarValorReact(p, emailSel, email);
-    await humanPause(randInt(sp(200), sp(400)));
+    await humanPause(randInt(sp(150), sp(300)));
   }
 
   await p.locator(emailSel).evaluate((el) => {
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
   }).catch(() => {});
-  await humanPause(randInt(sp(200), sp(400)));
+  await humanPause(randInt(sp(150), sp(280)));
 
   log('info', `✅ [re-auth] Email: "${await p.locator(emailSel).inputValue().catch(() => '')}"`, cycle);
 
@@ -518,7 +538,7 @@ async function tratarTelaReAuth(
   let senhaSel = '';
 
   for (const sel of senhaSels) {
-    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
       senhaSel = sel;
 
       await p.locator(sel).evaluate((el: HTMLInputElement) => {
@@ -528,23 +548,23 @@ async function tratarTelaReAuth(
         el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }).catch(() => {});
-      await humanPause(randInt(sp(80), sp(160)));
+      await humanPause(randInt(sp(60), sp(120)));
 
       await forcarValorReact(p, sel, senha);
-      await humanPause(randInt(sp(120), sp(240)));
+      await humanPause(randInt(sp(80), sp(160)));
       await humanTypeForce(p, sel, senha);
 
       const senhaVal = await p.locator(sel).inputValue().catch(() => '');
       if (senhaVal !== senha) {
         log('warn', `⚠️ [re-auth] Senha incorreta após digitação — re-forçando`, cycle);
         await forcarValorReact(p, sel, senha);
-        await humanPause(randInt(sp(200), sp(400)));
+        await humanPause(randInt(sp(150), sp(300)));
       }
 
       await p.locator(sel).evaluate((el) => {
         el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
       }).catch(() => {});
-      await humanPause(randInt(sp(200), sp(400)));
+      await humanPause(randInt(sp(150), sp(280)));
 
       log('info', `✅ [re-auth] Senha digitada (${sel})`, cycle);
       break;
@@ -555,8 +575,8 @@ async function tratarTelaReAuth(
 
   let habilitado = false;
   for (let tentativa = 1; tentativa <= 3; tentativa++) {
-    habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 5000 })
-      .then(() => fwdBtn.isEnabled({ timeout: 5000 }))
+    habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 4000 })
+      .then(() => fwdBtn.isEnabled({ timeout: 4000 }))
       .catch(() => false);
 
     if (habilitado) break;
@@ -570,14 +590,14 @@ async function tratarTelaReAuth(
         el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
       }).catch(() => {});
     }
-    await humanPause(randInt(sp(400), sp(800)));
+    await humanPause(randInt(sp(300), sp(600)));
   }
 
   if (!habilitado) {
     log('warn', '⚠️ [re-auth] forward-button nunca habilitou — tentando clicar de qualquer forma', cycle);
   }
 
-  await cogPause(300, 600);
+  await cogPause(200, 450);
 
   const submitSels = [
     '#forward-button',
@@ -591,13 +611,13 @@ async function tratarTelaReAuth(
 
   for (const sel of submitSels) {
     const el = p.locator(sel).first();
-    if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await el.isVisible({ timeout: 1500 }).catch(() => false)) {
       const box = await el.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
-      await humanPause(randInt(sp(150), sp(350)));
-      await el.click({ force: true, timeout: 5000 });
+      await humanPause(randInt(sp(100), sp(250)));
+      await el.click({ force: true, timeout: 4000 });
       log('info', `🖱️ [re-auth] Botão submit clicado (${sel})`, cycle);
-      await humanPause(randInt(sp(1000), sp(2000)));
+      await humanPause(randInt(sp(700), sp(1400)));
       return true;
     }
   }
@@ -703,7 +723,7 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
   ];
 
   for (const SEL of SELS) {
-    const visible = await p.locator(SEL).first().isVisible({ timeout: 5000 }).catch(() => false);
+    const visible = await p.locator(SEL).first().isVisible({ timeout: 4000 }).catch(() => false);
     if (visible) {
       log('info', `[DEBUG] Campo "${SEL}" → "${email}"`, cycle);
 
@@ -714,7 +734,7 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
         el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }).catch(() => {});
-      await humanPause(randInt(sp(80), sp(160)));
+      await humanPause(randInt(sp(60), sp(120)));
 
       await humanTypeForce(p, SEL, email);
 
@@ -722,7 +742,7 @@ async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: numbe
       if (val !== email) {
         log('warn', `⚠️ Valor pós-digitação "${val}" ≠ email esperado — forçando via React setter`, cycle);
         await forcarValorReact(p, SEL, email);
-        await humanPause(randInt(sp(200), sp(400)));
+        await humanPause(randInt(sp(150), sp(300)));
       }
 
       const finalVal = await p.locator(SEL).inputValue().catch(() => '');
@@ -746,7 +766,7 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
   ];
 
   for (const SEL of SELS) {
-    const visible = await p.locator(SEL).first().isVisible({ timeout: 5000 }).catch(() => false);
+    const visible = await p.locator(SEL).first().isVisible({ timeout: 4000 }).catch(() => false);
     if (visible) {
       log('info', `🔑 Campo senha encontrado: "${SEL}"`, cycle);
 
@@ -757,10 +777,10 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
         el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, composed: true, data: '', inputType: 'deleteContentBackward' }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }).catch(() => {});
-      await humanPause(randInt(sp(80), sp(160)));
+      await humanPause(randInt(sp(60), sp(120)));
 
       await forcarValorReact(p, SEL, senha);
-      await humanPause(randInt(sp(120), sp(240)));
+      await humanPause(randInt(sp(80), sp(160)));
 
       await humanTypeForce(p, SEL, senha);
 
@@ -768,19 +788,19 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
       if (val !== senha) {
         log('warn', `⚠️ Valor pós-digitação da senha incorreto — forçando via React setter`, cycle);
         await forcarValorReact(p, SEL, senha);
-        await humanPause(randInt(sp(200), sp(400)));
+        await humanPause(randInt(sp(150), sp(300)));
       }
 
       const fwdBtn = p.locator('#forward-button, [data-testid="forward-button"]').first();
-      const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 3000 })
-        .then(() => fwdBtn.isEnabled({ timeout: 3000 }))
+      const habilitado = await fwdBtn.waitFor({ state: 'visible', timeout: 2000 })
+        .then(() => fwdBtn.isEnabled({ timeout: 2000 }))
         .catch(() => false);
       if (!habilitado) {
         log('warn', '⚠️ #forward-button ainda disabled após senha — disparando blur para forçar validação React', cycle);
         await p.locator(SEL).evaluate((el) => {
           el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
         }).catch(() => {});
-        await humanPause(randInt(sp(300), sp(600)));
+        await humanPause(randInt(sp(200), sp(400)));
       }
 
       log('info', '✅ Senha digitada', cycle);
@@ -805,15 +825,15 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
   log('info', `🔢 Digitando OTP: ${otp}`, cycle);
 
   const primeroCampoUber = p.locator('#EMAIL_OTP_CODE-0');
-  if (await primeroCampoUber.isVisible({ timeout: 5000 }).catch(() => false)) {
+  if (await primeroCampoUber.isVisible({ timeout: 4000 }).catch(() => false)) {
     log('info', '🔢 OTP em campos individuais EMAIL_OTP_CODE-N', cycle);
     for (let i = 0; i < otp.length; i++) {
       const campo = p.locator(`#EMAIL_OTP_CODE-${i}`);
-      await campo.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      await campo.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
       await focusField(p, `#EMAIL_OTP_CODE-${i}`);
-      await humanPause(randInt(sp(60), sp(140)));
+      await humanPause(randInt(sp(50), sp(100)));
       await _typeChar(p, otp[i]!, isSpeedMode());
-      await humanPause(randInt(sp(80), sp(200)));
+      await humanPause(randInt(sp(60), sp(140)));
     }
     log('info', '✅ OTP digitado (EMAIL_OTP_CODE-N)', cycle);
     return;
@@ -825,13 +845,13 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
     log('info', `🔢 OTP em ${totalOtp} campos autocomplete=one-time-code`, cycle);
     for (let i = 0; i < Math.min(totalOtp, otp.length); i++) {
       const campo = camposOtp.nth(i);
-      await campo.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
+      await campo.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
       const box = await campo.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await campo.click({ timeout: 3000 }).catch(() => {});
-      await humanPause(randInt(sp(60), sp(130)));
+      await campo.click({ timeout: 2500 }).catch(() => {});
+      await humanPause(randInt(sp(50), sp(100)));
       await _typeChar(p, otp[i]!, isSpeedMode());
-      await humanPause(randInt(sp(80), sp(180)));
+      await humanPause(randInt(sp(60), sp(130)));
     }
     log('info', '✅ OTP digitado (autocomplete individual)', cycle);
     return;
@@ -847,17 +867,17 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
     'input[maxlength="1"]',
   ];
   for (const sel of candidatosUnicos) {
-    if (await p.locator(sel).first().isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
       const count = await p.locator(sel).count();
       if (count >= 2) {
         log('info', `🔢 OTP em ${count} campos "${sel}"`, cycle);
         for (let i = 0; i < Math.min(count, otp.length); i++) {
           const campo = p.locator(sel).nth(i);
-          await campo.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
-          await campo.click({ timeout: 3000 }).catch(() => {});
-          await humanPause(randInt(sp(60), sp(120)));
+          await campo.waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
+          await campo.click({ timeout: 2500 }).catch(() => {});
+          await humanPause(randInt(sp(50), sp(100)));
           await _typeChar(p, otp[i]!, isSpeedMode());
-          await humanPause(randInt(sp(80), sp(160)));
+          await humanPause(randInt(sp(60), sp(120)));
         }
         log('info', '✅ OTP digitado (múltiplos campos fallback)', cycle);
         return;
@@ -871,12 +891,12 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
   throw new Error('Campo de OTP não encontrado');
 }
 
-async function aguardarNavegacaoEstabilizar(p: Page, maxWaitMs = 12_000, stableMs = 1_200): Promise<string> {
+async function aguardarNavegacaoEstabilizar(p: Page, maxWaitMs = 10_000, stableMs = 800): Promise<string> {
   const fim = Date.now() + maxWaitMs;
   let lastUrl = p.url();
   let lastChange = Date.now();
   while (Date.now() < fim) {
-    await humanPause(250);
+    await humanPause(200);
     const cur = p.url();
     if (cur !== lastUrl) { lastUrl = cur; lastChange = Date.now(); }
     else if (Date.now() - lastChange >= stableMs) break;
@@ -900,7 +920,7 @@ async function preencherTelefone(p: Page, telefone: string, cycle: number): Prom
   for (const sel of PHONE_SELS) {
     try {
       const el = p.locator(sel).first();
-      const visible = await el.isVisible({ timeout: 2000 }).catch(() => false);
+      const visible = await el.isVisible({ timeout: 1500 }).catch(() => false);
       if (!visible) continue;
 
       const val = await el.inputValue().catch(() => '');
@@ -926,9 +946,63 @@ async function processarTelaOnboarding(
 ): Promise<boolean> {
   log('info', `📋 [Tela ${telaIdx}] Verificando tela de onboarding...`, cycle);
 
-  // FIX 1: dispensar cookies no início de CADA tela de onboarding.
-  // O banner pode reaparecer a qualquer momento e bloquear cliques.
+  // FIX 1: dispensar cookies no início de CADA tela
   await dispensarCookies(p);
+
+  // FIX A: verificar cidade PRIMEIRO, antes de tratarTelaSenha/ReAuth.
+  // O autofill do browser injeta input[type=password] oculto na tela de
+  // localização. Se tratarTelaSenhaFluxo rodar antes, ele detecta esse campo
+  // oculto e digita a senha (connect@10) no campo de cidade visível.
+  const INPUT_CIDADE_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
+  if (await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 1200 }).catch(() => false)) {
+    const urlAntesCidade = p.url();
+    await selecionarCidade(p, payload.cidade, cycle);
+
+    // FIX 2: aguarda até 5s o input de cidade sumir OU URL mudar
+    log('info', `📍 [Tela ${telaIdx}] Aguardando Uber avançar após cidade...`, cycle);
+    const fimEspera = Date.now() + 5_000;
+    let cidadeAindaVisivel = true;
+    let urlPosCidade = p.url();
+    while (Date.now() < fimEspera) {
+      await humanPause(250);
+      urlPosCidade = p.url();
+      cidadeAindaVisivel = await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 250 }).catch(() => false);
+      if (!cidadeAindaVisivel || urlPosCidade !== urlAntesCidade) break;
+    }
+
+    if (urlPosCidade !== urlAntesCidade) {
+      log('info', `📍 [Tela ${telaIdx}] Uber navegou após cidade: ${urlPosCidade}`, cycle);
+      await preencherInviteCode(p, payload.inviteCode, cycle);
+      return true;
+    }
+    if (!cidadeAindaVisivel) {
+      log('info', `📍 [Tela ${telaIdx}] Input de cidade sumiu — tela avançou internamente`, cycle);
+      await preencherInviteCode(p, payload.inviteCode, cycle);
+    } else {
+      await preencherInviteCode(p, payload.inviteCode, cycle);
+    }
+
+    // Após cidade, continua para forward-button abaixo
+    await cogPause(200, 450);
+    const aceitouAposCidade = await tentarAceitarTermos(p);
+    if (aceitouAposCidade) await cogPause(200, 400);
+
+    // FIX 3: redispensa cookies e revalida antes de avançar
+    await dispensarCookies(p);
+    const isTelaSenhaAposCidade = await p.locator(
+      '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
+    ).first().isVisible({ timeout: 800 }).catch(() => false);
+    const cidadeAindaVisivelFinal = await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 300 }).catch(() => false);
+    if (isTelaSenhaAposCidade && !cidadeAindaVisivelFinal) {
+      log('warn', `⚠️ [Tela ${telaIdx}] Tela de senha após cidade — delegando`, cycle);
+      await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle);
+      return true;
+    }
+
+    await clickForwardButton(p, cycle);
+    log('info', `👉 [Tela ${telaIdx}] Botão de avançar clicado (pós-cidade)`, cycle);
+    return true;
+  }
 
   if (await tratarTelaWhatsApp(p, cycle)) return true;
   if (await tratarHubKYC(p, cycle)) return true;
@@ -952,7 +1026,7 @@ async function processarTelaOnboarding(
 
   const nomeSels = ['#FIRST_NAME', '[autocomplete="given-name"]', '[data-testid*="first-name"]', '[name="firstName"]', '[id*="first"]', '[placeholder*="rimeiro"]'];
   for (const sel of nomeSels) {
-    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
       const val = await p.locator(sel).first().inputValue().catch(() => '');
       if (!val) {
         await humanTypeForce(p, sel, payload.nome);
@@ -963,11 +1037,11 @@ async function processarTelaOnboarding(
     }
   }
 
-  await humanPause(randInt(sp(150), sp(350)));
+  await humanPause(randInt(sp(100), sp(220)));
 
   const sobreSels = ['#LAST_NAME', '[autocomplete="family-name"]', '[data-testid*="last-name"]', '[name="lastName"]', '[id*="last"]', '[placeholder*="obrenome"]'];
   for (const sel of sobreSels) {
-    if (await p.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
       const val = await p.locator(sel).first().inputValue().catch(() => '');
       if (!val) {
         await humanTypeForce(p, sel, payload.sobrenome);
@@ -978,71 +1052,35 @@ async function processarTelaOnboarding(
     }
   }
 
-  await humanPause(randInt(sp(150), sp(350)));
+  await humanPause(randInt(sp(100), sp(220)));
 
   const telefonePreenchido = await preencherTelefone(p, payload.telefone, cycle);
   if (telefonePreenchido) {
     fezAlgo = true;
-    await cogPause(600, 1200);
+    await cogPause(400, 800);
   }
 
-  await humanPause(randInt(sp(150), sp(350)));
+  await humanPause(randInt(sp(100), sp(220)));
 
-  const INPUT_CIDADE_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
-  if (await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 1500 }).catch(() => false)) {
-    const urlAntesCidade = p.url();
-    await selecionarCidade(p, payload.cidade, cycle);
-    fezAlgo = true;
-
-    // FIX 2: após selecionar cidade, aguarda até 5s o input de cidade sumir
-    // OU a URL mudar — confirmando que o Uber realmente avançou de tela.
-    // Evita que o fluxo continue na mesma tela enquanto o banner bloqueia.
-    log('info', `📍 [Tela ${telaIdx}] Aguardando Uber avançar após cidade...`, cycle);
-    const fimEspera = Date.now() + 5_000;
-    let cidadeAindaVisivel = true;
-    let urlPosCidade = p.url();
-    while (Date.now() < fimEspera) {
-      await humanPause(300);
-      urlPosCidade = p.url();
-      cidadeAindaVisivel = await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 300 }).catch(() => false);
-      if (!cidadeAindaVisivel || urlPosCidade !== urlAntesCidade) break;
-    }
-
-    if (urlPosCidade !== urlAntesCidade) {
-      log('info', `📍 [Tela ${telaIdx}] Uber navegou automaticamente após cidade: ${urlPosCidade}`, cycle);
-      await preencherInviteCode(p, payload.inviteCode, cycle);
-      return true;
-    }
-
-    if (!cidadeAindaVisivel) {
-      log('info', `📍 [Tela ${telaIdx}] Input de cidade sumiu — tela avançou internamente`, cycle);
-      await preencherInviteCode(p, payload.inviteCode, cycle);
-    } else {
-      // URL não mudou e cidade ainda visível — continua fluxo normal
-      await preencherInviteCode(p, payload.inviteCode, cycle);
-    }
-  }
-
-  await cogPause(300, 700);
+  await cogPause(200, 500);
 
   const aceitou = await tentarAceitarTermos(p);
-  if (aceitou) { fezAlgo = true; await cogPause(300, 600); }
+  if (aceitou) { fezAlgo = true; await cogPause(200, 400); }
 
   const temBotao = await p.locator(
     '#forward-button, [data-testid="forward-button"], [data-testid="submit-button"], button[type="submit"]'
-  ).first().isVisible({ timeout: 2000 }).catch(() => false);
+  ).first().isVisible({ timeout: 1500 }).catch(() => false);
 
   if (!fezAlgo && !temBotao) {
     log('info', `💭 [Tela ${telaIdx}] Tela de transição sem campos/botão — aguardando navegação automática...`, cycle);
     return false;
   }
 
-  // FIX 3: antes de clicar em avançar, redispensa cookies e verifica que
-  // não estamos na tela de senha (evita avançar na tela errada).
+  // FIX 3: redispensa cookies e revalida antes de avançar
   await dispensarCookies(p);
   const isTelaSenha = await p.locator(
     '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
-  ).first().isVisible({ timeout: 1000 }).catch(() => false);
+  ).first().isVisible({ timeout: 800 }).catch(() => false);
   if (isTelaSenha) {
     log('warn', `⚠️ [Tela ${telaIdx}] Tela de senha detectada antes do forward — delegando para tratarTelaSenhaFluxo`, cycle);
     await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle);
@@ -1060,10 +1098,10 @@ async function etapa_posEmail(
   cycle: number
 ): Promise<'success' | 'onboarding' | 'unknown'> {
   const MAX_TELAS = 15;
-  const MAX_TELA_TIMEOUT_MS = 20_000;
+  const MAX_TELA_TIMEOUT_MS = 15_000;
 
   for (let tela = 1; tela <= MAX_TELAS; tela++) {
-    const url = await aguardarNavegacaoEstabilizar(p, MAX_TELA_TIMEOUT_MS, 1_200);
+    const url = await aguardarNavegacaoEstabilizar(p, MAX_TELA_TIMEOUT_MS, 800);
     log('info', `🔍 [Tela ${tela}] URL: ${url}`, cycle);
 
     if (isSuccessUrl(url)) {
@@ -1073,7 +1111,7 @@ async function etapa_posEmail(
 
     const isHubOrFoto =
       await p.locator('[data-testid="hub"], [data-testid="step profilePhoto"]')
-        .first().isVisible({ timeout: 3000 }).catch(() => false);
+        .first().isVisible({ timeout: 2000 }).catch(() => false);
     if (isHubOrFoto) {
       log('success', `🎉 Hub/Foto detectado — conta criada com sucesso`, cycle);
       return 'success';
@@ -1086,13 +1124,13 @@ async function etapa_posEmail(
 
     await p.waitForSelector(
       'input:not([type="hidden"]), button, [role="checkbox"], #forward-button, [data-testid="hub"], [data-testid="step whatsAppOptIn"], [data-testid="step profilePhoto"], [data-testid="submit-button"]',
-      { timeout: 10_000 }
+      { timeout: 8_000 }
     ).catch(() => {});
 
     const clicou = await processarTelaOnboarding(p, payload, cycle, tela);
 
     if (!clicou) {
-      const urlApos = await aguardarNavegacaoEstabilizar(p, 8_000, 2_000);
+      const urlApos = await aguardarNavegacaoEstabilizar(p, 6_000, 1_500);
       if (urlApos === url) {
         log('warn', `⚠️ [Tela ${tela}] URL não avançou. Abortando loop.`, cycle);
         return isSuccessUrl(urlApos) ? 'success' : 'onboarding';
@@ -1133,7 +1171,7 @@ async function _executarCiclo(
 
     log('info', `🌐 Navegando para ${opts.cadastroUrl}`, cycle);
     await page.goto(opts.cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-    await humanPause(randInt(sp(800), sp(1800)));
+    await humanPause(randInt(sp(600), sp(1200)));
     await dispensarCookies(page);
     await pageWarmup(page, cycle);
 
@@ -1153,66 +1191,66 @@ async function _executarCiclo(
     }
 
     await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
-    await cogPause(400, 900);
+    await cogPause(300, 600);
     await clickForwardButton(page, cycle);
-    await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
+    await aguardarNavegacaoEstabilizar(page, 5_000, 800);
 
     const nomeVisiblePreSenha = await page.locator(
       '#FIRST_NAME, [autocomplete="given-name"]'
-    ).first().isVisible({ timeout: 5000 }).catch(() => false);
+    ).first().isVisible({ timeout: 4000 }).catch(() => false);
 
     if (nomeVisiblePreSenha) {
       log('info', '👤 Tela de nome detectada antes da senha', cycle);
       const nomeSels = ['#FIRST_NAME', '[autocomplete="given-name"]', '[name="firstName"]'];
       for (const sel of nomeSels) {
-        if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (await page.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
           await humanTypeForce(page, sel, payload.nome); break;
         }
       }
-      await humanPause(randInt(sp(300), sp(700)));
+      await humanPause(randInt(sp(200), sp(500)));
       const sobreSels = ['#LAST_NAME', '[autocomplete="family-name"]', '[name="lastName"]'];
       for (const sel of sobreSels) {
-        if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (await page.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
           await humanTypeForce(page, sel, payload.sobrenome); break;
         }
       }
-      await cogPause(400, 900);
+      await cogPause(300, 600);
       await tentarAceitarTermos(page);
       await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
+      await aguardarNavegacaoEstabilizar(page, 5_000, 800);
     }
 
     const termosVisiblePreSenha = await page.locator('[data-testid="accept-terms"]').first()
-      .isVisible({ timeout: 3000 }).catch(() => false);
+      .isVisible({ timeout: 2000 }).catch(() => false);
     if (termosVisiblePreSenha) {
       await tentarAceitarTermos(page);
-      await cogPause(400, 800);
+      await cogPause(300, 600);
       await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
+      await aguardarNavegacaoEstabilizar(page, 5_000, 800);
     }
 
     const senhaVisible = await page.locator(
       '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
-    ).first().isVisible({ timeout: 8000 }).catch(() => false);
+    ).first().isVisible({ timeout: 7000 }).catch(() => false);
 
     if (senhaVisible) {
       log('info', '🔑 Tela de senha detectada — fluxo de motorista (sem OTP)', cycle);
       await etapa_digitarSenha(page, payload.senha, cycle);
-      await cogPause(400, 900);
+      await cogPause(300, 600);
       await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
+      await aguardarNavegacaoEstabilizar(page, 5_000, 800);
     }
 
     const otpVisible = await page.locator(
       '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
-    ).first().isVisible({ timeout: 5000 }).catch(() => false);
+    ).first().isVisible({ timeout: 4000 }).catch(() => false);
 
     if (otpVisible) {
       log('info', '📩 OTP detectado (contexto de re-auth ou variante)', cycle);
       const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
       await etapa_digitarOTP(page, otp, cycle);
       log('info', '⏳ Aguardando navegação automática pós-OTP...', cycle);
-      await aguardarNavegacaoEstabilizar(page, 8_000, 1_500);
+      await aguardarNavegacaoEstabilizar(page, 7_000, 1_200);
     }
 
     const resultado = await etapa_posEmail(
