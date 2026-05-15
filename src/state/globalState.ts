@@ -179,7 +179,6 @@ class GlobalState {
 
   addLog(level: LogEntry['level'], message: string, cycle?: number): void {
     this.logs.unshift({ timestamp: new Date().toISOString(), level, message, cycle });
-    // Cap em memória: descarta logs mais antigos para evitar crescimento ilimitado
     if (this.logs.length > MAX_LOGS) this.logs.length = MAX_LOGS;
   }
 
