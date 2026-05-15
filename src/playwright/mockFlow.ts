@@ -194,97 +194,37 @@ async function dispensarCookies(p: Page): Promise<void> {
 
 // ─── Aceitar termos ───────────────────────────────────────────────────────────
 /**
- * Marca TODOS os checkboxes de termos presentes na tela.
- *
  * DIAGNÓSTICO REAL (Uber auth.uber.com):
- *   - input[type=checkbox] existe mas tem id=null, width=0, height=0 (escondido via CSS)
- *   - parent_tag=LABEL → o input está DENTRO do <label> (não associado por for=)
- *   - label:has-text("Concordo") é visível com rect 358x24
+ *   - input[type=checkbox] existe mas tem id=null, w=0, h=0 (escondido via CSS)
+ *   - parent_tag=LABEL → o input está DENTRO do <label> (NÃO associado por for=)
+ *   - label:has-text("Concordo") é visível com rect 358×24
  *   - data-testid="accept-terms" é o container confiável
  *
- * Estratégia correta (em ordem):
- *   1. Clicar no <label> PAI do input (input está dentro do label — sem id)
- *   2. Clicar via data-testid="accept-terms" label descendente visível
- *   3. label:has-text("Concordo/Agree/...") — fallback por texto
- *   4. click({ force:true }) no input oculto como último recurso
- *   5. JS setter nativo + dispatchEvent se tudo falhar
+ * BUG ANTERIOR: marcouAlgum era setado = true logo após encontrar o input[type=checkbox]
+ * (nCount=1), ANTES de clicarLabelPai confirmar o checked. O fallback
+ * label:has-text("Concordo") nunca executava porque !marcouAlgum === false.
+ *
+ * FIX: nova ordem de prioridade com confirmação real de checked antes de setar marcouAlgum:
+ *   1. [data-testid="accept-terms"] label — seletor exato e confiável do Uber
+ *   2. label:has-text("Concordo"|"Agree"|...) visível — clique direto no label pai visível
+ *   3. input[type=checkbox] ancestor::label — xpath para o label que contém o input oculto
+ *   4. JS setter nativo + dispatchEvent — último recurso, sempre funciona
+ *   5. marcouAlgum só vira true após checked===true confirmado OU após JS setter
  */
 async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
   let marcouAlgum = false;
 
-  // ── Função core: tenta marcar um checkbox pelo seu <label> pai ──
-  // O Uber esconde o input (w=0,h=0) dentro de um <label> visível.
-  // Clicar no label pai é a única forma confiável.
-  async function clicarLabelPai(cb: import('playwright').Locator, idx: number): Promise<boolean> {
-    // Verifica se já está marcado
-    const jaMarcado = await cb.evaluate((el: HTMLInputElement) =>
-      el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
+  // ── Helper: confirma se um checkbox (por locator) está marcado ──
+  async function estaChecked(cb: import('playwright').Locator): Promise<boolean> {
+    return cb.evaluate((el: HTMLInputElement) =>
+      el.type === 'checkbox'
+        ? el.checked
+        : el.getAttribute('aria-checked') === 'true'
     ).catch(() => false);
-    if (jaMarcado) {
-      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} ja marcado — pulando`, cycle);
-      return true;
-    }
+  }
 
-    // Estratégia A: clicar no <label> PAI direto (input está DENTRO do label)
-    try {
-      const labelPai = cb.locator('xpath=ancestor::label[1]');
-      const labelPaiCount = await labelPai.count().catch(() => 0);
-      if (labelPaiCount > 0) {
-        const lbox = await labelPai.first().boundingBox().catch(() => null);
-        if (lbox && lbox.width > 0 && lbox.height > 0) {
-          await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
-          await humanPause(randInt(sp(40), sp(80)));
-          await labelPai.first().click({ timeout: 3000 });
-          if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} marcado via label-pai (xpath ancestor)`, cycle);
-          await humanPause(randInt(sp(60), sp(120)));
-          const checkedApos = await cb.evaluate((el: HTMLInputElement) =>
-            el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
-          ).catch(() => false);
-          if (checkedApos) return true;
-        }
-      }
-    } catch { /* fallback */ }
-
-    // Estratégia B: clicar no <label for="id"> se tiver id
-    try {
-      const id = await cb.getAttribute('id').catch(() => null);
-      if (id) {
-        const label = p.locator(`label[for="${id}"]`).first();
-        const labelVisible = await label.isVisible({ timeout: 600 }).catch(() => false);
-        if (labelVisible) {
-          const lbox = await label.boundingBox().catch(() => null);
-          if (lbox) await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
-          await humanPause(randInt(sp(30), sp(70)));
-          await label.click({ force: true, timeout: 3000 });
-          if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} marcado via label[for="${id}"]`, cycle);
-          await humanPause(randInt(sp(60), sp(120)));
-          const checkedApos = await cb.evaluate((el: HTMLInputElement) =>
-            el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
-          ).catch(() => false);
-          if (checkedApos) return true;
-        }
-      }
-    } catch { /* fallback */ }
-
-    // Estratégia C: click({ force: true }) direto no input oculto
-    try {
-      await cb.click({ force: true, timeout: 3000 });
-      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} clicado com force diretamente`, cycle);
-      await humanPause(randInt(sp(60), sp(120)));
-      const checkedApos = await cb.evaluate((el: HTMLInputElement) =>
-        el.checked !== undefined ? el.checked : el.getAttribute('aria-checked') === 'true'
-      ).catch(() => false);
-      if (checkedApos) return true;
-    } catch { /* fallback */ }
-
-    // Estratégia D: check({ force: true })
-    try {
-      await cb.check({ force: true, timeout: 3000 });
-      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} marcado via .check(force)`, cycle);
-      await humanPause(randInt(sp(40), sp(80)));
-    } catch { /* ignora */ }
-
-    // Estratégia E: JS nativo setter + events (React)
+  // ── Helper: aplica JS setter nativo + todos os eventos React ──
+  async function forcarCheckedJS(cb: import('playwright').Locator, idx: number): Promise<void> {
     await cb.evaluate((el: HTMLInputElement) => {
       if (el.type === 'checkbox') {
         const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
@@ -293,31 +233,180 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
       } else {
         el.setAttribute('aria-checked', 'true');
       }
-      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+      el.dispatchEvent(new MouseEvent('click',  { bubbles: true, cancelable: true, composed: true }));
       el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
       el.dispatchEvent(new Event('input',  { bubbles: true, cancelable: true }));
     }).catch(() => {});
     await humanPause(randInt(sp(40), sp(80)));
     if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} forcado via JS setter+events`, cycle);
+  }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PASSO 1 — PRIORIDADE MÁXIMA: [data-testid="accept-terms"] label visível
+  // Este é o seletor confiável do Uber. O <label> dentro do container é visível
+  // e funciona como área clicável mesmo quando o <input> está oculto (w=0,h=0).
+  // ─────────────────────────────────────────────────────────────────────────────
+  const containerTermos = p.locator('[data-testid="accept-terms"]');
+  const containerCount = await containerTermos.count().catch(() => 0);
+  if (containerCount > 0) {
+    const containerVisible = await containerTermos.first().isVisible({ timeout: 800 }).catch(() => false);
+    if (containerVisible) {
+      // Tenta clicar no <label> filho visível dentro do container
+      const labelFilho = containerTermos.first().locator('label').first();
+      const labelFilhoCount = await labelFilho.count().catch(() => 0);
+
+      if (labelFilhoCount > 0) {
+        const lbox = await labelFilho.boundingBox().catch(() => null);
+        if (lbox && lbox.width > 0 && lbox.height > 0) {
+          await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
+          await humanPause(randInt(sp(40), sp(80)));
+          await labelFilho.click({ force: true, timeout: 3000 }).catch(() => {});
+          await humanPause(randInt(sp(80), sp(150)));
+          if (cycle !== undefined) log('info', '[termos] [accept-terms] label filho clicado (Passo 1A)', cycle);
+
+          // Verifica se o checkbox interno foi marcado
+          const cbInterno = containerTermos.first().locator('input[type="checkbox"]').first();
+          const cbCount = await cbInterno.count().catch(() => 0);
+          if (cbCount > 0 && await estaChecked(cbInterno)) {
+            marcouAlgum = true;
+          } else {
+            // Click chegou mas React não atualizou — força via JS no input interno
+            if (cbCount > 0) {
+              await forcarCheckedJS(cbInterno, 0);
+            }
+            marcouAlgum = true;
+          }
+        }
+      } else {
+        // Sem label filho — clica direto no container
+        const cbox = await containerTermos.first().boundingBox().catch(() => null);
+        if (cbox && cbox.width > 0) {
+          await humanMouseMove(p, cbox.x + cbox.width * randFloat(0.2, 0.5), cbox.y + cbox.height * randFloat(0.3, 0.7));
+          await humanPause(randInt(sp(40), sp(80)));
+          await containerTermos.first().click({ force: true, timeout: 3000 }).catch(() => {});
+          await humanPause(randInt(sp(80), sp(150)));
+          marcouAlgum = true;
+          if (cycle !== undefined) log('info', '[termos] [accept-terms] container clicado diretamente (Passo 1B)', cycle);
+        }
+      }
+    }
+  }
+
+  if (marcouAlgum) {
+    if (cycle !== undefined) log('info', '[termos] Termos marcados via accept-terms container', cycle);
+    // Aguarda forward-button habilitar
+    await _aguardarForwardHabilitar(p);
     return true;
   }
 
-  // ── 1. Processa input[type=checkbox] — visível OU não (Uber os esconde) ──
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PASSO 2 — label visível com texto de termos (clique direto, sem passar pelo input)
+  // Cobre o caso exato: label:has-text("Concordo") visível, 358×24px, input interno oculto.
+  // Clica direto no label — o browser propaga o evento para o input associado.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const labelTextoSels = [
+    'label:has-text("Concordo")',
+    'label:has-text("Agree")',
+    'label:has-text("aceito")',
+    'label:has-text("accept")',
+    'label:has-text("termos")',
+    'label:has-text("terms")',
+    'label:has-text("Li e aceito")',
+    'label:has-text("I agree")',
+  ];
+
+  for (const sel of labelTextoSels) {
+    try {
+      const lbl = p.locator(sel).first();
+      const lbox = await lbl.boundingBox().catch(() => null);
+      if (!lbox || lbox.width === 0 || lbox.height === 0) continue;
+
+      await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
+      await humanPause(randInt(sp(40), sp(80)));
+      await lbl.click({ force: true, timeout: 3000 });
+      await humanPause(randInt(sp(80), sp(150)));
+      if (cycle !== undefined) log('info', `[termos] Label de texto clicado: "${sel}" (Passo 2)`, cycle);
+
+      // Confirma se o input interno ficou marcado
+      const cbInterno = lbl.locator('input[type="checkbox"]').first();
+      const cbCount = await cbInterno.count().catch(() => 0);
+      if (cbCount > 0 && !(await estaChecked(cbInterno))) {
+        await forcarCheckedJS(cbInterno, 100);
+      }
+
+      marcouAlgum = true;
+      break;
+    } catch { /* continua */ }
+  }
+
+  if (marcouAlgum) {
+    if (cycle !== undefined) log('info', '[termos] Termos marcados via label visível', cycle);
+    await _aguardarForwardHabilitar(p);
+    return true;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PASSO 3 — input[type=checkbox] → ancestor::label (xpath)
+  // Fallback para estruturas onde não há texto de termos mas o input existe.
+  // NÃO seta marcouAlgum=true até confirmar checked via estaChecked().
+  // ─────────────────────────────────────────────────────────────────────────────
   const nativos = p.locator('input[type="checkbox"]');
   const nCount = await nativos.count().catch(() => 0);
+
   for (let i = 0; i < nCount; i++) {
     try {
       const cb = nativos.nth(i);
-      // NÃO filtra por visibilidade — o Uber esconde o input com w=0,h=0
       const attached = await cb.count().then((n) => n > 0).catch(() => false);
       if (!attached) continue;
-      await clicarLabelPai(cb, i);
+
+      // Já marcado?
+      if (await estaChecked(cb)) {
+        if (cycle !== undefined) log('info', `[termos] Checkbox #${i} já marcado — pulando (Passo 3)`, cycle);
+        marcouAlgum = true;
+        continue;
+      }
+
+      // Tenta clicar no ancestor label (xpath)
+      let clicked = false;
+      try {
+        const labelPai = cb.locator('xpath=ancestor::label[1]');
+        const lpCount = await labelPai.count().catch(() => 0);
+        if (lpCount > 0) {
+          const lbox = await labelPai.first().boundingBox().catch(() => null);
+          if (lbox && lbox.width > 0 && lbox.height > 0) {
+            await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
+            await humanPause(randInt(sp(40), sp(80)));
+            await labelPai.first().click({ timeout: 3000 });
+            await humanPause(randInt(sp(80), sp(150)));
+            if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — ancestor label clicado (Passo 3A)`, cycle);
+            clicked = true;
+          }
+        }
+      } catch { /* fallback */ }
+
+      // click({ force: true }) direto no input oculto se label falhou
+      if (!clicked) {
+        try {
+          await cb.click({ force: true, timeout: 3000 });
+          await humanPause(randInt(sp(60), sp(120)));
+          if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — click force direto (Passo 3B)`, cycle);
+          clicked = true;
+        } catch { /* fallback */ }
+      }
+
+      // Confirma checked — se não confirmou, força via JS
+      const confirmed = await estaChecked(cb);
+      if (!confirmed) {
+        await forcarCheckedJS(cb, i);
+      }
+
       marcouAlgum = true;
     } catch { /* continua */ }
   }
 
-  // ── 2. Processa [role=checkbox] visíveis ──
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PASSO 4 — [role=checkbox] visíveis
+  // ─────────────────────────────────────────────────────────────────────────────
   const roles = p.locator('[role="checkbox"]');
   const rCount = await roles.count().catch(() => 0);
   for (let i = 0; i < rCount; i++) {
@@ -325,78 +414,47 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
       const cb = roles.nth(i);
       const visible = await cb.isVisible({ timeout: 800 }).catch(() => false);
       if (!visible) continue;
-      await clicarLabelPai(cb, i + 1000);
+
+      if (await estaChecked(cb)) {
+        marcouAlgum = true;
+        continue;
+      }
+
+      const box = await cb.boundingBox().catch(() => null);
+      if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
+      await humanPause(randInt(sp(40), sp(80)));
+      await cb.click({ force: true, timeout: 3000 }).catch(() => {});
+      await humanPause(randInt(sp(80), sp(150)));
+
+      if (!(await estaChecked(cb))) {
+        await forcarCheckedJS(cb, i + 1000);
+      }
       marcouAlgum = true;
+      if (cycle !== undefined) log('info', `[termos] [role=checkbox] #${i} marcado (Passo 4)`, cycle);
     } catch { /* continua */ }
   }
 
-  // ── 3. Fallback direto: label visível com texto de termos ──
-  // Cobre o caso exato do Uber: label:has-text("Concordo") visível, 358x24px
-  if (!marcouAlgum) {
-    const labelSel = [
-      '[data-testid="accept-terms"] label',
-      'label:has-text("Concordo")',
-      'label:has-text("Agree")',
-      'label:has-text("aceito")',
-      'label:has-text("accept")',
-      'label:has-text("termos")',
-      'label:has-text("terms")',
-    ].join(', ');
-    const labels = p.locator(labelSel);
-    const lCount = await labels.count().catch(() => 0);
-    for (let i = 0; i < lCount; i++) {
-      try {
-        const lbl = labels.nth(i);
-        const lbox = await lbl.boundingBox().catch(() => null);
-        if (!lbox || lbox.width === 0) continue;
-        await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
-        await humanPause(randInt(sp(40), sp(80)));
-        await lbl.click({ force: true, timeout: 3000 });
-        marcouAlgum = true;
-        if (cycle !== undefined) log('info', `[termos] Label de texto clicado (fallback direto)`, cycle);
-        await humanPause(randInt(sp(60), sp(120)));
-      } catch { /* continua */ }
-    }
-  }
-
-  // ── 4. Fallback final: container data-testid="accept-terms" ──
-  // Se ainda não marcou, clica diretamente no container de termos
-  if (!marcouAlgum) {
-    try {
-      const container = p.locator('[data-testid="accept-terms"]').first();
-      const visible = await container.isVisible({ timeout: 800 }).catch(() => false);
-      if (visible) {
-        const cbox = await container.boundingBox().catch(() => null);
-        if (cbox && cbox.width > 0) {
-          await humanMouseMove(p, cbox.x + cbox.width * randFloat(0.2, 0.5), cbox.y + cbox.height * randFloat(0.3, 0.7));
-          await humanPause(randInt(sp(40), sp(80)));
-          await container.click({ force: true, timeout: 3000 });
-          marcouAlgum = true;
-          if (cycle !== undefined) log('info', `[termos] Container accept-terms clicado (fallback final)`, cycle);
-          await humanPause(randInt(sp(60), sp(120)));
-        }
-      }
-    } catch { /* ignora */ }
-  }
-
   if (marcouAlgum) {
-    if (cycle !== undefined) log('info', '[termos] Termos aceitos — aguardando forward-button habilitar', cycle);
-    // Aguarda o forward-button habilitar (até 3s) após marcar
-    try {
-      await p.locator('#forward-button, [data-testid="forward-button"]')
-        .first()
-        .waitFor({ state: 'visible', timeout: 3000 });
-      // Espera habilitar
-      const fwd = p.locator('#forward-button, [data-testid="forward-button"]').first();
-      for (let t = 0; t < 10; t++) {
-        const enabled = await fwd.isEnabled({ timeout: 300 }).catch(() => false);
-        if (enabled) break;
-        await humanPause(200);
-      }
-    } catch { /* ignora */ }
+    if (cycle !== undefined) log('info', '[termos] Termos aceitos', cycle);
+    await _aguardarForwardHabilitar(p);
   }
 
   return marcouAlgum;
+}
+
+/** Aguarda o forward-button habilitar após marcar termos (até 3s). */
+async function _aguardarForwardHabilitar(p: Page): Promise<void> {
+  try {
+    await p.locator('#forward-button, [data-testid="forward-button"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 3000 });
+    const fwd = p.locator('#forward-button, [data-testid="forward-button"]').first();
+    for (let t = 0; t < 10; t++) {
+      const enabled = await fwd.isEnabled({ timeout: 300 }).catch(() => false);
+      if (enabled) break;
+      await humanPause(200);
+    }
+  } catch { /* ignora */ }
 }
 
 // ─── Seleciona cidade + preenche invite code ──────────────────────────────────
