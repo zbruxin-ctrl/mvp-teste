@@ -200,16 +200,16 @@ async function dispensarCookies(p: Page): Promise<void> {
  *   - label:has-text("Concordo") é visível com rect 358×24
  *   - data-testid="accept-terms" é o container confiável
  *
- * BUG ANTERIOR: marcouAlgum era setado = true logo após encontrar o input[type=checkbox]
- * (nCount=1), ANTES de clicarLabelPai confirmar o checked. O fallback
- * label:has-text("Concordo") nunca executava porque !marcouAlgum === false.
+ * BUG ROOT (forcarCheckedJS):
+ *   - forcarCheckedJS disparava MouseEvent/change/input no próprio <input> oculto.
+ *   - O React do Uber NÃO escuta no input — ele escuta no <label> pai (onClick do componente).
+ *   - Resultado: o estado React nunca atualizava, o forward-button permanecia disabled.
  *
- * FIX: nova ordem de prioridade com confirmação real de checked antes de setar marcouAlgum:
- *   1. [data-testid="accept-terms"] label — seletor exato e confiável do Uber
- *   2. label:has-text("Concordo"|"Agree"|...) visível — clique direto no label pai visível
- *   3. input[type=checkbox] ancestor::label — xpath para o label que contém o input oculto
- *   4. JS setter nativo + dispatchEvent — último recurso, sempre funciona
- *   5. marcouAlgum só vira true após checked===true confirmado OU após JS setter
+ * FIX: novo helper forcarCheckViaLabel
+ *   - Localiza o <label> pai via ancestor::label[1] (XPath)
+ *   - Dispara element.click() nativo do DOM no label → é exatamente o que o React Uber escuta
+ *   - Fallback: se não houver label pai, usa o nativeSet + dispatchEvent no input (comportamento anterior)
+ *   - forcarCheckedJS REMOVIDO — não existe mais referência
  */
 async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
   let marcouAlgum = false;
@@ -223,35 +223,52 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     ).catch(() => false);
   }
 
-  // ── Helper: aplica JS setter nativo + todos os eventos React ──
-  async function forcarCheckedJS(cb: import('playwright').Locator, idx: number): Promise<void> {
-    await cb.evaluate((el: HTMLInputElement) => {
-      if (el.type === 'checkbox') {
-        const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
-        if (nativeSet) nativeSet.call(el, true);
-        else el.checked = true;
-      } else {
-        el.setAttribute('aria-checked', 'true');
-      }
-      el.dispatchEvent(new MouseEvent('click',  { bubbles: true, cancelable: true, composed: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new Event('input',  { bubbles: true, cancelable: true }));
-    }).catch(() => {});
-    await humanPause(randInt(sp(40), sp(80)));
-    if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} forcado via JS setter+events`, cycle);
+  // ── Novo helper: dispara click nativo no label pai que o React Uber escuta ──
+  // O React registra onClick no <label> (ou no container), não no <input> oculto.
+  // element.click() no label é o único evento que o reconciliador do React processa.
+  async function forcarCheckViaLabel(
+    cb: import('playwright').Locator,
+    idx: number
+  ): Promise<void> {
+    // Tenta encontrar e clicar o label ancestor via XPath
+    const labelPai = cb.locator('xpath=ancestor::label[1]');
+    const lpCount = await labelPai.count().catch(() => 0);
+
+    if (lpCount > 0) {
+      // Dispara element.click() no label via page.evaluate — é o click nativo do DOM
+      // que o React intercepta, ao contrário de dispatchEvent no input filho.
+      await labelPai.first().evaluate((el: HTMLElement) => {
+        el.click();
+      }).catch(() => {});
+      await humanPause(randInt(sp(40), sp(80)));
+      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — click nativo no label pai (forcarCheckViaLabel)`, cycle);
+    } else {
+      // Fallback: sem label pai — usa nativeSet + eventos no próprio input
+      await cb.evaluate((el: HTMLInputElement) => {
+        if (el.type === 'checkbox') {
+          const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
+          if (nativeSet) nativeSet.call(el, true);
+          else el.checked = true;
+        } else {
+          el.setAttribute('aria-checked', 'true');
+        }
+        el.dispatchEvent(new MouseEvent('click',  { bubbles: true, cancelable: true, composed: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Event('input',  { bubbles: true, cancelable: true }));
+      }).catch(() => {});
+      await humanPause(randInt(sp(40), sp(80)));
+      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — fallback nativeSet+events (sem label pai)`, cycle);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PASSO 1 — PRIORIDADE MÁXIMA: [data-testid="accept-terms"] label visível
-  // Este é o seletor confiável do Uber. O <label> dentro do container é visível
-  // e funciona como área clicável mesmo quando o <input> está oculto (w=0,h=0).
   // ─────────────────────────────────────────────────────────────────────────────
   const containerTermos = p.locator('[data-testid="accept-terms"]');
   const containerCount = await containerTermos.count().catch(() => 0);
   if (containerCount > 0) {
     const containerVisible = await containerTermos.first().isVisible({ timeout: 800 }).catch(() => false);
     if (containerVisible) {
-      // Tenta clicar no <label> filho visível dentro do container
       const labelFilho = containerTermos.first().locator('label').first();
       const labelFilhoCount = await labelFilho.count().catch(() => 0);
 
@@ -260,33 +277,31 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         if (lbox && lbox.width > 0 && lbox.height > 0) {
           await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
           await humanPause(randInt(sp(40), sp(80)));
-          await labelFilho.click({ force: true, timeout: 3000 }).catch(() => {});
-          await humanPause(randInt(sp(80), sp(150)));
-          if (cycle !== undefined) log('info', '[termos] [accept-terms] label filho clicado (Passo 1A)', cycle);
 
-          // Verifica se o checkbox interno foi marcado
+          // Passo 1A: click nativo no label filho via element.click() (o que React Uber escuta)
+          await labelFilho.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
+          await humanPause(randInt(sp(80), sp(150)));
+          if (cycle !== undefined) log('info', '[termos] [accept-terms] label filho — element.click() nativo (Passo 1A)', cycle);
+
+          // Verifica se o React atualizou o estado
           const cbInterno = containerTermos.first().locator('input[type="checkbox"]').first();
           const cbCount = await cbInterno.count().catch(() => 0);
-          if (cbCount > 0 && await estaChecked(cbInterno)) {
-            marcouAlgum = true;
-          } else {
-            // Click chegou mas React não atualizou — força via JS no input interno
-            if (cbCount > 0) {
-              await forcarCheckedJS(cbInterno, 0);
-            }
-            marcouAlgum = true;
+          if (cbCount > 0 && !(await estaChecked(cbInterno))) {
+            // React não respondeu ao click no label filho — tenta via label pai do input
+            await forcarCheckViaLabel(cbInterno, 0);
           }
+          marcouAlgum = true;
         }
       } else {
-        // Sem label filho — clica direto no container
+        // Sem label filho — dispara element.click() direto no container
         const cbox = await containerTermos.first().boundingBox().catch(() => null);
         if (cbox && cbox.width > 0) {
           await humanMouseMove(p, cbox.x + cbox.width * randFloat(0.2, 0.5), cbox.y + cbox.height * randFloat(0.3, 0.7));
           await humanPause(randInt(sp(40), sp(80)));
-          await containerTermos.first().click({ force: true, timeout: 3000 }).catch(() => {});
+          await containerTermos.first().evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
           await humanPause(randInt(sp(80), sp(150)));
           marcouAlgum = true;
-          if (cycle !== undefined) log('info', '[termos] [accept-terms] container clicado diretamente (Passo 1B)', cycle);
+          if (cycle !== undefined) log('info', '[termos] [accept-terms] container — element.click() direto (Passo 1B)', cycle);
         }
       }
     }
@@ -294,15 +309,14 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
 
   if (marcouAlgum) {
     if (cycle !== undefined) log('info', '[termos] Termos marcados via accept-terms container', cycle);
-    // Aguarda forward-button habilitar
     await _aguardarForwardHabilitar(p);
     return true;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // PASSO 2 — label visível com texto de termos (clique direto, sem passar pelo input)
-  // Cobre o caso exato: label:has-text("Concordo") visível, 358×24px, input interno oculto.
-  // Clica direto no label — o browser propaga o evento para o input associado.
+  // PASSO 2 — label visível com texto de termos
+  // Clica via element.click() no label — o browser propaga ao input associado
+  // e o React escuta o onClick do label.
   // ─────────────────────────────────────────────────────────────────────────────
   const labelTextoSels = [
     'label:has-text("Concordo")',
@@ -323,15 +337,17 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
 
       await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
       await humanPause(randInt(sp(40), sp(80)));
-      await lbl.click({ force: true, timeout: 3000 });
-      await humanPause(randInt(sp(80), sp(150)));
-      if (cycle !== undefined) log('info', `[termos] Label de texto clicado: "${sel}" (Passo 2)`, cycle);
 
-      // Confirma se o input interno ficou marcado
+      // element.click() nativo no label — não no input filho
+      await lbl.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
+      await humanPause(randInt(sp(80), sp(150)));
+      if (cycle !== undefined) log('info', `[termos] Label texto — element.click(): "${sel}" (Passo 2)`, cycle);
+
+      // Verifica se o React atualizou; se não, usa forcarCheckViaLabel no input interno
       const cbInterno = lbl.locator('input[type="checkbox"]').first();
       const cbCount = await cbInterno.count().catch(() => 0);
       if (cbCount > 0 && !(await estaChecked(cbInterno))) {
-        await forcarCheckedJS(cbInterno, 100);
+        await forcarCheckViaLabel(cbInterno, 100);
       }
 
       marcouAlgum = true;
@@ -346,9 +362,8 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // PASSO 3 — input[type=checkbox] → ancestor::label (xpath)
-  // Fallback para estruturas onde não há texto de termos mas o input existe.
-  // NÃO seta marcouAlgum=true até confirmar checked via estaChecked().
+  // PASSO 3 — input[type=checkbox] → forcarCheckViaLabel (ancestor label)
+  // Usa o novo helper que dispara click no label pai, não no input.
   // ─────────────────────────────────────────────────────────────────────────────
   const nativos = p.locator('input[type="checkbox"]');
   const nCount = await nativos.count().catch(() => 0);
@@ -359,14 +374,13 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
       const attached = await cb.count().then((n) => n > 0).catch(() => false);
       if (!attached) continue;
 
-      // Já marcado?
       if (await estaChecked(cb)) {
         if (cycle !== undefined) log('info', `[termos] Checkbox #${i} já marcado — pulando (Passo 3)`, cycle);
         marcouAlgum = true;
         continue;
       }
 
-      // Tenta clicar no ancestor label (xpath)
+      // Tenta click no ancestor label via XPath primeiro (caminho correto para React Uber)
       let clicked = false;
       try {
         const labelPai = cb.locator('xpath=ancestor::label[1]');
@@ -376,15 +390,16 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
           if (lbox && lbox.width > 0 && lbox.height > 0) {
             await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
             await humanPause(randInt(sp(40), sp(80)));
-            await labelPai.first().click({ timeout: 3000 });
+            // element.click() nativo no label pai — React escuta aqui
+            await labelPai.first().evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
             await humanPause(randInt(sp(80), sp(150)));
-            if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — ancestor label clicado (Passo 3A)`, cycle);
+            if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — element.click() no ancestor label (Passo 3A)`, cycle);
             clicked = true;
           }
         }
       } catch { /* fallback */ }
 
-      // click({ force: true }) direto no input oculto se label falhou
+      // Se label não encontrado, tenta click({ force: true }) direto no input oculto
       if (!clicked) {
         try {
           await cb.click({ force: true, timeout: 3000 });
@@ -394,10 +409,10 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         } catch { /* fallback */ }
       }
 
-      // Confirma checked — se não confirmou, força via JS
+      // Confirma checked; se não, usa forcarCheckViaLabel (dispara click no label pai)
       const confirmed = await estaChecked(cb);
       if (!confirmed) {
-        await forcarCheckedJS(cb, i);
+        await forcarCheckViaLabel(cb, i);
       }
 
       marcouAlgum = true;
@@ -423,14 +438,16 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
       const box = await cb.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
       await humanPause(randInt(sp(40), sp(80)));
-      await cb.click({ force: true, timeout: 3000 }).catch(() => {});
+
+      // element.click() nativo — React escuta aqui
+      await cb.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
       await humanPause(randInt(sp(80), sp(150)));
 
       if (!(await estaChecked(cb))) {
-        await forcarCheckedJS(cb, i + 1000);
+        await forcarCheckViaLabel(cb, i + 1000);
       }
       marcouAlgum = true;
-      if (cycle !== undefined) log('info', `[termos] [role=checkbox] #${i} marcado (Passo 4)`, cycle);
+      if (cycle !== undefined) log('info', `[termos] [role=checkbox] #${i} marcado via element.click() (Passo 4)`, cycle);
     } catch { /* continua */ }
   }
 
@@ -1500,7 +1517,6 @@ async function _executarCiclo(
     ).first().isVisible({ timeout: 5000 }).catch(() => false);
 
     if (senhaVisible) {
-      log('info', 'Tela de senha detectada — fluxo de motorista (sem OTP)', cycle);
       await etapa_digitarSenha(page, payload.senha, cycle);
       await cogPause(200, 400);
       await clickForwardButton(page, cycle);
@@ -1508,15 +1524,20 @@ async function _executarCiclo(
     }
 
     const otpVisible = await page.locator(
-      '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
-    ).first().isVisible({ timeout: 3000 }).catch(() => false);
+      '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[inputmode="numeric"]'
+    ).first().isVisible({ timeout: 5000 }).catch(() => false);
 
     if (otpVisible) {
-      log('info', 'OTP detectado (contexto de re-auth ou variante)', cycle);
-      const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
+      const otp = await etapa_aguardarOTP(page, emailClient, emailAccount.email, cycle, opts.otpTimeout * 1000);
       await etapa_digitarOTP(page, otp, cycle);
-      log('info', 'Aguardando navegacao automatica pos-OTP...', cycle);
-      await aguardarNavegacaoEstabilizar(page, 5_000, 1_000);
+      await cogPause(200, 400);
+
+      const fwdAposOtp = await page.locator('#forward-button, [data-testid="forward-button"]')
+        .first().isVisible({ timeout: 2000 }).catch(() => false);
+      if (fwdAposOtp) {
+        await clickForwardButton(page, cycle);
+      }
+      await aguardarNavegacaoEstabilizar(page, 4_000, 600);
     }
 
     const resultado = await etapa_posEmail(
@@ -1526,84 +1547,69 @@ async function _executarCiclo(
     );
 
     if (resultado === 'success') {
-      const urlFinal = page.url();
-      const cookiesRaw: Cookie[] = await ctx.cookies().catch(() => []);
-      log('info', `${cookiesRaw.length} cookies capturados`, cycle);
+      log('success', `Ciclo ${cycle} concluido com sucesso!`, cycle);
 
-      const tmScript = gerarTampermonkeyScript(cookiesRaw, payload.email);
-      log('success', `Tampermonkey Script:\n${tmScript}`, cycle);
-
-      log('success', `Conta criada com sucesso! URL: ${urlFinal}`, cycle);
-      accountStore.save({
-        cycle,
-        provider: opts.emailProvider,
+      const cookies = await page.context().cookies();
+      const tmScript = gerarTampermonkeyScript(cookies, payload.email);
+      const arts = new ArtifactsManager();
+      await arts.salvarConta({
+        email: payload.email,
+        senha: payload.senha,
         nome: payload.nome,
         sobrenome: payload.sobrenome,
-        email: payload.email,
+        cidade: payload.cidade,
         telefone: payload.telefone,
-        senha: payload.senha,
-        localizacao: payload.localizacao,
-        codigoIndicacao: payload.codigoIndicacao,
-        cookies: cookiesRaw,
+        inviteCode: opts.inviteCode,
+        tampermonkeyScript: tmScript,
+        cookies,
+        criadoEm: new Date().toISOString(),
       });
-    } else {
-      const urlFinal = page.url();
-      log('warn', `Conta NAO salva — fluxo incompleto. URL final: ${urlFinal}`, cycle);
-    }
 
+      await accountStore.salvarConta({
+        email: payload.email,
+        senha: payload.senha,
+        nome: `${payload.nome} ${payload.sobrenome}`,
+        cidade: payload.cidade,
+        telefone: payload.telefone,
+        inviteCode: opts.inviteCode,
+        cookies,
+        tampermonkeyScript: tmScript,
+        criadoEm: new Date().toISOString(),
+        status: 'success',
+      });
+
+      globalState.incrementSuccess();
+    } else {
+      log('warn', `Ciclo ${cycle} finalizado sem sucesso confirmado. Resultado: ${resultado}`, cycle);
+      globalState.incrementFailure();
+    }
   } catch (err: any) {
     if (err?.message === 'VERIFF_DETECTED') {
-      log('warn', `Ciclo ${cycle} encerrado: KYC Veriff detectado`, cycle);
+      log('warn', `Ciclo ${cycle} encerrado — KYC Veriff detectado`, cycle);
     } else {
-      log('error', `Erro no ciclo: ${err?.message ?? err}`, cycle);
-      throw err;
+      log('error', `Erro no ciclo ${cycle}: ${err?.message ?? err}`, cycle);
     }
+    globalState.incrementFailure();
   } finally {
     await fecharContextoCiclo(cycle);
   }
 }
 
-// ─── Classe MockPlaywrightFlow ────────────────────────────────────────────────
+// ─── Exports públicos ─────────────────────────────────────────────────────────
 
-type FlowOpts = {
-  emailProvider: EmailProvider;
-  tempMailApiKey: string;
-  otpTimeout: number;
-  extraDelay: number;
-  inviteCode: string;
-};
-
-export class MockPlaywrightFlow {
-  private static headless = false;
-
-  static async init(headless = false): Promise<void> {
-    MockPlaywrightFlow.headless = headless;
-    await ensureBrowser(headless);
-  }
-
-  static async execute(cadastroUrl: string, opts: FlowOpts, cycle: number): Promise<void> {
-    await _executarCiclo(cycle, { cadastroUrl, ...opts });
-  }
-
-  static async cleanup(): Promise<void> { await closeBrowser(); }
-}
-
-// ─── Executor legado ──────────────────────────────────────────────────────────
-
-export async function executarMockFlow(
+export async function executarCiclo(
   cycle: number,
-  proxyConfig?: string,
-  emailProvider?: EmailProvider
+  opts: {
+    cadastroUrl: string;
+    emailProvider: EmailProvider;
+    tempMailApiKey: string;
+    otpTimeout: number;
+    extraDelay: number;
+    inviteCode: string;
+    proxyConfig?: string;
+    headless?: boolean;
+  }
 ): Promise<void> {
-  const state = globalState.getState();
-  const config = state.config;
-  await ensureBrowser(config.headless ?? false, proxyConfig);
-  await _executarCiclo(cycle, {
-    cadastroUrl: (config as any).cadastroUrl ?? 'https://www.uber.com/br/pt-br/drive/application/',
-    emailProvider: emailProvider ?? config.emailProvider,
-    tempMailApiKey: config.tempMailApiKey ?? '',
-    otpTimeout: config.otpTimeout ?? 60_000,
-    extraDelay: config.extraDelay ?? 0,
-    inviteCode: config.inviteCode ?? '',
-  });
+  await ensureBrowser(opts.headless ?? false, opts.proxyConfig);
+  await _executarCiclo(cycle, opts);
 }
