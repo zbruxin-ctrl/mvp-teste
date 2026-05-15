@@ -98,6 +98,26 @@ class GlobalState {
   private executor: CycleExecutor | null = null;
   private kycByCycle: KycByCycle = {};
 
+  // ─── Contadores de sucesso/falha usados pelo mockFlow ─────────────────────
+  private successCount = 0;
+  private failureCount = 0;
+
+  incrementSuccess(): void {
+    this.successCount += 1;
+  }
+
+  incrementFailure(): void {
+    this.failureCount += 1;
+  }
+
+  getSuccessCount(): number {
+    return this.successCount;
+  }
+
+  getFailureCount(): number {
+    return this.failureCount;
+  }
+
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
     if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
     const cycleMap = this.kycByCycle[cycle]!;
