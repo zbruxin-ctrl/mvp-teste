@@ -80,10 +80,10 @@ function gerarTampermonkeyScript(cookies: Cookie[], email: string): string {
 
 // ─── Detecção de URL ──────────────────────────────────────────────────────────
 
+// FIX: bonjour.uber.com/step é ainda onboarding (hub/foto), não destino final.
+// Destino final = hub KYC detectado OU foto do perfil detectada OU rider/go/home.
 function isSuccessUrl(url: string): boolean {
   return (
-    url.includes('bonjour.uber.com/hub') ||
-    url.includes('bonjour.uber.com/step') ||
     url.includes('rider.uber.com') ||
     (url.includes('m.uber.com') && !url.includes('auth.uber.com')) ||
     url.includes('uber.com/go') ||
@@ -96,6 +96,7 @@ function isSuccessUrl(url: string): boolean {
   );
 }
 
+// bonjour.uber.com/hub e bonjour.uber.com/step são ainda onboarding
 function isOnboardingUrl(url: string): boolean {
   return (
     url.includes('auth.uber.com') ||
@@ -338,12 +339,13 @@ async function tratarHubKYC(p: Page, cycle: number): Promise<boolean> {
   log('info', '🏠 Hub KYC detectado — clicando em Foto do perfil', cycle);
   await cogPause(500, 1000);
 
+  // FIX: stepItem é um <A>, não <button> — force: true obrigatório
   const fotoItem = p.locator('[data-testid="stepItem profilePhoto"]').first();
   if (await fotoItem.isVisible({ timeout: 5000 }).catch(() => false)) {
     const box = await fotoItem.boundingBox().catch(() => null);
     if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.2, 0.8), box.y + box.height * randFloat(0.2, 0.8));
     await humanPause(randInt(sp(200), sp(400)));
-    await fotoItem.click({ timeout: 5000 });
+    await fotoItem.click({ force: true, timeout: 5000 });
     log('info', '📸 Navegando para etapa de foto do perfil', cycle);
     await humanPause(randInt(sp(800), sp(1500)));
     return true;
@@ -363,12 +365,13 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   log('info', '📷 Tela de foto do perfil detectada — clicando Tirar foto', cycle);
   await cogPause(600, 1200);
 
+  // FIX: docUploadButton é um <DIV>, não <button> — force: true obrigatório
   const btnFoto = p.locator('[data-testid="docUploadButton"]').first();
   if (await btnFoto.isVisible({ timeout: 5000 }).catch(() => false)) {
     const box = await btnFoto.boundingBox().catch(() => null);
     if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
     await humanPause(randInt(sp(200), sp(450)));
-    await btnFoto.click({ timeout: 5000 });
+    await btnFoto.click({ force: true, timeout: 5000 });
     log('info', '✅ Botão "Tirar foto" clicado', cycle);
     await humanPause(randInt(sp(800), sp(1500)));
     return true;
@@ -376,7 +379,7 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
 
   const btnTexto = p.locator('button', { hasText: /Tirar foto/i }).first();
   if (await btnTexto.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await btnTexto.click({ timeout: 5000 });
+    await btnTexto.click({ force: true, timeout: 5000 });
     log('info', '✅ Botão "Tirar foto" clicado (fallback texto)', cycle);
     await humanPause(randInt(sp(800), sp(1500)));
     return true;
@@ -386,7 +389,7 @@ async function tratarTelaFotoPerfil(p: Page, cycle: number): Promise<boolean> {
   return false;
 }
 
-// ─── FIX #6: Tela de senha isolada pós-OTP ───────────────────────────────────
+// ─── FIX #6: Tela de senha isolada pós-email ─────────────────────────────────
 // #PASSWORD visível + #username HIDDEN no DOM = tela de criação de senha.
 // Diferente da re-auth onde ambos ficam visíveis.
 
@@ -406,12 +409,10 @@ async function tratarTelaSenhaFluxo(
   // Se username está visível, é re-auth — deixa para tratarTelaReAuth
   if (usernameVisivel) return false;
 
-  // FIX TS2339: .isAttached() não existe na API do Locator do Playwright.
-  // Usamos .count() > 0 que é equivalente e sempre compila.
   const temUsernameAttached = await p.locator('#username, input[id="username"]')
     .count().then((n) => n > 0).catch(() => false);
 
-  log('info', '🔑 Tela de senha do fluxo detectada (pós-OTP)', cycle);
+  log('info', '🔑 Tela de senha do fluxo detectada (pós-email)', cycle);
   await cogPause(400, 800);
 
   if (temUsernameAttached) {
@@ -695,14 +696,20 @@ async function forcarValorReact(p: Page, selector: string, value: string): Promi
   }, value).catch(() => {});
 }
 
+// FIX: prioridade EMAIL primeiro no campo PHONE_NUMBER_or_EMAIL_ADDRESS.
+// O campo aceita ambos, mas sempre inserimos o e-mail.
+// Telefone permanece apenas como fallback final.
 async function etapa_digitarEmailOuTelefone(p: Page, email: string, cycle: number): Promise<void> {
   log('info', `📧 Digitando email: ${email}`, cycle);
 
   const SELS = [
+    // 1º — campo combinado (aceita email e telefone) → usamos email
     '#PHONE_NUMBER_or_EMAIL_ADDRESS',
+    // 2º — campo exclusivo de email
     '#EMAIL_ADDRESS',
     'input[autocomplete="email"]',
     'input[type="email"]',
+    // fallback — telefone (não esperado no fluxo de motorista via email)
     '#PHONE_NUMBER',
     'input[autocomplete="tel-national"]',
     'input[type="tel"]',
@@ -1017,7 +1024,7 @@ async function processarTelaOnboarding(
   return true;
 }
 
-async function etapa_posOTP(
+async function etapa_posEmail(
   p: Page,
   payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string; email: string; senha: string },
   cycle: number
@@ -1031,6 +1038,15 @@ async function etapa_posOTP(
 
     if (isSuccessUrl(url)) {
       log('success', `🎉 Destino final detectado! URL: ${url}`, cycle);
+      return 'success';
+    }
+
+    // Hub KYC ou tela de foto = checkpoint de sucesso do fluxo de motorista
+    const isHubOrFoto =
+      await p.locator('[data-testid="hub"], [data-testid="step profilePhoto"]')
+        .first().isVisible({ timeout: 3000 }).catch(() => false);
+    if (isHubOrFoto) {
+      log('success', `🎉 Hub/Foto detectado — conta criada com sucesso`, cycle);
       return 'success';
     }
 
@@ -1092,13 +1108,15 @@ async function _executarCiclo(
     await dispensarCookies(page);
     await pageWarmup(page, cycle);
 
+    // FIX: #PHONE_NUMBER_or_EMAIL_ADDRESS é o seletor primário esperado na 1ª tela.
+    // Também aceita #EMAIL_ADDRESS e fallbacks caso o Uber sirva variante diferente.
     const isTelaCampoInicial = await page.locator(
-      '#PHONE_NUMBER_or_EMAIL_ADDRESS, #EMAIL_ADDRESS, input[type="email"], #PHONE_NUMBER, input[autocomplete="tel-national"]'
+      '#PHONE_NUMBER_or_EMAIL_ADDRESS, #EMAIL_ADDRESS, input[type="email"], input[autocomplete="email"]'
     ).first().isVisible({ timeout: 12000 }).catch(() => false);
 
     if (!isTelaCampoInicial) {
       log('warn', '⚠️ Tela inicial não detectada — tentando loop de onboarding direto', cycle);
-      const resultado = await etapa_posOTP(
+      const resultado = await etapa_posEmail(
         page,
         { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
         cycle
@@ -1107,17 +1125,19 @@ async function _executarCiclo(
       return;
     }
 
+    // ETAPA 1: digitar email no campo #PHONE_NUMBER_or_EMAIL_ADDRESS (ou equivalente)
     await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
     await cogPause(400, 900);
     await clickForwardButton(page, cycle);
     await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
 
-    const nomeVisiblePreOTP = await page.locator(
+    // Tela de nome pode aparecer antes da senha (fluxo de novo usuário)
+    const nomeVisiblePreSenha = await page.locator(
       '#FIRST_NAME, [autocomplete="given-name"]'
     ).first().isVisible({ timeout: 5000 }).catch(() => false);
 
-    if (nomeVisiblePreOTP) {
-      log('info', '👤 Tela de nome detectada antes do OTP', cycle);
+    if (nomeVisiblePreSenha) {
+      log('info', '👤 Tela de nome detectada antes da senha', cycle);
       const nomeSels = ['#FIRST_NAME', '[autocomplete="given-name"]', '[name="firstName"]'];
       for (const sel of nomeSels) {
         if (await page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -1137,59 +1157,74 @@ async function _executarCiclo(
       await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
     }
 
-    const termosVisiblePreOTP = await page.locator('[data-testid="accept-terms"]').first()
+    // Termos podem aparecer em tela separada antes da senha
+    const termosVisiblePreSenha = await page.locator('[data-testid="accept-terms"]').first()
       .isVisible({ timeout: 3000 }).catch(() => false);
-    if (termosVisiblePreOTP) {
+    if (termosVisiblePreSenha) {
       await tentarAceitarTermos(page);
       await cogPause(400, 800);
       await clickForwardButton(page, cycle);
       await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
     }
 
+    // ETAPA 2: senha — aparece diretamente após o email no fluxo de motorista
+    // (sem OTP intermediário — OTP é exclusivo do fluxo de passageiro)
+    const senhaVisible = await page.locator(
+      '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
+    ).first().isVisible({ timeout: 8000 }).catch(() => false);
+
+    if (senhaVisible) {
+      log('info', '🔑 Tela de senha detectada — fluxo de motorista (sem OTP)', cycle);
+      await etapa_digitarSenha(page, payload.senha, cycle);
+      await cogPause(400, 900);
+      await clickForwardButton(page, cycle);
+      await aguardarNavegacaoEstabilizar(page, 6_000, 1_000);
+    }
+
+    // OTP: pode aparecer em alguns contextos (ex.: email já cadastrado / re-auth)
     const otpVisible = await page.locator(
       '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[name="otpCode"], input[maxlength="1"]'
-    ).first().isVisible({ timeout: 12000 }).catch(() => false);
+    ).first().isVisible({ timeout: 5000 }).catch(() => false);
 
     if (otpVisible) {
+      log('info', '📩 OTP detectado (contexto de re-auth ou variante)', cycle);
       const otp = await etapa_aguardarOTP(page, emailClient, payload.email, cycle, opts.otpTimeout);
       await etapa_digitarOTP(page, otp, cycle);
-
       log('info', '⏳ Aguardando navegação automática pós-OTP...', cycle);
       await aguardarNavegacaoEstabilizar(page, 8_000, 1_500);
+    }
 
-      const resultado = await etapa_posOTP(
-        page,
-        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
-        cycle
-      );
+    // ETAPA 3: loop de onboarding (nome, termos, cidade, WhatsApp, hub, foto)
+    const resultado = await etapa_posEmail(
+      page,
+      { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
+      cycle
+    );
 
-      if (resultado === 'success') {
-        const urlFinal = page.url();
-        const cookiesRaw: Cookie[] = await ctx.cookies().catch(() => []);
-        log('info', `🍪 ${cookiesRaw.length} cookies capturados`, cycle);
+    if (resultado === 'success') {
+      const urlFinal = page.url();
+      const cookiesRaw: Cookie[] = await ctx.cookies().catch(() => []);
+      log('info', `🍪 ${cookiesRaw.length} cookies capturados`, cycle);
 
-        const tmScript = gerarTampermonkeyScript(cookiesRaw, payload.email);
-        log('success', `📋 Tampermonkey Script:\n${tmScript}`, cycle);
+      const tmScript = gerarTampermonkeyScript(cookiesRaw, payload.email);
+      log('success', `📋 Tampermonkey Script:\n${tmScript}`, cycle);
 
-        log('success', `🎉 Conta criada com sucesso! URL: ${urlFinal}`, cycle);
-        accountStore.save({
-          cycle,
-          provider: opts.emailProvider,
-          nome: payload.nome,
-          sobrenome: payload.sobrenome,
-          email: payload.email,
-          telefone: payload.telefone,
-          senha: payload.senha,
-          localizacao: payload.localizacao,
-          codigoIndicacao: payload.codigoIndicacao,
-          cookies: cookiesRaw,
-        });
-      } else {
-        const urlFinal = page.url();
-        log('warn', `⚠️ Conta NÃO salva — fluxo incompleto. URL final: ${urlFinal}`, cycle);
-      }
+      log('success', `🎉 Conta criada com sucesso! URL: ${urlFinal}`, cycle);
+      accountStore.save({
+        cycle,
+        provider: opts.emailProvider,
+        nome: payload.nome,
+        sobrenome: payload.sobrenome,
+        email: payload.email,
+        telefone: payload.telefone,
+        senha: payload.senha,
+        localizacao: payload.localizacao,
+        codigoIndicacao: payload.codigoIndicacao,
+        cookies: cookiesRaw,
+      });
     } else {
-      log('warn', '⚠️ Campo de OTP não apareceu', cycle);
+      const urlFinal = page.url();
+      log('warn', `⚠️ Conta NÃO salva — fluxo incompleto. URL final: ${urlFinal}`, cycle);
     }
 
   } catch (err: any) {
