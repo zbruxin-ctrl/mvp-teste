@@ -46,6 +46,15 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** Retorna true se o char pode ser passado para keyboard.down/up sem erro. */
+function isAsciiKey(ch: string): boolean {
+  const code = ch.charCodeAt(0);
+  // Playwright aceita keyboard.down apenas para chars ASCII imprimíveis (32-126)
+  // e chars de controle mapeados (ex: Enter, Tab). Para tudo acima de 127
+  // (acentuados, ç, ã, etc.) é necessário usar keyboard.type.
+  return ch.length === 1 && code >= 32 && code <= 126;
+}
+
 // ─── Pausas ───────────────────────────────────────────────────────────────────
 
 /**
@@ -200,31 +209,51 @@ export async function focusField(p: Page, selector: string): Promise<void> {
 }
 
 // ─── _typeChar ────────────────────────────────────────────────────────────────
-// Cada tecla passa por keydown → keypress → input → keyup separadamente,
-// idêntico ao comportamento de um teclado físico.
+// FIX: keyboard.down/up falha com "Unknown key" para chars não-ASCII
+// (acentuados, ç, ã, etc.). A detecção isAsciiKey() decide o caminho:
+//   ASCII (32-126)  → keyboard.down + holdMs + InputEvent + keyboard.up
+//   Non-ASCII       → keyboard.type (Playwright converte internamente) +
+//                     InputEvent manual para manter a cadeia de eventos.
 
 export async function _typeChar(p: Page, ch: string, fast: boolean): Promise<void> {
   const holdMs = fast
     ? randInt(15, 45)
     : clamp(Math.round(gaussianRand() * 20 + 65), 35, 130);
 
-  await p.keyboard.down(ch);
-  await new Promise<void>((r) => setTimeout(r, holdMs));
-
-  await p.evaluate((char: string) => {
-    const el = document.activeElement as HTMLInputElement | null;
-    if (!el) return;
-    el.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      cancelable: false,
-      composed: true,
-      data: char,
-      inputType: 'insertText',
-      isComposing: false,
-    }));
-  }, ch);
-
-  await p.keyboard.up(ch);
+  if (isAsciiKey(ch)) {
+    // Caminho original: down → hold → InputEvent → up
+    await p.keyboard.down(ch);
+    await new Promise<void>((r) => setTimeout(r, holdMs));
+    await p.evaluate((char: string) => {
+      const el = document.activeElement as HTMLInputElement | null;
+      if (!el) return;
+      el.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: false,
+        composed: true,
+        data: char,
+        inputType: 'insertText',
+        isComposing: false,
+      }));
+    }, ch);
+    await p.keyboard.up(ch);
+  } else {
+    // Caminho Unicode: keyboard.type insere o char sem exigir nome de tecla
+    await p.keyboard.type(ch, { delay: holdMs });
+    // Dispara InputEvent adicional para manter compatibilidade com React
+    await p.evaluate((char: string) => {
+      const el = document.activeElement as HTMLInputElement | null;
+      if (!el) return;
+      el.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: false,
+        composed: true,
+        data: char,
+        inputType: 'insertText',
+        isComposing: false,
+      }));
+    }, ch);
+  }
 }
 
 // ─── Digitação ────────────────────────────────────────────────────────────────
@@ -254,10 +283,12 @@ export async function humanType(p: Page, selector: string, value: string): Promi
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
 
+    // Guard: só gera typo para ASCII imprimível (32-126) para não produzir
+    // chars acentuados via charCodeAt+offset que quebrariam keyboard.down
     if (!fast && Math.random() < 0.04 && /[a-zA-Z]/.test(ch)) {
       const offset = Math.random() > 0.5 ? 1 : -1;
       const typoCode = ch.charCodeAt(0) + offset;
-      if (typoCode > 64 && typoCode < 123) {
+      if (typoCode >= 32 && typoCode <= 126) {
         await _typeChar(p, String.fromCharCode(typoCode), false);
         await humanPause(randInt(40, 100));
         await p.keyboard.press('Backspace');
@@ -330,10 +361,12 @@ export async function humanTypeForce(p: Page, selector: string, value: string): 
 
     const ch = value[i]!;
 
+    // Guard: só gera typo para ASCII imprimível (32-126) para não produzir
+    // chars acentuados via charCodeAt+offset que quebrariam keyboard.down
     if (!fast && Math.random() < 0.04 && /[a-zA-Z]/.test(ch)) {
       const offset = Math.random() > 0.5 ? 1 : -1;
       const typoCode = ch.charCodeAt(0) + offset;
-      if (typoCode > 64 && typoCode < 123) {
+      if (typoCode >= 32 && typoCode <= 126) {
         await _typeChar(p, String.fromCharCode(typoCode), false);
         await humanPause(randInt(40, 100));
         await p.keyboard.press('Backspace');
