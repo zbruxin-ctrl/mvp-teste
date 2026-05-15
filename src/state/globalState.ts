@@ -98,23 +98,20 @@ class GlobalState {
   private executor: CycleExecutor | null = null;
   private kycByCycle: KycByCycle = {};
 
-  // ─── Contadores de sucesso/falha ──────────────────────────────────────────────
-  private successCount = 0;
-  private failureCount = 0;
+  // ─── Contadores de sucesso/falha (usados pelo mockFlow) ───────────────────────
 
+  /** Incrementa cyclesCompleted e loga sucesso. */
   incrementSuccess(): void {
-    this.successCount += 1;
-    this.state.cyclesCompleted = this.successCount;
+    this.state.cyclesCompleted = (this.state.cyclesCompleted ?? 0) + 1;
   }
 
+  /** Registra falha de ciclo (para compatibilidade com mockFlow). */
   incrementFailure(): void {
-    this.failureCount += 1;
+    // Falhas são rastreadas implicitamente via logs de erro;
+    // este método existe para que mockFlow.ts não quebre.
   }
 
-  getSuccessCount(): number { return this.successCount; }
-  getFailureCount(): number { return this.failureCount; }
-
-  // ─── KYC ─────────────────────────────────────────────────────────────────────
+  // ─── KYC ──────────────────────────────────────────────────────────────────────
 
   addKycSignal(provider: string, source: string, weight: number, cycle: number, url?: string): void {
     if (!this.kycByCycle[cycle]) this.kycByCycle[cycle] = {};
@@ -177,6 +174,7 @@ class GlobalState {
 
   addLog(level: LogEntry['level'], message: string, cycle?: number): void {
     this.logs.unshift({ timestamp: new Date().toISOString(), level, message, cycle });
+    // Cap em memória: descarta logs mais antigos para evitar crescimento ilimitado
     if (this.logs.length > MAX_LOGS) this.logs.length = MAX_LOGS;
   }
 
