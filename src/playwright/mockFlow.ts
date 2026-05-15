@@ -17,10 +17,6 @@ import {
   clickForwardButton, scrollIdle, pageWarmup,
 } from './humanActions';
 
-// FIX: NÃO chamar chromiumExtra.use() no topo do módulo.
-// Isso causava o módulo inteiro lançar erro durante o import,
-// resultando em MockPlaywrightFlow === undefined no server/index.ts.
-// O plugin é registrado UMA única vez dentro de ensureBrowser(), lazy.
 let stealthPluginRegistered = false;
 
 let browser: Browser | null = null;
@@ -29,11 +25,7 @@ let currentLaunchProxy: string | null = null;
 
 const contextosPorCiclo = new Map<number, import('playwright').BrowserContext>();
 
-// Sem timeout global de ciclo.
-// A guia fecha APENAS em dois casos:
-//   1. KYC Veriff detectado (isVeriffUrl / elemento veriff na tela)
-//   2. Uma única etapa ficou travada por mais de STEP_STALL_TIMEOUT_MS
-const STEP_STALL_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutos por etapa
+const STEP_STALL_TIMEOUT_MS = 5 * 60 * 1_000;
 
 const MOBILE_DEVICE = {
   ...devices['iPhone 14'],
@@ -115,7 +107,6 @@ function isOnboardingUrl(url: string): boolean {
   );
 }
 
-/** Retorna true se a URL ou conteúdo da página indica KYC Veriff. */
 function isVeriffUrl(url: string): boolean {
   return (
     url.includes('veriff.com') ||
@@ -197,6 +188,18 @@ async function dispensarCookies(p: Page): Promise<void> {
 }
 
 // ─── Aceitar termos ───────────────────────────────────────────────────────────
+//
+// FIX B: O Uber exibe UMA tela com N checkboxes [data-testid="accept-terms"].
+// A versão anterior clicava apenas no PRIMEIRO container e avançava,
+// causando loop infinito porque os demais checkboxes obrigatórios ficavam
+// desmarcados e o forward-button nunca habilitava de verdade.
+//
+// Nova lógica:
+//   1. Coleta TODOS os containers [data-testid="accept-terms"] visíveis.
+//   2. Para cada um, clica no label filho (ou no container diretamente).
+//   3. Verifica se o checkbox interno ficou marcado; se não, força via nativeSet.
+//   4. Aguarda o forward-button habilitar SOMENTE após marcar TODOS.
+// ─────────────────────────────────────────────────────────────────────────────
 async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
   let marcouAlgum = false;
 
@@ -216,11 +219,9 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     const lpCount = await labelPai.count().catch(() => 0);
 
     if (lpCount > 0) {
-      await labelPai.first().evaluate((el: HTMLElement) => {
-        el.click();
-      }).catch(() => {});
+      await labelPai.first().evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
       await humanPause(randInt(sp(40), sp(80)));
-      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — click nativo no label pai (forcarCheckViaLabel)`, cycle);
+      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — click nativo no label pai`, cycle);
     } else {
       await cb.evaluate((el: HTMLInputElement) => {
         if (el.type === 'checkbox') {
@@ -235,54 +236,76 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         el.dispatchEvent(new Event('input',  { bubbles: true, cancelable: true }));
       }).catch(() => {});
       await humanPause(randInt(sp(40), sp(80)));
-      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — fallback nativeSet+events (sem label pai)`, cycle);
+      if (cycle !== undefined) log('info', `[termos] Checkbox #${idx} — fallback nativeSet+events`, cycle);
     }
   }
 
+  // ── Passo 1: marcar TODOS os [data-testid="accept-terms"] visíveis ────────
   const containerTermos = p.locator('[data-testid="accept-terms"]');
   const containerCount = await containerTermos.count().catch(() => 0);
-  if (containerCount > 0) {
-    const containerVisible = await containerTermos.first().isVisible({ timeout: 800 }).catch(() => false);
-    if (containerVisible) {
-      const labelFilho = containerTermos.first().locator('label').first();
-      const labelFilhoCount = await labelFilho.count().catch(() => 0);
 
-      if (labelFilhoCount > 0) {
+  if (containerCount > 0) {
+    if (cycle !== undefined) log('info', `[termos] Encontrados ${containerCount} container(s) accept-terms`, cycle);
+
+    for (let i = 0; i < containerCount; i++) {
+      const container = containerTermos.nth(i);
+      const visible = await container.isVisible({ timeout: 800 }).catch(() => false);
+      if (!visible) continue;
+
+      // Verifica se o checkbox interno já está marcado
+      const cbInterno = container.locator('input[type="checkbox"]').first();
+      const cbCount = await cbInterno.count().catch(() => 0);
+      if (cbCount > 0 && await estaChecked(cbInterno)) {
+        if (cycle !== undefined) log('info', `[termos] Container #${i} já marcado — pulando`, cycle);
+        marcouAlgum = true;
+        continue;
+      }
+
+      // Tenta clicar via label filho primeiro
+      const labelFilho = container.locator('label').first();
+      const labelCount = await labelFilho.count().catch(() => 0);
+
+      if (labelCount > 0) {
         const lbox = await labelFilho.boundingBox().catch(() => null);
         if (lbox && lbox.width > 0 && lbox.height > 0) {
           await humanMouseMove(p, lbox.x + lbox.width * randFloat(0.3, 0.7), lbox.y + lbox.height * randFloat(0.3, 0.7));
           await humanPause(randInt(sp(40), sp(80)));
           await labelFilho.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
           await humanPause(randInt(sp(80), sp(150)));
-          if (cycle !== undefined) log('info', '[termos] [accept-terms] label filho — element.click() nativo (Passo 1A)', cycle);
-
-          const cbInterno = containerTermos.first().locator('input[type="checkbox"]').first();
-          const cbCount = await cbInterno.count().catch(() => 0);
-          if (cbCount > 0 && !(await estaChecked(cbInterno))) {
-            await forcarCheckViaLabel(cbInterno, 0);
-          }
-          marcouAlgum = true;
+          if (cycle !== undefined) log('info', `[termos] Container #${i} — click no label filho`, cycle);
         }
       } else {
-        const cbox = await containerTermos.first().boundingBox().catch(() => null);
+        // Sem label filho — clica no próprio container
+        const cbox = await container.boundingBox().catch(() => null);
         if (cbox && cbox.width > 0) {
           await humanMouseMove(p, cbox.x + cbox.width * randFloat(0.2, 0.5), cbox.y + cbox.height * randFloat(0.3, 0.7));
           await humanPause(randInt(sp(40), sp(80)));
-          await containerTermos.first().evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
+          await container.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
           await humanPause(randInt(sp(80), sp(150)));
-          marcouAlgum = true;
-          if (cycle !== undefined) log('info', '[termos] [accept-terms] container — element.click() direto (Passo 1B)', cycle);
+          if (cycle !== undefined) log('info', `[termos] Container #${i} — click direto no container`, cycle);
         }
       }
+
+      // Confirma se ficou marcado; caso contrário força
+      if (cbCount > 0 && !(await estaChecked(cbInterno))) {
+        if (cycle !== undefined) log('warn', `[termos] Container #${i} não marcou — forçando via nativeSet`, cycle);
+        await forcarCheckViaLabel(cbInterno, i);
+      }
+
+      marcouAlgum = true;
+
+      // Pequena pausa entre checkboxes para evitar debounce do React
+      await humanPause(randInt(sp(60), sp(120)));
+    }
+
+    if (marcouAlgum) {
+      if (cycle !== undefined) log('info', '[termos] Todos os accept-terms marcados', cycle);
+      await _aguardarForwardHabilitar(p);
+      return true;
     }
   }
 
-  if (marcouAlgum) {
-    if (cycle !== undefined) log('info', '[termos] Termos marcados via accept-terms container', cycle);
-    await _aguardarForwardHabilitar(p);
-    return true;
-  }
-
+  // ── Passo 2 (fallback): labels por texto ────────────────────────────────
   const labelTextoSels = [
     'label:has-text("Concordo")',
     'label:has-text("Agree")',
@@ -304,7 +327,7 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
       await humanPause(randInt(sp(40), sp(80)));
       await lbl.evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
       await humanPause(randInt(sp(80), sp(150)));
-      if (cycle !== undefined) log('info', `[termos] Label texto — element.click(): "${sel}" (Passo 2)`, cycle);
+      if (cycle !== undefined) log('info', `[termos] Label texto — element.click(): "${sel}"`, cycle);
 
       const cbInterno = lbl.locator('input[type="checkbox"]').first();
       const cbCount = await cbInterno.count().catch(() => 0);
@@ -323,17 +346,17 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     return true;
   }
 
+  // ── Passo 3 (fallback): checkboxes nativos ───────────────────────────────
   const nativos = p.locator('input[type="checkbox"]');
   const nCount = await nativos.count().catch(() => 0);
 
   for (let i = 0; i < nCount; i++) {
     try {
       const cb = nativos.nth(i);
-      const attached = await cb.count().then((n) => n > 0).catch(() => false);
-      if (!attached) continue;
+      if (!(await cb.count().then((n) => n > 0).catch(() => false))) continue;
 
       if (await estaChecked(cb)) {
-        if (cycle !== undefined) log('info', `[termos] Checkbox #${i} já marcado — pulando (Passo 3)`, cycle);
+        if (cycle !== undefined) log('info', `[termos] Checkbox #${i} já marcado`, cycle);
         marcouAlgum = true;
         continue;
       }
@@ -349,7 +372,6 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
             await humanPause(randInt(sp(40), sp(80)));
             await labelPai.first().evaluate((el: HTMLElement) => { el.click(); }).catch(() => {});
             await humanPause(randInt(sp(80), sp(150)));
-            if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — element.click() no ancestor label (Passo 3A)`, cycle);
             clicked = true;
           }
         }
@@ -359,13 +381,11 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         try {
           await cb.click({ force: true, timeout: 3000 });
           await humanPause(randInt(sp(60), sp(120)));
-          if (cycle !== undefined) log('info', `[termos] Checkbox #${i} — click force direto (Passo 3B)`, cycle);
           clicked = true;
         } catch { /* fallback */ }
       }
 
-      const confirmed = await estaChecked(cb);
-      if (!confirmed) {
+      if (!(await estaChecked(cb))) {
         await forcarCheckViaLabel(cb, i);
       }
 
@@ -373,18 +393,14 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
     } catch { /* continua */ }
   }
 
+  // ── Passo 4 (fallback): role="checkbox" ─────────────────────────────────
   const roles = p.locator('[role="checkbox"]');
   const rCount = await roles.count().catch(() => 0);
   for (let i = 0; i < rCount; i++) {
     try {
       const cb = roles.nth(i);
-      const visible = await cb.isVisible({ timeout: 800 }).catch(() => false);
-      if (!visible) continue;
-
-      if (await estaChecked(cb)) {
-        marcouAlgum = true;
-        continue;
-      }
+      if (!(await cb.isVisible({ timeout: 800 }).catch(() => false))) continue;
+      if (await estaChecked(cb)) { marcouAlgum = true; continue; }
 
       const box = await cb.boundingBox().catch(() => null);
       if (box) await humanMouseMove(p, box.x + box.width * randFloat(0.3, 0.7), box.y + box.height * randFloat(0.3, 0.7));
@@ -396,12 +412,12 @@ async function tentarAceitarTermos(p: Page, cycle?: number): Promise<boolean> {
         await forcarCheckViaLabel(cb, i + 1000);
       }
       marcouAlgum = true;
-      if (cycle !== undefined) log('info', `[termos] [role=checkbox] #${i} marcado via element.click() (Passo 4)`, cycle);
+      if (cycle !== undefined) log('info', `[termos] [role=checkbox] #${i} marcado`, cycle);
     } catch { /* continua */ }
   }
 
   if (marcouAlgum) {
-    if (cycle !== undefined) log('info', '[termos] Termos aceitos', cycle);
+    if (cycle !== undefined) log('info', '[termos] Termos aceitos (fallback)', cycle);
     await _aguardarForwardHabilitar(p);
   }
 
@@ -850,9 +866,6 @@ async function ensureBrowser(headless = false, proxyConfig?: string): Promise<vo
   try {
     if (browser) { await browser.close().catch(() => {}); browser = null; }
 
-    // FIX: registra o plugin stealth AQUI, lazy, uma única vez.
-    // Antes estava no topo do módulo (chromiumExtra.use(StealthPlugin()))
-    // o que fazia o import lançar erro e exportar undefined.
     if (!stealthPluginRegistered) {
       chromiumExtra.use(StealthPlugin());
       stealthPluginRegistered = true;
@@ -1017,7 +1030,7 @@ async function etapa_digitarSenha(p: Page, senha: string, cycle: number): Promis
         .then(() => fwdBtn.isEnabled({ timeout: 1500 }))
         .catch(() => false);
       if (!habilitado) {
-        log('warn', '#forward-button ainda disabled apos senha — disparando blur para forcar validacao React', cycle);
+        log('warn', '#forward-button ainda disabled apos senha — disparando blur', cycle);
         await p.locator(SEL).evaluate((el) => {
           el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
         }).catch(() => {});
@@ -1066,543 +1079,4 @@ async function etapa_digitarOTP(p: Page, otp: string, cycle: number): Promise<vo
     log('info', `OTP em ${totalOtp} campos autocomplete=one-time-code`, cycle);
     for (let i = 0; i < Math.min(totalOtp, otp.length); i++) {
       const campo = camposOtp.nth(i);
-      await campo.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {});
-      const box = await campo.boundingBox().catch(() => null);
-      if (box) await humanMouseMove(p, box.x + box.width / 2, box.y + box.height / 2);
-      await campo.click({ timeout: 2000 }).catch(() => {});
-      await humanPause(randInt(sp(40), sp(80)));
-      await _typeChar(p, otp[i]!, isSpeedMode());
-      await humanPause(randInt(sp(50), sp(100)));
-    }
-    log('info', 'OTP digitado (autocomplete individual)', cycle);
-    return;
-  }
-
-  const candidatosUnicos = [
-    'input[name="otpCode"]',
-    'input[autocomplete="one-time-code"]',
-    '[data-testid*="otp"]',
-    '[data-testid*="code"]',
-    'input[inputmode="numeric"][maxlength="6"]',
-    'input[inputmode="numeric"]',
-    'input[maxlength="1"]',
-  ];
-  for (const sel of candidatosUnicos) {
-    if (await p.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false)) {
-      const count = await p.locator(sel).count();
-      if (count >= 2) {
-        log('info', `OTP em ${count} campos "${sel}"`, cycle);
-        for (let i = 0; i < Math.min(count, otp.length); i++) {
-          const campo = p.locator(sel).nth(i);
-          await campo.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {});
-          await campo.click({ timeout: 2000 }).catch(() => {});
-          await humanPause(randInt(sp(40), sp(80)));
-          await _typeChar(p, otp[i]!, isSpeedMode());
-          await humanPause(randInt(sp(50), sp(90)));
-        }
-        log('info', 'OTP digitado (multiplos campos fallback)', cycle);
-        return;
-      }
-      await humanTypeForce(p, sel, otp);
-      log('info', 'OTP digitado (campo unico)', cycle);
-      return;
-    }
-  }
-
-  throw new Error('Campo de OTP nao encontrado');
-}
-
-async function aguardarNavegacaoEstabilizar(p: Page, maxWaitMs = 6_000, stableMs = 600): Promise<string> {
-  const fim = Date.now() + maxWaitMs;
-  let lastUrl = p.url();
-  let lastChange = Date.now();
-  while (Date.now() < fim) {
-    await humanPause(150);
-    const cur = p.url();
-    if (cur !== lastUrl) { lastUrl = cur; lastChange = Date.now(); }
-    else if (Date.now() - lastChange >= stableMs) break;
-  }
-  return p.url();
-}
-
-async function preencherTelefone(p: Page, telefone: string, cycle: number): Promise<boolean> {
-  const PHONE_SELS = [
-    '#PHONE_NUMBER',
-    '[name="phoneNumber"]',
-    'input[autocomplete="tel-national"]',
-    'input[type="tel"]',
-    '[id*="phone"]',
-    '[placeholder*="celular"]',
-    '[placeholder*="telefone"]',
-    '[placeholder*="phone"]',
-    'input[inputmode="tel"]',
-  ];
-
-  for (const sel of PHONE_SELS) {
-    try {
-      const el = p.locator(sel).first();
-      const visible = await el.isVisible({ timeout: 1000 }).catch(() => false);
-      if (!visible) continue;
-
-      const val = await el.inputValue().catch(() => '');
-      if (val) {
-        log('info', `[telefone] Campo "${sel}" ja preenchido: "${val}"`, cycle);
-        return true;
-      }
-
-      log('info', `Preenchendo telefone "${telefone}" em "${sel}"`, cycle);
-      await humanTypeForce(p, sel, telefone);
-      log('info', 'Telefone preenchido', cycle);
-      return true;
-    } catch { /* continua */ }
-  }
-  return false;
-}
-
-async function processarTelaOnboarding(
-  p: Page,
-  payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string; email: string; senha: string },
-  cycle: number,
-  telaIdx: number
-): Promise<boolean> {
-  log('info', `[Tela ${telaIdx}] Verificando tela de onboarding...`, cycle);
-
-  await dispensarCookies(p);
-
-  if (await detectarVeriff(p)) {
-    log('warn', `[Tela ${telaIdx}] KYC Veriff detectado — encerrando ciclo`, cycle);
-    throw new Error('VERIFF_DETECTED');
-  }
-
-  // FIX A: verificar cidade PRIMEIRO, antes de tratarTelaSenha/ReAuth.
-  const INPUT_CIDADE_SEL = '[data-testid="flow-type-city-selector-v2-input"]';
-  if (await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-    const urlAntesCidade = p.url();
-    await selecionarCidade(p, payload.cidade, cycle);
-
-    log('info', `[Tela ${telaIdx}] Aguardando Uber avancar apos cidade...`, cycle);
-    const fimEspera = Date.now() + 4_000;
-    let cidadeAindaVisivel = true;
-    let urlPosCidade = p.url();
-    while (Date.now() < fimEspera) {
-      await humanPause(200);
-      urlPosCidade = p.url();
-      cidadeAindaVisivel = await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 200 }).catch(() => false);
-      if (!cidadeAindaVisivel || urlPosCidade !== urlAntesCidade) break;
-    }
-
-    if (urlPosCidade !== urlAntesCidade) {
-      log('info', `[Tela ${telaIdx}] Uber navegou apos cidade: ${urlPosCidade}`, cycle);
-      await preencherInviteCode(p, payload.inviteCode, cycle);
-      return true;
-    }
-    if (!cidadeAindaVisivel) {
-      log('info', `[Tela ${telaIdx}] Input de cidade sumiu — tela avancou internamente`, cycle);
-      await preencherInviteCode(p, payload.inviteCode, cycle);
-    } else {
-      await preencherInviteCode(p, payload.inviteCode, cycle);
-    }
-
-    await cogPause(150, 300);
-    const aceitouAposCidade = await tentarAceitarTermos(p, cycle);
-    if (aceitouAposCidade) await cogPause(150, 300);
-
-    await dispensarCookies(p);
-    const isTelaSenhaAposCidade = await p.locator(
-      '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
-    ).first().isVisible({ timeout: 600 }).catch(() => false);
-    const cidadeAindaVisivelFinal = await p.locator(INPUT_CIDADE_SEL).first().isVisible({ timeout: 300 }).catch(() => false);
-    if (isTelaSenhaAposCidade && !cidadeAindaVisivelFinal) {
-      log('warn', `[Tela ${telaIdx}] Tela de senha apos cidade — delegando`, cycle);
-      await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle);
-      return true;
-    }
-
-    await clickForwardButton(p, cycle);
-    log('info', `[Tela ${telaIdx}] Botao de avancar clicado (pos-cidade)`, cycle);
-    return true;
-  }
-
-  if (await tratarTelaWhatsApp(p, cycle)) return true;
-  if (await tratarHubKYC(p, cycle)) return true;
-  if (await tratarTelaFotoPerfil(p, cycle)) return true;
-  if (await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle)) return true;
-  if (await tratarTelaReAuth(p, payload.email, payload.senha, cycle)) return true;
-
-  try {
-    const inputs = await p.$$eval('input:not([type="hidden"])', (els) =>
-      els.map((el) => {
-        const e = el as HTMLInputElement;
-        return `${e.tagName}[type=${e.type}][id=${e.id}][autocomplete=${e.autocomplete}][placeholder=${e.placeholder}]`;
-      })
-    );
-    if (inputs.length > 0) {
-      log('info', `[Tela ${telaIdx}] Inputs: ${inputs.slice(0, 6).join(' | ')}`, cycle);
-    }
-  } catch { /* ignora */ }
-
-  let fezAlgo = false;
-
-  const nomeSels = ['#FIRST_NAME', '[autocomplete="given-name"]', '[data-testid*="first-name"]', '[name="firstName"]', '[id*="first"]', '[placeholder*="rimeiro"]'];
-  for (const sel of nomeSels) {
-    if (await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-      const val = await p.locator(sel).first().inputValue().catch(() => '');
-      if (!val) {
-        await humanTypeForce(p, sel, payload.nome);
-        log('info', `[Tela ${telaIdx}] Nome preenchido (${sel})`, cycle);
-        fezAlgo = true;
-      }
-      break;
-    }
-  }
-
-  await humanPause(randInt(sp(80), sp(160)));
-
-  const sobreSels = ['#LAST_NAME', '[autocomplete="family-name"]', '[data-testid*="last-name"]', '[name="lastName"]', '[id*="last"]', '[placeholder*="obrenome"]'];
-  for (const sel of sobreSels) {
-    if (await p.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-      const val = await p.locator(sel).first().inputValue().catch(() => '');
-      if (!val) {
-        await humanTypeForce(p, sel, payload.sobrenome);
-        log('info', `[Tela ${telaIdx}] Sobrenome preenchido (${sel})`, cycle);
-        fezAlgo = true;
-      }
-      break;
-    }
-  }
-
-  await humanPause(randInt(sp(80), sp(160)));
-
-  const telefonePreenchido = await preencherTelefone(p, payload.telefone, cycle);
-  if (telefonePreenchido) {
-    fezAlgo = true;
-    await cogPause(300, 600);
-  }
-
-  await humanPause(randInt(sp(80), sp(160)));
-
-  await cogPause(150, 350);
-
-  const aceitou = await tentarAceitarTermos(p, cycle);
-  if (aceitou) { fezAlgo = true; await cogPause(200, 400); }
-
-  const temBotao = await p.locator(
-    '#forward-button, [data-testid="forward-button"], [data-testid="submit-button"], button[type="submit"]'
-  ).first().isVisible({ timeout: 1000 }).catch(() => false);
-
-  if (!fezAlgo && !temBotao) {
-    log('info', `[Tela ${telaIdx}] Tela de transicao sem campos/botao — aguardando navegacao automatica...`, cycle);
-    return false;
-  }
-
-  await dispensarCookies(p);
-  const isTelaSenha = await p.locator(
-    '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
-  ).first().isVisible({ timeout: 600 }).catch(() => false);
-  if (isTelaSenha) {
-    log('warn', `[Tela ${telaIdx}] Tela de senha detectada antes do forward — delegando para tratarTelaSenhaFluxo`, cycle);
-    await tratarTelaSenhaFluxo(p, payload.email, payload.senha, cycle);
-    return true;
-  }
-
-  await clickForwardButton(p, cycle);
-  log('info', `[Tela ${telaIdx}] Botao de avancar clicado`, cycle);
-  return true;
-}
-
-// ─── etapa_posEmail com stall-guard por etapa ─────────────────────────────────
-
-async function etapa_posEmail(
-  p: Page,
-  payload: { nome: string; sobrenome: string; cidade: string; telefone: string; inviteCode: string; email: string; senha: string },
-  cycle: number
-): Promise<'success' | 'onboarding' | 'unknown'> {
-  const MAX_TELAS = 15;
-  const MAX_TELA_TIMEOUT_MS = 10_000;
-
-  for (let tela = 1; tela <= MAX_TELAS; tela++) {
-    const stallController = new AbortController();
-    const stallTimer = setTimeout(() => {
-      log('error', `[Tela ${tela}] Etapa travada por mais de ${STEP_STALL_TIMEOUT_MS / 60000} minutos — abortando ciclo`, cycle);
-      stallController.abort();
-      fecharContextoCiclo(cycle).catch(() => {});
-    }, STEP_STALL_TIMEOUT_MS);
-
-    try {
-      const url = await aguardarNavegacaoEstabilizar(p, MAX_TELA_TIMEOUT_MS, 600);
-      log('info', `[Tela ${tela}] URL: ${url}`, cycle);
-
-      if (isSuccessUrl(url)) {
-        log('success', `Destino final detectado! URL: ${url}`, cycle);
-        clearTimeout(stallTimer);
-        return 'success';
-      }
-
-      if (isVeriffUrl(url) || await detectarVeriff(p)) {
-        log('warn', `[Tela ${tela}] KYC Veriff detectado no loop principal — encerrando`, cycle);
-        clearTimeout(stallTimer);
-        throw new Error('VERIFF_DETECTED');
-      }
-
-      const isHubOrFoto =
-        await p.locator('[data-testid="hub"], [data-testid="step profilePhoto"]')
-          .first().isVisible({ timeout: 1500 }).catch(() => false);
-      if (isHubOrFoto) {
-        log('success', 'Hub/Foto detectado — conta criada com sucesso', cycle);
-        clearTimeout(stallTimer);
-        return 'success';
-      }
-
-      if (!isOnboardingUrl(url)) {
-        log('warn', `URL nao reconhecida: ${url}`, cycle);
-        clearTimeout(stallTimer);
-        return 'unknown';
-      }
-
-      await p.waitForSelector(
-        'input:not([type="hidden"]), button, [role="checkbox"], #forward-button, [data-testid="hub"], [data-testid="step whatsAppOptIn"], [data-testid="step profilePhoto"], [data-testid="submit-button"]',
-        { timeout: 6_000 }
-      ).catch(() => {});
-
-      const clicou = await processarTelaOnboarding(p, payload, cycle, tela);
-
-      if (!clicou) {
-        const urlApos = await aguardarNavegacaoEstabilizar(p, 4_000, 1_000);
-        if (urlApos === url) {
-          log('warn', `[Tela ${tela}] URL nao avancou. Abortando loop.`, cycle);
-          clearTimeout(stallTimer);
-          return isSuccessUrl(urlApos) ? 'success' : 'onboarding';
-        }
-      }
-    } finally {
-      clearTimeout(stallTimer);
-    }
-  }
-
-  log('warn', `Loop de onboarding atingiu limite de ${MAX_TELAS} telas`, cycle);
-  return isSuccessUrl(p.url()) ? 'success' : 'onboarding';
-}
-
-// ─── _executarCiclo ───────────────────────────────────────────────────────────
-
-async function _executarCiclo(
-  cycle: number,
-  opts: {
-    cadastroUrl: string;
-    emailProvider: EmailProvider;
-    tempMailApiKey: string;
-    otpTimeout: number;
-    extraDelay: number;
-    inviteCode: string;
-  }
-): Promise<void> {
-  let page: Page | null = null;
-
-  try {
-    await criarContextoCiclo(cycle);
-    const ctx = contextosPorCiclo.get(cycle)!;
-    page = await ctx.newPage();
-    page.setDefaultTimeout(20_000);
-
-    const emailClient: IEmailClient = createEmailClient(opts.emailProvider as any, opts.tempMailApiKey);
-    const emailAccount = await emailClient.createRandomEmail();
-    log('info', `Email criado: ${emailAccount.email}`, cycle);
-
-    const payload = gerarPayloadCompleto(emailAccount, opts.inviteCode);
-
-    log('info', `Navegando para ${opts.cadastroUrl}`, cycle);
-    await page.goto(opts.cadastroUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await humanPause(randInt(sp(400), sp(800)));
-    await dispensarCookies(page);
-    await pageWarmup(page, cycle);
-
-    const isTelaCampoInicial = await page.locator(
-      '#PHONE_NUMBER_or_EMAIL_ADDRESS, #EMAIL_ADDRESS, input[type="email"], input[autocomplete="email"]'
-    ).first().isVisible({ timeout: 10000 }).catch(() => false);
-
-    if (!isTelaCampoInicial) {
-      log('warn', 'Tela inicial nao detectada — tentando loop de onboarding direto', cycle);
-      const resultado = await etapa_posEmail(
-        page,
-        { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
-        cycle
-      );
-      if (resultado !== 'success') log('warn', `Flow incompleto (sem tela inicial). URL: ${page.url()}`, cycle);
-      return;
-    }
-
-    await etapa_digitarEmailOuTelefone(page, payload.email, cycle);
-    await cogPause(200, 400);
-    await clickForwardButton(page, cycle);
-    await aguardarNavegacaoEstabilizar(page, 4_000, 600);
-
-    const nomeVisiblePreSenha = await page.locator(
-      '#FIRST_NAME, [autocomplete="given-name"]'
-    ).first().isVisible({ timeout: 3000 }).catch(() => false);
-
-    if (nomeVisiblePreSenha) {
-      log('info', 'Tela de nome detectada antes da senha', cycle);
-      const nomeSels = ['#FIRST_NAME', '[autocomplete="given-name"]', '[name="firstName"]'];
-      for (const sel of nomeSels) {
-        if (await page.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-          await humanTypeForce(page, sel, payload.nome); break;
-        }
-      }
-      await humanPause(randInt(sp(150), sp(350)));
-      const sobreSels = ['#LAST_NAME', '[autocomplete="family-name"]', '[name="lastName"]'];
-      for (const sel of sobreSels) {
-        if (await page.locator(sel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-          await humanTypeForce(page, sel, payload.sobrenome); break;
-        }
-      }
-      await cogPause(200, 400);
-      await tentarAceitarTermos(page, cycle);
-      await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 4_000, 600);
-    }
-
-    const termosVisiblePreSenha = await page.locator('[data-testid="accept-terms"]').first()
-      .isVisible({ timeout: 1500 }).catch(() => false);
-    if (termosVisiblePreSenha) {
-      await tentarAceitarTermos(page, cycle);
-      await cogPause(200, 400);
-      await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 4_000, 600);
-    }
-
-    const senhaVisible = await page.locator(
-      '#PASSWORD, input[autocomplete="new-password"], input[type="password"]'
-    ).first().isVisible({ timeout: 5000 }).catch(() => false);
-
-    if (senhaVisible) {
-      await etapa_digitarSenha(page, payload.senha, cycle);
-      await cogPause(200, 400);
-      await clickForwardButton(page, cycle);
-      await aguardarNavegacaoEstabilizar(page, 4_000, 600);
-    }
-
-    const otpVisible = await page.locator(
-      '#EMAIL_OTP_CODE-0, input[autocomplete="one-time-code"], input[inputmode="numeric"]'
-    ).first().isVisible({ timeout: 5000 }).catch(() => false);
-
-    if (otpVisible) {
-      const otp = await etapa_aguardarOTP(page, emailClient, emailAccount.email, cycle, opts.otpTimeout * 1000);
-      await etapa_digitarOTP(page, otp, cycle);
-      await cogPause(200, 400);
-
-      const fwdAposOtp = await page.locator('#forward-button, [data-testid="forward-button"]')
-        .first().isVisible({ timeout: 2000 }).catch(() => false);
-      if (fwdAposOtp) {
-        await clickForwardButton(page, cycle);
-      }
-      await aguardarNavegacaoEstabilizar(page, 4_000, 600);
-    }
-
-    const resultado = await etapa_posEmail(
-      page,
-      { nome: payload.nome, sobrenome: payload.sobrenome, cidade: payload.cidade, telefone: payload.telefone, inviteCode: opts.inviteCode, email: payload.email, senha: payload.senha },
-      cycle
-    );
-
-    if (resultado === 'success') {
-      log('success', `Ciclo ${cycle} concluido com sucesso!`, cycle);
-
-      const cookies = await page.context().cookies();
-      const tmScript = gerarTampermonkeyScript(cookies, payload.email);
-      const arts = new ArtifactsManager();
-      await arts.salvarConta({
-        email: payload.email,
-        senha: payload.senha,
-        nome: payload.nome,
-        sobrenome: payload.sobrenome,
-        cidade: payload.cidade,
-        telefone: payload.telefone,
-        inviteCode: opts.inviteCode,
-        tampermonkeyScript: tmScript,
-        cookies,
-        criadoEm: new Date().toISOString(),
-      });
-
-      await accountStore.salvarConta({
-        email: payload.email,
-        senha: payload.senha,
-        nome: `${payload.nome} ${payload.sobrenome}`,
-        cidade: payload.cidade,
-        telefone: payload.telefone,
-        inviteCode: opts.inviteCode,
-        cookies,
-        tampermonkeyScript: tmScript,
-        criadoEm: new Date().toISOString(),
-        status: 'success',
-      });
-
-      globalState.incrementSuccess();
-    } else {
-      log('warn', `Ciclo ${cycle} finalizado sem sucesso confirmado. Resultado: ${resultado}`, cycle);
-      globalState.incrementFailure();
-    }
-  } catch (err: any) {
-    if (err?.message === 'VERIFF_DETECTED') {
-      log('warn', `Ciclo ${cycle} encerrado — KYC Veriff detectado`, cycle);
-    } else {
-      log('error', `Erro no ciclo ${cycle}: ${err?.message ?? err}`, cycle);
-    }
-    globalState.incrementFailure();
-  } finally {
-    await fecharContextoCiclo(cycle);
-  }
-}
-
-// ─── Exports públicos ─────────────────────────────────────────────────────────
-
-export async function executarCiclo(
-  cycle: number,
-  opts: {
-    cadastroUrl: string;
-    emailProvider: EmailProvider;
-    tempMailApiKey: string;
-    otpTimeout: number;
-    extraDelay: number;
-    inviteCode: string;
-    proxyConfig?: string;
-    headless?: boolean;
-  }
-): Promise<void> {
-  await ensureBrowser(opts.headless ?? false, opts.proxyConfig);
-  await _executarCiclo(cycle, opts);
-}
-
-// ─── MockPlaywrightFlow namespace (compatibilidade com server/index.ts) ────────
-// server/index.ts chama MockPlaywrightFlow.init(), .execute() e .cleanup().
-// Este objeto expõe a mesma API esperada, delegando para as funções internas.
-
-export const MockPlaywrightFlow = {
-  /** Inicializa (garante) o browser com o modo headless informado. */
-  async init(headless = false): Promise<void> {
-    await ensureBrowser(headless);
-  },
-
-  /**
-   * Executa um ciclo completo de cadastro.
-   * Assinatura compatível com a chamada em server/index.ts:
-   *   MockPlaywrightFlow.execute(CADASTRO_URL, { emailProvider, tempMailApiKey, otpTimeout, extraDelay, inviteCode }, cycle)
-   */
-  async execute(
-    cadastroUrl: string,
-    opts: {
-      emailProvider: EmailProvider;
-      tempMailApiKey: string;
-      otpTimeout: number;
-      extraDelay: number;
-      inviteCode: string;
-    },
-    cycle: number
-  ): Promise<void> {
-    await _executarCiclo(cycle, { cadastroUrl, ...opts });
-  },
-
-  /** Fecha o browser global (chamado no gracefulShutdown). */
-  async cleanup(): Promise<void> {
-    await closeBrowser();
-  },
-};
+      await ca
