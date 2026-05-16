@@ -9,6 +9,8 @@ export interface Account {
   email: string;
   telefone: string;
   senha: string;
+  /** @deprecated use `senha` — mantido para compatibilidade com saves antigos */
+  password?: string;
   localizacao: string;
   codigoIndicacao: string;
   cookies: Cookie[];
